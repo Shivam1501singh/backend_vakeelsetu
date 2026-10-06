@@ -17,25 +17,38 @@ const normalizeText = (text) => {
 export const resolvePdfPath = (storedPath) => {
   if (!storedPath) return null;
   const uploadDir = getUploadDir();
+  const baseName = path.basename(storedPath);
 
   // If already absolute and exists
   if (path.isAbsolute(storedPath) && fs.existsSync(storedPath)) {
     return storedPath;
   }
 
-  // Check relative to uploadDir
-  const candidateInUploadDir = path.resolve(uploadDir, path.basename(storedPath));
-  if (fs.existsSync(candidateInUploadDir)) {
-    return candidateInUploadDir;
-  }
-
-  // Check relative to project root
+  // Candidate 1: relative to project root directly (e.g. 'uploads/acts/file.pdf')
   const candidateInProjectRoot = path.resolve(process.cwd(), storedPath);
   if (fs.existsSync(candidateInProjectRoot)) {
     return candidateInProjectRoot;
   }
 
-  return candidateInUploadDir;
+  // Candidate 2: inside process.cwd()/uploads/acts/
+  const candidateInBundledUploads = path.resolve(process.cwd(), 'uploads/acts', baseName);
+  if (fs.existsSync(candidateInBundledUploads)) {
+    return candidateInBundledUploads;
+  }
+
+  // Candidate 3: relative to uploadDir
+  const candidateInUploadDir = path.resolve(uploadDir, baseName);
+  if (fs.existsSync(candidateInUploadDir)) {
+    return candidateInUploadDir;
+  }
+
+  // Candidate 4: inside /tmp/uploads/acts
+  const candidateInTmp = path.resolve('/tmp/uploads/acts', baseName);
+  if (fs.existsSync(candidateInTmp)) {
+    return candidateInTmp;
+  }
+
+  return candidateInBundledUploads;
 };
 
 /**

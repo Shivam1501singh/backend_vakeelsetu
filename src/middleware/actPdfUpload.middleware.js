@@ -3,9 +3,23 @@ import path from 'path';
 import fs from 'fs';
 
 export const getUploadDir = () => {
-  const uploadDir = path.resolve(process.env.ACT_PDF_UPLOAD_DIR || 'uploads/acts');
+  const isServerless = Boolean(process.env.VERCEL);
+  const uploadDir = path.resolve(
+    process.env.ACT_PDF_UPLOAD_DIR ||
+    (isServerless ? '/tmp/uploads/acts' : 'uploads/acts')
+  );
   if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
+    try {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    } catch (err) {
+      try {
+        const tmpDir = path.resolve('/tmp/uploads/acts');
+        fs.mkdirSync(tmpDir, { recursive: true });
+        return tmpDir;
+      } catch (e) {
+        // ignore in read-only environment
+      }
+    }
   }
   return uploadDir;
 };
