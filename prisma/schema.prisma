@@ -685,4 +685,64 @@ model ActPdf {
   @@index([createdAt])
 }
 
+model Role {
+  id          String           @id @default(uuid())
+  name        String           @unique
+  displayName String
+  description String?          @db.Text
+  isActive    Boolean          @default(true)
+  isSystem    Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
 
+  userRoles   UserRole[]
+  permissions RolePermission[]
+
+  @@index([name])
+  @@index([isActive])
+}
+
+model Permission {
+  id          String           @id @default(uuid())
+  code        String           @unique
+  name        String
+  description String?          @db.Text
+  module      String
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  roles       RolePermission[]
+
+  @@index([code])
+  @@index([module])
+}
+
+model RolePermission {
+  id           String     @id @default(uuid())
+  roleId       String
+  permissionId String
+  createdAt    DateTime   @default(now())
+
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+}
+
+model UserRole {
+  id        String      @id @default(uuid())
+  userId    String
+  userType  AccountType @default(USER)
+  roleId    String
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  role      Role        @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+  @@index([userType])
+}

@@ -71,26 +71,89 @@ export const optionalAuth = async (req, res, next) => {
   next();
 };
 
+import { checkUserPermission, getUserRolesAndPermissions } from '../services/rbac.service.js';
+
 export const requireRole = (...roles) => {
   const allowedRoles = roles.map(r => r.toUpperCase());
 
-  return (req, res, next) => {
-    if (!req.user) {
-      const err = new Error('Authentication required. Please login.');
-      err.statusCode = 401;
-      return next(err);
-    }
+  return async (req, res, next) => {
+    try {
+      if (!req.user) {
+        const err = new Error('Authentication required. Please login.');
+        err.statusCode = 401;
+        return next(err);
+      }
 
-    const rawRole = req.user.role || req.user.type || '';
-    const userRole = rawRole.toUpperCase();
+      const rawRole = (req.user.role || req.user.type || '').toUpperCase();
 
-    if (!allowedRoles.includes(userRole)) {
+      // Admin has full unrestricted access
+      if (rawRole === 'ADMIN' || (req.user.type && req.user.type.toLowerCase() === 'admin')) {
+        return next();
+      }
+
+      if (allowedRoles.includes(rawRole)) {
+        return next();
+      }
+
+      // Check assigned RBAC roles for this user
+      const userRolesInfo = await getUserRolesAndPermissions(req.user.id, req.user.type);
+      const hasMatchingRole = userRolesInfo.roleNames.some(roleName =>
+        allowedRoles.includes(roleName.toUpperCase())
+      );
+
+      if (hasMatchingRole) {
+        return next();
+      }
+
       const err = new Error('Access forbidden. Insufficient permissions.');
       err.statusCode = 403;
       return next(err);
+    } catch (error) {
+      next(error);
     }
+  };
+};
 
-    next();
+/**
+ * Reusable RBAC Authorization Middleware:
+ * Flow:
+ * 1. Check user authentication
+ * 2. If user is Admin -> Full Access granted immediately
+ * 3. Otherwise -> Check user's assigned active roles & permissions from DB
+ * 4. If user has any of the required permissions -> Request Allowed
+ * 5. Otherwise -> 403 Forbidden
+ */
+export const requirePermission = (...requiredPermissions) => {
+  const permissions = requiredPermissions.flat();
+
+  return async (req, res, next) => {
+    try {
+      if (!req.user) {
+        const err = new Error('Authentication required. Please login.');
+        err.statusCode = 401;
+        return next(err);
+      }
+
+      const rawRole = (req.user.role || req.user.type || '').toUpperCase();
+
+      // 1. Admin always has full unrestricted access
+      if (rawRole === 'ADMIN' || (req.user.type && req.user.type.toLowerCase() === 'admin')) {
+        return next();
+      }
+
+      // 2. Server-side check for required permissions via RBAC
+      const hasPermission = await checkUserPermission(req.user.id, permissions, req.user.type);
+
+      if (!hasPermission) {
+        const err = new Error('Access forbidden. Insufficient permissions.');
+        err.statusCode = 403;
+        return next(err);
+      }
+
+      next();
+    } catch (error) {
+      next(error);
+    }
   };
 };
 

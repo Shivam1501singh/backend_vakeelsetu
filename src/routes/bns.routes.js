@@ -1,15 +1,15 @@
 import express from 'express';
 import * as bnsController from '../controllers/bns.controller.js';
-import { requireAuth, requireRole } from '../middleware/auth.middleware.js';
+import { requireAuth, requirePermission } from '../middleware/auth.middleware.js';
 import { generalLimiter } from '../middleware/rate-limit.middleware.js';
 
 const router = express.Router();
 
-// Content Creator BNS Routes (Authenticated, CONTENT_CREATOR role required)
+// Content Creator BNS Routes (Authenticated, bns permissions required)
 router.post(
   '/api/content-creator/bns',
   requireAuth,
-  requireRole('CONTENT_CREATOR'),
+  requirePermission('bns:create'),
   generalLimiter,
   bnsController.createBNSSection
 );
@@ -17,7 +17,7 @@ router.post(
 router.patch(
   '/api/content-creator/bns/:bnsId',
   requireAuth,
-  requireRole('CONTENT_CREATOR'),
+  requirePermission('bns:update'),
   generalLimiter,
   bnsController.editBNSSection
 );

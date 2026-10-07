@@ -1,6 +1,6 @@
 import express from 'express';
 import * as consultancyController from '../controllers/consultancy.controller.js';
-import { requireAuth, requireRole } from '../middleware/auth.middleware.js';
+import { requireAuth, requireRole, requirePermission } from '../middleware/auth.middleware.js';
 import { generalLimiter } from '../middleware/rate-limit.middleware.js';
 
 export const userConsultancyRouter = express.Router();
@@ -31,11 +31,11 @@ userConsultancyRouter.get(
   consultancyController.getUserRequestById
 );
 
-// Admin Consultancy Routes (ADMIN only)
+// Admin Consultancy Routes (Protected by RBAC; Admin has full access)
 adminConsultancyRouter.get(
   '/',
   requireAuth,
-  requireRole('ADMIN'),
+  requirePermission('consultancy:view'),
   generalLimiter,
   consultancyController.adminListRequests
 );
@@ -43,7 +43,7 @@ adminConsultancyRouter.get(
 adminConsultancyRouter.patch(
   '/:id/status',
   requireAuth,
-  requireRole('ADMIN'),
+  requirePermission('consultancy:update'),
   generalLimiter,
   consultancyController.adminMarkCompleted
 );

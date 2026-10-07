@@ -54,6 +54,7 @@ import { codeOnWagesBearerActSections } from './codeOnWagesBearerActData.js';
 import { consumerProtectionBearerActSections } from './consumerProtectionBearerActData.js';
 import { centralGoodsAndServicesTaxBearerActSections } from './centralGoodsAndServicesTaxBearerActData.js';
 import { calculateSectionOrder } from '../src/utils/sectionOrder.js';
+import { seedRbac } from './seedRbac.js';
 
 const prisma = new PrismaClient();
 
@@ -769,6 +770,9 @@ async function main() {
       console.log('Content Creator profile details updated.');
     }
   }
+
+  // Idempotent Seeding of RBAC Roles and Permissions
+  await seedRbac(prisma);
 
   // Idempotent Seeding of Blogs (clean up blogs written by mock creator to prevent duplicates on rerun)
   console.log('Cleaning up existing mock blogs...');

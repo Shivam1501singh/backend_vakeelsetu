@@ -2,30 +2,30 @@ import express from 'express';
 import * as bearerActController from '../controllers/bearerAct.controller.js';
 import * as actPdfController from '../controllers/actPdf.controller.js';
 import { handleActPdfUpload } from '../middleware/actPdfUpload.middleware.js';
-import { requireAuth, requireRole } from '../middleware/auth.middleware.js';
+import { requireAuth, requirePermission } from '../middleware/auth.middleware.js';
 import { generalLimiter } from '../middleware/rate-limit.middleware.js';
 
 const router = express.Router();
 
 /**
- * Content Creator Single Write Endpoint (Authenticated, CONTENT_CREATOR role required)
+ * Content Creator Single Write Endpoint (Authenticated, acts:create or acts:update permission required)
  * Handles CREATE & UPDATE for BEARER_ACT, ACT, and SECTION levels.
  */
 router.post(
   '/api/content-creator/bearer-acts',
   requireAuth,
-  requireRole('CONTENT_CREATOR'),
+  requirePermission('acts:create', 'acts:update'),
   generalLimiter,
   bearerActController.contentCreatorWriteHandler
 );
 
 /**
- * Content Creator PDF Upload & Management Endpoints (Authenticated, CONTENT_CREATOR role required)
+ * Content Creator PDF Upload & Management Endpoints (Authenticated, act_pdfs permissions required)
  */
 router.post(
   '/api/content-creator/acts/:actId/pdfs',
   requireAuth,
-  requireRole('CONTENT_CREATOR'),
+  requirePermission('act_pdfs:upload'),
   generalLimiter,
   handleActPdfUpload,
   actPdfController.uploadActPdfsHandler
@@ -34,7 +34,7 @@ router.post(
 router.post(
   '/api/content-creator/acts/pdfs',
   requireAuth,
-  requireRole('CONTENT_CREATOR'),
+  requirePermission('act_pdfs:upload'),
   generalLimiter,
   handleActPdfUpload,
   actPdfController.uploadActPdfsHandler
@@ -43,7 +43,7 @@ router.post(
 router.post(
   '/api/content-creator/acts/:actId/predefined-pdfs',
   requireAuth,
-  requireRole('CONTENT_CREATOR'),
+  requirePermission('act_pdfs:upload'),
   generalLimiter,
   actPdfController.attachPredefinedPdfHandler
 );
@@ -51,7 +51,7 @@ router.post(
 router.post(
   '/api/content-creator/acts/predefined-pdfs/sync',
   requireAuth,
-  requireRole('CONTENT_CREATOR'),
+  requirePermission('act_pdfs:sync'),
   generalLimiter,
   actPdfController.syncPredefinedPdfsHandler
 );
@@ -59,7 +59,7 @@ router.post(
 router.delete(
   '/api/content-creator/acts/pdfs/:id',
   requireAuth,
-  requireRole('CONTENT_CREATOR'),
+  requirePermission('act_pdfs:delete'),
   generalLimiter,
   actPdfController.deleteActPdfHandler
 );

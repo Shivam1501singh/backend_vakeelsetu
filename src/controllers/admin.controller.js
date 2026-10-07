@@ -12,6 +12,7 @@ import {
 /**
  * Admin Login
  * POST /api/admin/login
+ * Validates credentials exclusively against environment variables (ADMIN_USER_EMAIL, ADMIN_USER_PASSWORD)
  */
 export const loginAdmin = async (req, res, next) => {
   try {
@@ -24,26 +25,29 @@ export const loginAdmin = async (req, res, next) => {
       });
     }
 
-    const admin = await prisma.admin.findUnique({
-      where: { email: email.toLowerCase().trim() }
-    });
+    const envAdminEmail = process.env.ADMIN_USER_EMAIL;
+    const envAdminPassword = process.env.ADMIN_USER_PASSWORD;
 
-    if (!admin) {
+    if (!envAdminEmail || !envAdminPassword) {
+      const err = new Error('Admin credentials are not configured on the server.');
+      err.statusCode = 500;
+      return next(err);
+    }
+
+    const normalizedInputEmail = email.toLowerCase().trim();
+    const normalizedEnvEmail = envAdminEmail.toLowerCase().trim();
+
+    const isEmailValid = normalizedInputEmail === normalizedEnvEmail;
+    const isPasswordValid = password === envAdminPassword;
+
+    if (!isEmailValid || !isPasswordValid) {
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password.'
       });
     }
 
-    const isMatch = await bcrypt.compare(password, admin.passwordHash);
-    if (!isMatch) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid email or password.'
-      });
-    }
-
-    const token = signToken({ id: admin.id, type: 'admin' });
+    const token = signToken({ id: 'admin', type: 'admin' });
     sendTokenCookie(res, token);
 
     return res.status(200).json({
@@ -51,9 +55,9 @@ export const loginAdmin = async (req, res, next) => {
       message: 'Admin login successful',
       token,
       admin: {
-        id: admin.id,
-        fullName: admin.fullName,
-        email: admin.email
+        id: 'admin',
+        fullName: 'System Administrator',
+        email: envAdminEmail
       }
     });
   } catch (error) {

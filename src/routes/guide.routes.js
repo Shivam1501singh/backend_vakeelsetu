@@ -1,15 +1,15 @@
 import express from 'express';
 import * as guideController from '../controllers/guide.controller.js';
-import { requireAuth, requireRole } from '../middleware/auth.middleware.js';
+import { requireAuth, requirePermission } from '../middleware/auth.middleware.js';
 import { generalLimiter } from '../middleware/rate-limit.middleware.js';
 
 const router = express.Router();
 
-// Content Creator Guides Routes (Authenticated, CONTENT_CREATOR role required)
+// Content Creator Guides Routes (Authenticated, guides permissions required)
 router.post(
   '/api/content-creator/guides',
   requireAuth,
-  requireRole('CONTENT_CREATOR'),
+  requirePermission('guides:create'),
   generalLimiter,
   guideController.createGuide
 );
@@ -17,7 +17,7 @@ router.post(
 router.patch(
   '/api/content-creator/guides/:id',
   requireAuth,
-  requireRole('CONTENT_CREATOR'),
+  requirePermission('guides:update'),
   generalLimiter,
   guideController.updateUserGuide
 );
@@ -25,7 +25,7 @@ router.patch(
 router.delete(
   '/api/content-creator/guides/:id',
   requireAuth,
-  requireRole('CONTENT_CREATOR'),
+  requirePermission('guides:delete'),
   generalLimiter,
   guideController.deleteGuide
 );

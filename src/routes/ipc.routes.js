@@ -1,15 +1,15 @@
 import express from 'express';
 import * as ipcController from '../controllers/ipc.controller.js';
-import { requireAuth, requireRole } from '../middleware/auth.middleware.js';
+import { requireAuth, requirePermission } from '../middleware/auth.middleware.js';
 import { generalLimiter } from '../middleware/rate-limit.middleware.js';
 
 const router = express.Router();
 
-// Content Creator IPC Routes (Authenticated, CONTENT_CREATOR role required)
+// Content Creator IPC Routes (Authenticated, ipc permissions required)
 router.post(
   '/api/content-creator/ipc',
   requireAuth,
-  requireRole('CONTENT_CREATOR'),
+  requirePermission('ipc:create'),
   generalLimiter,
   ipcController.createIPCSection
 );
@@ -17,7 +17,7 @@ router.post(
 router.patch(
   '/api/content-creator/ipc/:ipcId',
   requireAuth,
-  requireRole('CONTENT_CREATOR'),
+  requirePermission('ipc:update'),
   generalLimiter,
   ipcController.editIPCSection
 );

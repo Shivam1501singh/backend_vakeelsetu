@@ -126,10 +126,13 @@ export const loginContentCreator = async (req, res, next) => {
  */
 export const createBlog = async (req, res, next) => {
   try {
-    if (!req.user || req.user.type !== 'content_creator') {
+    const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
+    const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
+
+    if (!req.user || (!isAdmin && req.user.type !== 'content_creator' && rawRole !== 'CONTENT_CREATOR')) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator role required.'
+        message: 'Access forbidden. Content Creator or Admin role required.'
       });
     }
 
@@ -163,6 +166,15 @@ export const createBlog = async (req, res, next) => {
     try {
       const slug = await generateSlug(validated.title);
 
+      // Determine valid authorId for Blog foreign key
+      let authorId = req.user.id;
+      if (req.user.type !== 'content_creator') {
+        const defaultCreator = await prisma.contentCreator.findFirst({ select: { id: true } });
+        if (defaultCreator) {
+          authorId = defaultCreator.id;
+        }
+      }
+
       const blog = await prisma.blog.create({
         data: {
           heading: validated.heading,
@@ -172,7 +184,7 @@ export const createBlog = async (req, res, next) => {
           content: validated.content,
           image: url,
           imagePublicId: publicId,
-          authorId: req.user.id,
+          authorId,
           metaTitle: validated.metaTitle,
           metaDescription: validated.metaDescription,
           metaKeywords: validated.metaKeywords || null,
@@ -279,10 +291,13 @@ export const getSingleBlog = async (req, res, next) => {
  */
 export const updateBlog = async (req, res, next) => {
   try {
-    if (!req.user || req.user.type !== 'content_creator') {
+    const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
+    const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
+
+    if (!req.user || (!isAdmin && req.user.type !== 'content_creator' && rawRole !== 'CONTENT_CREATOR')) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator role required.'
+        message: 'Access forbidden. Content Creator or Admin role required.'
       });
     }
 
@@ -298,7 +313,7 @@ export const updateBlog = async (req, res, next) => {
       });
     }
 
-    if (blog.authorId !== req.user.id) {
+    if (!isAdmin && blog.authorId !== req.user.id) {
       return res.status(403).json({
         success: false,
         message: 'Access forbidden. You do not own this blog.'
@@ -375,14 +390,17 @@ export const updateBlog = async (req, res, next) => {
 };
 
 /**
- * Delete Blog (Content Creator Only & Owner Only)
+ * Delete Blog (Content Creator Only & Owner Only, or Admin)
  */
 export const deleteBlog = async (req, res, next) => {
   try {
-    if (!req.user || req.user.type !== 'content_creator') {
+    const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
+    const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
+
+    if (!req.user || (!isAdmin && req.user.type !== 'content_creator' && rawRole !== 'CONTENT_CREATOR')) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator role required.'
+        message: 'Access forbidden. Content Creator or Admin role required.'
       });
     }
 
@@ -398,7 +416,7 @@ export const deleteBlog = async (req, res, next) => {
       });
     }
 
-    if (blog.authorId !== req.user.id) {
+    if (!isAdmin && blog.authorId !== req.user.id) {
       return res.status(403).json({
         success: false,
         message: 'Access forbidden. You do not own this blog.'

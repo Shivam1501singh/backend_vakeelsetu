@@ -1,15 +1,15 @@
 import express from 'express';
 import * as updateController from '../controllers/update.controller.js';
-import { requireAuth, requireRole } from '../middleware/auth.middleware.js';
+import { requireAuth, requirePermission } from '../middleware/auth.middleware.js';
 import { generalLimiter } from '../middleware/rate-limit.middleware.js';
 
 const router = express.Router();
 
-// Content Creator Updates Routes (Authenticated, CONTENT_CREATOR role required)
+// Content Creator Updates Routes (Authenticated, updates permissions required)
 router.post(
   '/api/content-creator/updates',
   requireAuth,
-  requireRole('CONTENT_CREATOR'),
+  requirePermission('updates:create'),
   generalLimiter,
   updateController.createUpdate
 );
@@ -17,7 +17,7 @@ router.post(
 router.patch(
   '/api/content-creator/updates/:id',
   requireAuth,
-  requireRole('CONTENT_CREATOR'),
+  requirePermission('updates:update'),
   generalLimiter,
   updateController.updateUpdate
 );
@@ -25,7 +25,7 @@ router.patch(
 router.delete(
   '/api/content-creator/updates/:id',
   requireAuth,
-  requireRole('CONTENT_CREATOR'),
+  requirePermission('updates:delete'),
   generalLimiter,
   updateController.deleteUpdate
 );

@@ -2524,28 +2524,32 @@ The system automatically seeds an idempotent Admin account:
 #### 1. Admin Login
 * **Endpoint:** `POST /api/admin/login`
 * **Authentication:** Public
+* **Description:** Authenticates the Admin into the system. Admin credentials are verified exclusively from environment variables (`ADMIN_USER_EMAIL` and `ADMIN_USER_PASSWORD`) and are not validated against the database.
 * **Request Body:**
   ```json
   {
-    "email": "it2@techvunex.in",
-    "password": "123456"
+    "email": "your-admin-email@example.com",
+    "password": "your-admin-password"
   }
   ```
 * **Response (200 OK):**
   ```json
   {
     "success": true,
-    "message": "Login successful",
+    "message": "Admin login successful",
     "token": "eyJhbGciOiJIUzI1Ni...",
     "admin": {
-      "id": "admin-uuid",
-      "email": "it2@techvunex.in",
-      "fullName": "System Admin",
-      "role": "ADMIN"
+      "id": "admin",
+      "email": "your-admin-email@example.com",
+      "fullName": "System Administrator"
     }
   }
   ```
   *(Also sets HTTP-only `auth_token` cookie for web clients).*
+* **Error Responses:**
+  * `400 Bad Request`: `{"success": false, "message": "Email and password are required."}`
+  * `401 Unauthorized`: `{"success": false, "message": "Invalid email or password."}`
+  * `500 Internal Server Error`: `{"success": false, "message": "Admin credentials are not configured on the server."}`
 
 #### 2. Create Content Creator Account
 * **Endpoint:** `POST /api/admin/content-creators`
@@ -7708,4 +7712,384 @@ To upload PDFs using Postman:
 
 
 
-### final check
+
+---
+
+# Role-Based Access Control (RBAC) System API Reference
+
+The VakeelSetu platform uses a granular **Role-Based Access Control (RBAC)** architecture supporting configurable roles, permissions, and user assignments.
+
+### Authorization Model
+
+```text
+User ──> UserRole ──> Role ──> RolePermission ──> Permission
+```
+
+- **Admin Unrestricted Access:** Admin accounts automatically possess full system access and bypass permission restrictions.
+- **Configurable Roles:** Roles like `CONTENT_CREATOR`, `LEAD_USER`, and custom administrator-created roles have dynamically assigned permissions.
+- **Server-Side Verification:** Authorization is strictly enforced on the backend via the `requirePermission(...)` middleware.
+
+---
+
+## RBAC Endpoints
+
+### 1. Create a Role
+- **Method:** `POST`
+- **URL:** `/api/admin/roles`
+- **Authentication:** Bearer Token / Cookie (Admin / `roles:manage`)
+- **Required Permission:** `roles:manage`
+- **Request Body:**
+```json
+{
+  "name": "LEAD_USER",
+  "displayName": "Lead User",
+  "description": "Can view operational data such as users, advocates, and feedback.",
+  "permissionCodes": ["users:view", "advocates:view", "feedback:view"]
+}
+```
+- **Response (201 Created):**
+```json
+{
+  "success": true,
+  "message": "Role 'LEAD_USER' created successfully.",
+  "role": {
+    "id": "a5d09f74-32aa-4eb7-a720-d3224b74548e",
+    "name": "LEAD_USER",
+    "displayName": "Lead User",
+    "description": "Can view operational data such as users, advocates, and feedback.",
+    "isActive": true,
+    "isSystem": false,
+    "permissionsCount": 3,
+    "permissions": [
+      { "id": "uuid", "code": "users:view", "name": "View Users", "module": "USERS" },
+      { "id": "uuid", "code": "advocates:view", "name": "View Advocates", "module": "ADVOCATES" },
+      { "id": "uuid", "code": "feedback:view", "name": "View Feedback", "module": "FEEDBACK" }
+    ],
+    "createdAt": "2026-10-07T14:50:00.000Z",
+    "updatedAt": "2026-10-07T14:50:00.000Z"
+  }
+}
+```
+- **Error Responses:**
+  - `400 Bad Request`: Validation error or invalid permission codes.
+  - `401 Unauthorized`: Missing or invalid session token.
+  - `403 Forbidden`: Insufficient permissions.
+  - `409 Conflict`: Role name already exists.
+
+---
+
+### 2. List Roles
+- **Method:** `GET`
+- **URL:** `/api/admin/roles?page=1&limit=20&search=lead&isActive=true`
+- **Authentication:** Bearer Token / Cookie (Admin / `roles:manage`)
+- **Required Permission:** `roles:manage`
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "roles": [
+    {
+      "id": "a5d09f74-32aa-4eb7-a720-d3224b74548e",
+      "name": "LEAD_USER",
+      "displayName": "Lead User",
+      "description": "Can view operational data.",
+      "isActive": true,
+      "isSystem": true,
+      "permissionsCount": 4,
+      "permissions": [...]
+    }
+  ],
+  "pagination": {
+    "currentPage": 1,
+    "limit": 20,
+    "totalRoles": 2,
+    "totalPages": 1,
+    "hasNextPage": false,
+    "hasPreviousPage": false
+  }
+}
+```
+
+---
+
+### 3. Get Role Details
+- **Method:** `GET`
+- **URL:** `/api/admin/roles/:id`
+- **Authentication:** Bearer Token / Cookie (Admin / `roles:manage`)
+- **Required Permission:** `roles:manage`
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "role": {
+    "id": "a5d09f74-32aa-4eb7-a720-d3224b74548e",
+    "name": "CONTENT_CREATOR",
+    "displayName": "Content Creator",
+    "description": "Manages legal content and blogs.",
+    "isActive": true,
+    "isSystem": true,
+    "permissionsCount": 22,
+    "permissions": [...]
+  }
+}
+```
+- **Error Response:** `404 Not Found` if role does not exist.
+
+---
+
+### 4. Update Role
+- **Method:** `PUT` or `PATCH`
+- **URL:** `/api/admin/roles/:id`
+- **Authentication:** Bearer Token / Cookie (Admin / `roles:manage`)
+- **Required Permission:** `roles:manage`
+- **Request Body:**
+```json
+{
+  "displayName": "Lead Operations User",
+  "description": "Updated description for lead operations",
+  "permissionCodes": ["users:view", "advocates:view", "feedback:view", "consultancy:view"]
+}
+```
+- **Response (200 OK):** Returns updated role object.
+
+---
+
+### 5. Activate / Deactivate Role
+- **Method:** `PATCH`
+- **URL:** `/api/admin/roles/:id/status`
+- **Authentication:** Bearer Token / Cookie (Admin / `roles:manage`)
+- **Required Permission:** `roles:manage`
+- **Request Body:**
+```json
+{
+  "isActive": false
+}
+```
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Role 'LEAD_USER' deactivated successfully.",
+  "role": { ... }
+}
+```
+
+---
+
+### 6. Delete Role
+- **Method:** `DELETE`
+- **URL:** `/api/admin/roles/:id`
+- **Authentication:** Bearer Token / Cookie (Admin / `roles:manage`)
+- **Required Permission:** `roles:manage`
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Role 'CUSTOM_ROLE' deleted successfully."
+}
+```
+- **Error Response:** `400 Bad Request` if attempting to delete a default system role.
+
+---
+
+### 7. Assign Permissions to Role
+- **Method:** `POST`
+- **URL:** `/api/admin/roles/:id/permissions`
+- **Authentication:** Bearer Token / Cookie (Admin / `roles:manage`)
+- **Required Permission:** `roles:manage`
+- **Request Body:**
+```json
+{
+  "permissionCodes": ["advocates:approve", "advocates:reject"]
+}
+```
+- **Response (200 OK):** Returns role object with updated permissions.
+
+---
+
+### 8. Remove Permissions from Role
+- **Method:** `DELETE`
+- **URL:** `/api/admin/roles/:id/permissions`
+- **Authentication:** Bearer Token / Cookie (Admin / `roles:manage`)
+- **Required Permission:** `roles:manage`
+- **Request Body:**
+```json
+{
+  "permissionCodes": ["advocates:approve"]
+}
+```
+- **Response (200 OK):** Returns role object with remaining permissions.
+
+---
+
+### 9. List All Available System Permissions
+- **Method:** `GET`
+- **URL:** `/api/admin/permissions?grouped=true&module=ADVOCATES`
+- **Authentication:** Bearer Token / Cookie (Admin / `roles:manage`)
+- **Required Permission:** `roles:manage`
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "grouped": true,
+  "totalPermissions": 37,
+  "modules": {
+    "BLOGS": [
+      { "id": "uuid", "code": "blogs:read", "name": "View Blogs" },
+      { "id": "uuid", "code": "blogs:create", "name": "Create Blog" },
+      { "id": "uuid", "code": "blogs:update", "name": "Update Blog" },
+      { "id": "uuid", "code": "blogs:delete", "name": "Delete Blog" }
+    ],
+    "ADVOCATES": [
+      { "id": "uuid", "code": "advocates:view", "name": "View Advocates" },
+      { "id": "uuid", "code": "advocates:approve", "name": "Approve Advocate Profiles" },
+      { "id": "uuid", "code": "advocates:reject", "name": "Reject Advocate Profiles" },
+      { "id": "uuid", "code": "advocates:update_status", "name": "Update Advocate Status" },
+      { "id": "uuid", "code": "advocates:delete", "name": "Manage Advocate Deletion" }
+    ],
+    "USERS": [
+      { "id": "uuid", "code": "users:view", "name": "View Users" }
+    ],
+    "FEEDBACK": [
+      { "id": "uuid", "code": "feedback:view", "name": "View Feedback" },
+      { "id": "uuid", "code": "feedback:delete", "name": "Delete Feedback" }
+    ]
+  }
+}
+```
+
+---
+
+### 10. Assign Role to User
+- **Method:** `POST`
+- **URL:** `/api/admin/users/:userId/roles`
+- **Authentication:** Bearer Token / Cookie (Admin / `roles:manage`)
+- **Required Permission:** `roles:manage`
+- **Request Body:**
+```json
+{
+  "roleName": "LEAD_USER",
+  "userType": "USER"
+}
+```
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Role 'LEAD_USER' assigned to user successfully.",
+  "userRole": {
+    "id": "uuid",
+    "userId": "user-uuid",
+    "userType": "USER",
+    "role": {
+      "id": "role-uuid",
+      "name": "LEAD_USER",
+      "displayName": "Lead User",
+      "permissionsCount": 4
+    },
+    "createdAt": "2026-10-07T14:50:00.000Z"
+  }
+}
+```
+
+---
+
+### 11. Get Roles & Permissions Assigned to User
+- **Method:** `GET`
+- **URL:** `/api/admin/users/:userId/roles?userType=USER`
+- **Authentication:** Bearer Token / Cookie (Admin / `roles:manage`)
+- **Required Permission:** `roles:manage`
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "userId": "user-uuid",
+  "roles": [ ... ],
+  "roleNames": ["LEAD_USER"],
+  "permissions": [ ... ],
+  "permissionCodes": ["users:view", "advocates:view", "feedback:view", "consultancy:view"]
+}
+```
+
+---
+
+### 12. Remove Role from User
+- **Method:** `DELETE`
+- **URL:** `/api/admin/users/:userId/roles/:roleId`
+- **Authentication:** Bearer Token / Cookie (Admin / `roles:manage`)
+- **Required Permission:** `roles:manage`
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Role removed from user successfully."
+}
+```
+
+---
+
+### 13. List Users (Admin & Lead User)
+- **Method:** `GET`
+- **URL:** `/api/admin/users?page=1&limit=20&search=shivam&role=LEAD_USER`
+- **Authentication:** Bearer Token / Cookie (Admin or Lead User with `users:view`)
+- **Required Permission:** `users:view`
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "users": [
+    {
+      "id": "uuid",
+      "fullName": "Shivam Singh",
+      "email": "user@example.com",
+      "phone": "+919876543210",
+      "city": "Mumbai",
+      "state": "Maharashtra",
+      "pincode": "400001",
+      "status": "ACTIVE",
+      "assignedRoles": [
+        {
+          "id": "role-uuid",
+          "name": "LEAD_USER",
+          "displayName": "Lead User",
+          "isActive": true
+        }
+      ]
+    }
+  ],
+  "pagination": {
+    "currentPage": 1,
+    "limit": 20,
+    "totalUsers": 1,
+    "totalPages": 1,
+    "hasNextPage": false,
+    "hasPreviousPage": false
+  }
+}
+```
+
+---
+
+### 14. Get User Details (Admin & Lead User)
+- **Method:** `GET`
+- **URL:** `/api/admin/users/:userId`
+- **Authentication:** Bearer Token / Cookie (Admin or Lead User with `users:view`)
+- **Required Permission:** `users:view`
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "user": {
+    "id": "uuid",
+    "fullName": "Shivam Singh",
+    "email": "user@example.com",
+    "phone": "+919876543210",
+    "city": "Mumbai",
+    "state": "Maharashtra",
+    "pincode": "400001",
+    "status": "ACTIVE",
+    "roles": [...],
+    "permissions": [...]
+  }
+}
+```
