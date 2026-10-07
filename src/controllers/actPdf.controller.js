@@ -34,14 +34,18 @@ export const uploadActPdfsHandler = async (req, res, next) => {
   const uploadedFiles = req.files || [];
 
   try {
-    if (!req.user || (req.user.role !== 'CONTENT_CREATOR' && req.user.type !== 'content_creator')) {
+    const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
+    const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
+    const isContentCreator = rawRole === 'CONTENT_CREATOR' || (req.user?.type && req.user.type.toLowerCase() === 'content_creator');
+
+    if (!req.user || (!isAdmin && !isContentCreator)) {
       // Clean up uploaded files on authorization failure
       for (const file of uploadedFiles) {
         if (file.path && fs.existsSync(file.path)) fs.unlinkSync(file.path);
       }
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator role required.'
+        message: 'Access forbidden. Content Creator or Admin role required.'
       });
     }
 
@@ -295,10 +299,14 @@ export const downloadPdf = async (req, res, next) => {
  */
 export const attachPredefinedPdfHandler = async (req, res, next) => {
   try {
-    if (!req.user || (req.user.role !== 'CONTENT_CREATOR' && req.user.type !== 'content_creator')) {
+    const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
+    const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
+    const isContentCreator = rawRole === 'CONTENT_CREATOR' || (req.user?.type && req.user.type.toLowerCase() === 'content_creator');
+
+    if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator role required.'
+        message: 'Access forbidden. Content Creator or Admin role required.'
       });
     }
 
@@ -334,10 +342,14 @@ export const attachPredefinedPdfHandler = async (req, res, next) => {
  */
 export const syncPredefinedPdfsHandler = async (req, res, next) => {
   try {
-    if (!req.user || (req.user.role !== 'CONTENT_CREATOR' && req.user.type !== 'content_creator')) {
+    const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
+    const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
+    const isContentCreator = rawRole === 'CONTENT_CREATOR' || (req.user?.type && req.user.type.toLowerCase() === 'content_creator');
+
+    if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator role required.'
+        message: 'Access forbidden. Content Creator or Admin role required.'
       });
     }
 
@@ -365,10 +377,14 @@ export const syncPredefinedPdfsHandler = async (req, res, next) => {
  */
 export const deleteActPdfHandler = async (req, res, next) => {
   try {
-    if (!req.user || (req.user.role !== 'CONTENT_CREATOR' && req.user.type !== 'content_creator')) {
+    const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
+    const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
+    const isContentCreator = rawRole === 'CONTENT_CREATOR' || (req.user?.type && req.user.type.toLowerCase() === 'content_creator');
+
+    if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator role required.'
+        message: 'Access forbidden. Content Creator or Admin role required.'
       });
     }
 

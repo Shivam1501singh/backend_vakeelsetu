@@ -22,21 +22,31 @@ export const mapUpdateResponse = (update) => {
  */
 export const createUpdate = async (req, res, next) => {
   try {
-    if (!req.user || (req.user.role !== 'CONTENT_CREATOR' && req.user.type !== 'content_creator')) {
+    const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
+    const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
+    const isContentCreator = rawRole === 'CONTENT_CREATOR' || (req.user?.type && req.user.type.toLowerCase() === 'content_creator');
+
+    if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator role required.'
+        message: 'Access forbidden. Content Creator or Admin role required.'
       });
     }
 
     const validated = updateValidator.createUpdateSchema.parse(req.body);
+
+    let createdBy = req.user.id;
+    if (req.user.type !== 'content_creator') {
+      const defaultCreator = await prisma.contentCreator.findFirst({ select: { id: true } });
+      createdBy = defaultCreator ? defaultCreator.id : null;
+    }
 
     const created = await prisma.update.create({
       data: {
         title: validated.title,
         oldDescription: validated.oldDescription,
         newDescription: validated.newDescription,
-        createdBy: req.user.id
+        createdBy
       }
     });
 
@@ -124,10 +134,14 @@ export const getSingleUpdate = async (req, res, next) => {
  */
 export const updateUpdate = async (req, res, next) => {
   try {
-    if (!req.user || (req.user.role !== 'CONTENT_CREATOR' && req.user.type !== 'content_creator')) {
+    const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
+    const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
+    const isContentCreator = rawRole === 'CONTENT_CREATOR' || (req.user?.type && req.user.type.toLowerCase() === 'content_creator');
+
+    if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator role required.'
+        message: 'Access forbidden. Content Creator or Admin role required.'
       });
     }
 
@@ -172,10 +186,14 @@ export const updateUpdate = async (req, res, next) => {
  */
 export const deleteUpdate = async (req, res, next) => {
   try {
-    if (!req.user || (req.user.role !== 'CONTENT_CREATOR' && req.user.type !== 'content_creator')) {
+    const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
+    const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
+    const isContentCreator = rawRole === 'CONTENT_CREATOR' || (req.user?.type && req.user.type.toLowerCase() === 'content_creator');
+
+    if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator role required.'
+        message: 'Access forbidden. Content Creator or Admin role required.'
       });
     }
 

@@ -28,10 +28,14 @@ export const mapPublicIPCResponse = (section, includeContent = true) => {
  */
 export const createIPCSection = async (req, res, next) => {
   try {
-    if (!req.user || (req.user.role !== 'CONTENT_CREATOR' && req.user.type !== 'content_creator')) {
+    const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
+    const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
+    const isContentCreator = rawRole === 'CONTENT_CREATOR' || (req.user?.type && req.user.type.toLowerCase() === 'content_creator');
+
+    if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator role required.'
+        message: 'Access forbidden. Content Creator or Admin role required.'
       });
     }
 
@@ -49,6 +53,14 @@ export const createIPCSection = async (req, res, next) => {
       });
     }
 
+    let createdBy = req.user.id;
+    if (req.user.type !== 'content_creator') {
+      const defaultCreator = await prisma.contentCreator.findFirst({ select: { id: true } });
+      if (defaultCreator) {
+        createdBy = defaultCreator.id;
+      }
+    }
+
     const created = await prisma.iPCSection.create({
       data: {
         sectionNo: validated.sectionNo,
@@ -60,7 +72,7 @@ export const createIPCSection = async (req, res, next) => {
         metaTitle: validated.metaTitle,
         keywords: validated.keywords,
         metaDescription: validated.metaDescription,
-        createdBy: req.user.id
+        createdBy
       }
     });
 
@@ -86,10 +98,14 @@ export const createIPCSection = async (req, res, next) => {
  */
 export const editIPCSection = async (req, res, next) => {
   try {
-    if (!req.user || (req.user.role !== 'CONTENT_CREATOR' && req.user.type !== 'content_creator')) {
+    const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
+    const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
+    const isContentCreator = rawRole === 'CONTENT_CREATOR' || (req.user?.type && req.user.type.toLowerCase() === 'content_creator');
+
+    if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator role required.'
+        message: 'Access forbidden. Content Creator or Admin role required.'
       });
     }
 

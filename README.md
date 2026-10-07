@@ -8093,3 +8093,660 @@ User ──> UserRole ──> Role ──> RolePermission ──> Permission
   }
 }
 ```
+
+---
+
+## 24. Admin Content Creator Access & Management
+
+### Overview
+
+The platform provides full parity of content management operations to the **System Administrator (`ADMIN`)**. The Admin can perform all create/write, update, and delete actions across the entire legal hierarchy, statutory modules, articles, and citizen legal guidance systems that were previously dedicated to the `CONTENT_CREATOR` role.
+
+The authorization layer reuses the existing Content Creator endpoints with extended role permissions (`ADMIN` or `CONTENT_CREATOR`), guaranteeing that no duplicate business logic exists and that existing Content Creator flows remain completely backward-compatible.
+
+### Role Authorization Matrix
+
+| Module / Action | HTTP Method | Endpoint | Public | USER | ADVOCATE | CONTENT_CREATOR | ADMIN |
+|---|---|---|---|---|---|---|---|
+| **Bearer Acts Single Write** | `POST` | `/api/content-creator/bearer-acts` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Upload Act PDFs** | `POST` | `/api/content-creator/acts/:actId/pdfs` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Attach Predefined PDF** | `POST` | `/api/content-creator/acts/:actId/predefined-pdfs` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Sync Predefined PDFs** | `POST` | `/api/content-creator/acts/predefined-pdfs/sync` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Delete Act PDF** | `DELETE` | `/api/content-creator/acts/pdfs/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Create Blog** | `POST` | `/api/blogs` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Update Blog** | `PUT` | `/api/blogs/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed (Owner) | ✅ **Allowed (All)** |
+| **Delete Blog** | `DELETE` | `/api/blogs/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed (Owner) | ✅ **Allowed (All)** |
+| **Create Guide** | `POST` | `/api/content-creator/guides` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Update Guide** | `PATCH` | `/api/content-creator/guides/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Delete Guide** | `DELETE` | `/api/content-creator/guides/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Create Update** | `POST` | `/api/content-creator/updates` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Update Update** | `PATCH` | `/api/content-creator/updates/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Delete Update** | `DELETE` | `/api/content-creator/updates/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Create IPC Section** | `POST` | `/api/content-creator/ipc` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Edit IPC Section** | `PATCH` | `/api/content-creator/ipc/:ipcId` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Create BNS Section** | `POST` | `/api/content-creator/bns` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Edit BNS Section** | `PATCH` | `/api/content-creator/bns/:bnsId` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Create User Right** | `POST` | `/api/content-creator/user-rights` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Update User Right** | `PATCH` | `/api/content-creator/user-rights/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Delete User Right** | `DELETE` | `/api/content-creator/user-rights/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+
+---
+
+### Detailed Admin Content Creator API Reference
+
+#### 1. Bearer Acts Hierarchy Management (Single Write API)
+- **Method:** `POST`
+- **Endpoint:** `/api/content-creator/bearer-acts`
+- **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
+- **Required Role:** `ADMIN` or `CONTENT_CREATOR`
+- **Headers:** `Authorization: Bearer <admin_jwt>`, `Content-Type: application/json`
+
+##### A. Create / Update Bearer Act Category
+**Request Body (Create):**
+```json
+{
+  "type": "BEARER_ACT",
+  "operation": "CREATE",
+  "data": {
+    "name": "Criminal & Cyber Law Acts"
+  }
+}
+```
+**Response (`201 Created`):**
+```json
+{
+  "success": true,
+  "message": "Bearer Act category created successfully",
+  "data": {
+    "id": "bact-uuid",
+    "name": "Criminal & Cyber Law Acts",
+    "createdAt": "2026-10-07T16:00:00.000Z",
+    "updatedAt": "2026-10-07T16:00:00.000Z"
+  }
+}
+```
+
+##### B. Create / Update Act under Category
+**Request Body (Create Act):**
+```json
+{
+  "type": "ACT",
+  "operation": "CREATE",
+  "data": {
+    "bearerActId": "bact-uuid",
+    "heading": "The Information Technology Act",
+    "act": "IT ACT 2000",
+    "year": 2000
+  }
+}
+```
+**Response (`201 Created`):**
+```json
+{
+  "success": true,
+  "message": "Act created successfully",
+  "data": {
+    "id": "act-uuid",
+    "bearerActId": "bact-uuid",
+    "heading": "The Information Technology Act",
+    "act": "IT ACT 2000",
+    "year": 2000,
+    "createdAt": "2026-10-07T16:00:00.000Z",
+    "updatedAt": "2026-10-07T16:00:00.000Z"
+  }
+}
+```
+
+##### C. Create / Update Section under Act
+**Request Body (Create Section):**
+```json
+{
+  "type": "SECTION",
+  "operation": "CREATE",
+  "data": {
+    "actId": "act-uuid",
+    "section": "Section 66A",
+    "chapterNo": 11,
+    "chapterName": "Offences",
+    "title": "Punishment for sending offensive messages through communication service",
+    "description": "Any person who sends, by means of a computer resource...",
+    "metaData": "IT Act offences and punishments"
+  }
+}
+```
+**Response (`201 Created`):**
+```json
+{
+  "success": true,
+  "message": "Act section created successfully",
+  "data": {
+    "id": "section-uuid",
+    "actId": "act-uuid",
+    "section": "Section 66A",
+    "sectionOrder": 66.01,
+    "chapterNo": 11,
+    "chapterName": "Offences",
+    "title": "Punishment for sending offensive messages...",
+    "description": "Any person who sends...",
+    "metaData": "IT Act offences and punishments",
+    "createdAt": "2026-10-07T16:00:00.000Z",
+    "updatedAt": "2026-10-07T16:00:00.000Z"
+  }
+}
+```
+
+---
+
+#### 2. Act PDFs Upload & Management
+
+##### A. Multipart PDF Upload
+- **Method:** `POST`
+- **Endpoint:** `/api/content-creator/acts/:actId/pdfs` *(or `/api/content-creator/acts/pdfs` with `actId` in form data)*
+- **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
+- **Content-Type:** `multipart/form-data`
+- **Form Data Fields:**
+  - `displayName` (text, required): Custom display name for the PDF
+  - `pdfs` or `pdf` (file, required): One or more `.pdf` files (MIME: `application/pdf`, up to 50MB each)
+  - `actId` (text, required if using query-less path)
+- **Response (`201 Created`):**
+```json
+{
+  "success": true,
+  "message": "1 PDF(s) uploaded successfully",
+  "count": 1,
+  "data": [
+    {
+      "id": "pdf-uuid",
+      "actId": "act-uuid",
+      "displayName": "Official Bare Act PDF",
+      "fileName": "it_act_2000.pdf",
+      "filePath": "uploads/acts/it_act_2000-1728300000000.pdf",
+      "fileSize": 1048576,
+      "mimeType": "application/pdf",
+      "viewUrl": "https://api.vakeelsetu.com/api/acts/pdfs/pdf-uuid/view",
+      "downloadUrl": "https://api.vakeelsetu.com/api/acts/pdfs/pdf-uuid/download",
+      "createdAt": "2026-10-07T16:00:00.000Z"
+    }
+  ]
+}
+```
+
+##### B. Attach Predefined Local PDF
+- **Method:** `POST`
+- **Endpoint:** `/api/content-creator/acts/:actId/predefined-pdfs`
+- **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
+- **Request Body:**
+```json
+{
+  "displayName": "Official Government Gazette",
+  "fileName": "it_act_2000.pdf",
+  "filePath": "uploads/acts/it_act_2000.pdf"
+}
+```
+- **Response (`201 Created` / `200 OK` if duplicate):**
+```json
+{
+  "success": true,
+  "message": "Predefined PDF attached successfully",
+  "isDuplicate": false,
+  "data": {
+    "id": "pdf-uuid",
+    "actId": "act-uuid",
+    "displayName": "Official Government Gazette",
+    "fileName": "it_act_2000.pdf",
+    "filePath": "uploads/acts/it_act_2000.pdf",
+    "viewUrl": "https://api.vakeelsetu.com/api/acts/pdfs/pdf-uuid/view",
+    "downloadUrl": "https://api.vakeelsetu.com/api/acts/pdfs/pdf-uuid/download"
+  }
+}
+```
+
+##### C. Delete PDF Attachment
+- **Method:** `DELETE`
+- **Endpoint:** `/api/content-creator/acts/pdfs/:id`
+- **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "PDF attachment deleted successfully"
+}
+```
+
+---
+
+#### 3. Guides Management
+
+##### A. Create Guide
+- **Method:** `POST`
+- **Endpoint:** `/api/content-creator/guides`
+- **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
+- **Request Body:**
+```json
+{
+  "title": "How to File a Cyber Crime Complaint",
+  "description": "Step 1: Visit the national cyber crime reporting portal..."
+}
+```
+- **Response (`201 Created`):**
+```json
+{
+  "success": true,
+  "message": "Guide created successfully",
+  "data": {
+    "id": "guide-uuid",
+    "title": "How to File a Cyber Crime Complaint",
+    "description": "Step 1: Visit the national cyber crime reporting portal...",
+    "createdAt": "2026-10-07T16:00:00.000Z",
+    "updatedAt": "2026-10-07T16:00:00.000Z"
+  }
+}
+```
+
+##### B. Update Guide
+- **Method:** `PATCH`
+- **Endpoint:** `/api/content-creator/guides/:id`
+- **Request Body:**
+```json
+{
+  "title": "How to File a Cyber Crime Complaint (Updated 2026)"
+}
+```
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Guide updated successfully",
+  "data": {
+    "id": "guide-uuid",
+    "title": "How to File a Cyber Crime Complaint (Updated 2026)",
+    "description": "Step 1: Visit the national cyber crime reporting portal...",
+    "updatedAt": "2026-10-07T16:05:00.000Z"
+  }
+}
+```
+
+##### C. Delete Guide
+- **Method:** `DELETE`
+- **Endpoint:** `/api/content-creator/guides/:id`
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Guide deleted successfully"
+}
+```
+
+---
+
+#### 4. Updates Management
+
+##### A. Create Update
+- **Method:** `POST`
+- **Endpoint:** `/api/content-creator/updates`
+- **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
+- **Request Body:**
+```json
+{
+  "title": "Revision of Cyber Security Compliance Guidelines",
+  "oldDescription": "Mandatory 6-hour incident reporting requirement under 2022 norms.",
+  "newDescription": "Updated reporting framework aligning with DPDP rules 2026."
+}
+```
+- **Response (`201 Created`):**
+```json
+{
+  "success": true,
+  "message": "Update created successfully",
+  "data": {
+    "id": "update-uuid",
+    "title": "Revision of Cyber Security Compliance Guidelines",
+    "oldDescription": "Mandatory 6-hour incident reporting requirement under 2022 norms.",
+    "newDescription": "Updated reporting framework aligning with DPDP rules 2026.",
+    "createdAt": "2026-10-07T16:00:00.000Z",
+    "updatedAt": "2026-10-07T16:00:00.000Z"
+  }
+}
+```
+
+##### B. Update Update
+- **Method:** `PATCH`
+- **Endpoint:** `/api/content-creator/updates/:id`
+- **Request Body:**
+```json
+{
+  "newDescription": "Final approved reporting framework under DPDP rules 2026."
+}
+```
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Update updated successfully",
+  "data": {
+    "id": "update-uuid",
+    "title": "Revision of Cyber Security Compliance Guidelines",
+    "oldDescription": "Mandatory 6-hour incident reporting requirement under 2022 norms.",
+    "newDescription": "Final approved reporting framework under DPDP rules 2026.",
+    "updatedAt": "2026-10-07T16:05:00.000Z"
+  }
+}
+```
+
+##### C. Delete Update
+- **Method:** `DELETE`
+- **Endpoint:** `/api/content-creator/updates/:id`
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Update deleted successfully"
+}
+```
+
+---
+
+#### 5. IPC & BNS Sections Management
+
+##### A. Create IPC Section
+- **Method:** `POST`
+- **Endpoint:** `/api/content-creator/ipc`
+- **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
+- **Request Body:**
+```json
+{
+  "sectionNo": "Section 420",
+  "heading": "Cheating and dishonestly inducing delivery of property",
+  "paragraph": "Whoever cheats and thereby dishonestly induces the person deceived...",
+  "explanation": "A person who falsely promises...",
+  "content": "Full statutory definition and case law notes...",
+  "metaTitle": "IPC Section 420: Cheating and Dishonesty",
+  "keywords": ["cheating", "fraud", "IPC 420"]
+}
+```
+- **Response (`201 Created`):**
+```json
+{
+  "success": true,
+  "message": "IPC section created successfully",
+  "data": {
+    "id": "ipc-uuid",
+    "sectionNo": "Section 420",
+    "heading": "Cheating and dishonestly inducing delivery of property",
+    "paragraph": "Whoever cheats...",
+    "explanation": "A person who falsely promises...",
+    "content": "Full statutory definition...",
+    "metaTitle": "IPC Section 420: Cheating and Dishonesty",
+    "keywords": ["cheating", "fraud", "IPC 420"]
+  }
+}
+```
+
+##### B. Edit IPC Section
+- **Method:** `PATCH`
+- **Endpoint:** `/api/content-creator/ipc/:ipcId`
+- **Request Body:**
+```json
+{
+  "heading": "Cheating and dishonestly inducing delivery of property (Updated Notes)"
+}
+```
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "IPC section updated successfully",
+  "data": {
+    "id": "ipc-uuid",
+    "sectionNo": "Section 420",
+    "heading": "Cheating and dishonestly inducing delivery of property (Updated Notes)"
+  }
+}
+```
+
+##### C. Create BNS Section
+- **Method:** `POST`
+- **Endpoint:** `/api/content-creator/bns`
+- **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
+- **Request Body:**
+```json
+{
+  "sectionNo": "Section 318",
+  "heading": "Cheating",
+  "paragraph": "Whoever, by deceiving any person...",
+  "explanation": "Explanation regarding dishonest intention...",
+  "content": "Full BNS Section 318 text...",
+  "metaTitle": "BNS Section 318: Cheating and Penalties",
+  "keywords": ["bns 318", "cheating", "bharatiya nyaya sanhita"]
+}
+```
+- **Response (`201 Created`):**
+```json
+{
+  "success": true,
+  "message": "BNS section created successfully",
+  "data": {
+    "id": "bns-uuid",
+    "sectionNo": "Section 318",
+    "heading": "Cheating",
+    "paragraph": "Whoever, by deceiving any person..."
+  }
+}
+```
+
+##### D. Edit BNS Section
+- **Method:** `PATCH`
+- **Endpoint:** `/api/content-creator/bns/:bnsId`
+- **Request Body:**
+```json
+{
+  "heading": "Cheating and Penalties under BNS"
+}
+```
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "BNS section updated successfully",
+  "data": {
+    "id": "bns-uuid",
+    "sectionNo": "Section 318",
+    "heading": "Cheating and Penalties under BNS"
+  }
+}
+```
+
+---
+
+#### 6. User Rights Management
+
+##### A. Create User Right (Multipart / Optional Photo)
+- **Method:** `POST`
+- **Endpoint:** `/api/content-creator/user-rights`
+- **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
+- **Content-Type:** `multipart/form-data` or `application/json`
+- **Form Fields:**
+  - `title` (text, required): Title of citizen right
+  - `description` (text, required): Detailed explanation
+  - `photo` (file, optional): Image file (`image/jpeg`, `image/png`, `image/webp`, max 5MB)
+- **Response (`201 Created`):**
+```json
+{
+  "success": true,
+  "message": "User Right created successfully",
+  "data": {
+    "id": "user-right-uuid",
+    "title": "Right to Free Legal Aid",
+    "description": "Under Article 39A of the Constitution of India...",
+    "photo": "https://res.cloudinary.com/vakeelsetu/image/upload/v123456/legal_aid.webp",
+    "createdAt": "2026-10-07T16:00:00.000Z",
+    "updatedAt": "2026-10-07T16:00:00.000Z"
+  }
+}
+```
+
+##### B. Update User Right
+- **Method:** `PATCH`
+- **Endpoint:** `/api/content-creator/user-rights/:id`
+- **Content-Type:** `multipart/form-data` or `application/json`
+- **Form Fields:**
+  - `title` (text, optional)
+  - `description` (text, optional)
+  - `photo` (file, optional, replaces existing image on Cloudinary)
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "User Right updated successfully",
+  "data": {
+    "id": "user-right-uuid",
+    "title": "Right to Free Legal Aid (Updated)",
+    "description": "Under Article 39A...",
+    "photo": "https://res.cloudinary.com/vakeelsetu/image/upload/v123456/legal_aid.webp"
+  }
+}
+```
+
+##### C. Delete User Right
+- **Method:** `DELETE`
+- **Endpoint:** `/api/content-creator/user-rights/:id`
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "User Right deleted successfully"
+}
+```
+
+---
+
+#### 7. Blog Posts Management
+
+##### A. Create Blog
+- **Method:** `POST`
+- **Endpoint:** `/api/blogs`
+- **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
+- **Content-Type:** `multipart/form-data`
+- **Form Fields:**
+  - `heading` (text, required)
+  - `title` (text, required)
+  - `date` (text, required, ISO format)
+  - `writtenBy` (text, required)
+  - `content` (text, required)
+  - `image` (file, required, JPEG/PNG/WEBP up to 5MB)
+  - `metaTitle` (text, optional)
+  - `metaDescription` (text, optional)
+  - `metaKeywords` (text, optional)
+- **Response (`201 Created`):**
+```json
+{
+  "success": true,
+  "message": "Blog created successfully",
+  "blog": {
+    "id": "blog-uuid",
+    "heading": "Understanding Criminal Procedure Reforms",
+    "title": "Comprehensive Guide to BNSS 2023",
+    "date": "2026-10-07T00:00:00.000Z",
+    "writtenBy": "System Admin",
+    "content": "The transition from CrPC to BNSS...",
+    "image": "https://res.cloudinary.com/...",
+    "slug": "comprehensive-guide-to-bnss-2023"
+  }
+}
+```
+
+##### B. Update Blog
+- **Method:** `PUT`
+- **Endpoint:** `/api/blogs/:id`
+- **Authentication:** Bearer Token / Cookie (Admin or Content Creator Owner)
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Blog updated successfully",
+  "blog": {
+    "id": "blog-uuid",
+    "title": "Comprehensive Guide to BNSS 2023 (Revised Edition)"
+  }
+}
+```
+
+##### C. Delete Blog
+- **Method:** `DELETE`
+- **Endpoint:** `/api/blogs/:id`
+- **Authentication:** Bearer Token / Cookie (Admin or Content Creator Owner)
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Blog deleted successfully"
+}
+```
+
+---
+
+### Postman Testing Guide for Admin Content Creator Access
+
+1. **Admin Login:**
+   - **Method:** `POST`
+   - **URL:** `{{base_url}}/api/admin/login`
+   - **Headers:** `Content-Type: application/json`
+   - **Body:**
+     ```json
+     {
+       "email": "{{admin_email}}",
+       "password": "{{admin_password}}"
+     }
+     ```
+   - **Test Script / Variable extraction:**
+     ```javascript
+     const res = pm.response.json();
+     if (res.token) {
+       pm.environment.set("admin_token", res.token);
+     }
+     ```
+
+2. **Bearer Acts Hierarchy Write Test:**
+   - **Method:** `POST`
+   - **URL:** `{{base_url}}/api/content-creator/bearer-acts`
+   - **Headers:**
+     - `Authorization: Bearer {{admin_token}}`
+     - `Content-Type: application/json`
+   - **Body:**
+     ```json
+     {
+       "type": "BEARER_ACT",
+       "operation": "CREATE",
+       "data": { "name": "Civil Dispute Resolution Acts" }
+     }
+     ```
+
+3. **Multipart PDF Upload Test:**
+   - **Method:** `POST`
+   - **URL:** `{{base_url}}/api/content-creator/acts/{{act_id}}/pdfs`
+   - **Headers:**
+     - `Authorization: Bearer {{admin_token}}`
+   - **Body:** Select `form-data`
+     - `displayName` (Text): `Official Bare Act 2026`
+     - `pdfs` (File): Select any `.pdf` file from disk
+
+4. **Guides CRUD Test:**
+   - **Method:** `POST`
+   - **URL:** `{{base_url}}/api/content-creator/guides`
+   - **Headers:**
+     - `Authorization: Bearer {{admin_token}}`
+     - `Content-Type: application/json`
+   - **Body:**
+     ```json
+     {
+       "title": "Legal Rights on Arrest",
+       "description": "Key protections under Article 22 and Section 50..."
+     }
+     ```
+
+5. **Security Verification (Negative Tests):**
+   - Attempt any of the above endpoints with a normal User token (`Authorization: Bearer {{user_token}}`) or Advocate token (`Authorization: Bearer {{advocate_token}}`).
+   - Expected status: `403 Forbidden` (`Access forbidden. Insufficient permissions.` or `Access forbidden. Content Creator or Admin role required.`).
+   - Attempt without `Authorization` header.
+   - Expected status: `401 Unauthorized` (`Authentication required. Please login.`).
+
