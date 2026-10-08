@@ -778,20 +778,13 @@ export const searchActSections = async (req, res, next) => {
     }
 
     const trimmedQuery = q.trim();
-    const numericQ = !isNaN(trimmedQuery) && Number.isInteger(Number(trimmedQuery)) ? parseInt(trimmedQuery, 10) : null;
 
     const where = {
       actId: act.id,
-      OR: [
-        { section: { contains: trimmedQuery, mode: 'insensitive' } },
-        { chapterName: { contains: trimmedQuery, mode: 'insensitive' } },
-        { title: { contains: trimmedQuery, mode: 'insensitive' } },
-        { description: { contains: trimmedQuery, mode: 'insensitive' } },
-        { metaData: { contains: trimmedQuery, mode: 'insensitive' } },
-        { metaDescription: { contains: trimmedQuery, mode: 'insensitive' } },
-        { metaTitle: { contains: trimmedQuery, mode: 'insensitive' } },
-        ...(numericQ !== null ? [{ chapterNo: numericQ }] : [])
-      ]
+      section: {
+        contains: trimmedQuery,
+        mode: 'insensitive'
+      }
     };
 
     const skip = (page - 1) * limit;
