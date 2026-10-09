@@ -16,8 +16,8 @@ export const mapGuideResponse = (guide) => {
 };
 
 /**
- * Create Guide (Content Creator Only)
- * POST /api/content-creator/guides
+ * Create Guide (Admin Panel)
+ * POST /api/admin/guides
  */
 export const createGuide = async (req, res, next) => {
   try {
@@ -28,7 +28,7 @@ export const createGuide = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 
@@ -127,8 +127,8 @@ export const getSingleGuide = async (req, res, next) => {
 };
 
 /**
- * Update Guide (Content Creator Only)
- * PATCH /api/content-creator/guides/:id
+ * Update Guide (Admin Panel)
+ * PATCH /api/admin/guides/:id
  */
 export const updateUserGuide = async (req, res, next) => {
   try {
@@ -139,7 +139,7 @@ export const updateUserGuide = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 
@@ -178,8 +178,8 @@ export const updateUserGuide = async (req, res, next) => {
 };
 
 /**
- * Delete Guide (Content Creator Only)
- * DELETE /api/content-creator/guides/:id
+ * Delete Guide (Admin Panel)
+ * DELETE /api/admin/guides/:id
  */
 export const deleteGuide = async (req, res, next) => {
   try {
@@ -190,7 +190,7 @@ export const deleteGuide = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 

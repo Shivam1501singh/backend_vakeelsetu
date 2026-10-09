@@ -5,9 +5,9 @@ import { generalLimiter } from '../middleware/rate-limit.middleware.js';
 
 const router = express.Router();
 
-// Content Creator Guides Routes (Authenticated, guides permissions required)
+// Admin Guides Routes (Authenticated, guides permissions required)
 router.post(
-  '/api/content-creator/guides',
+  '/api/admin/guides',
   requireAuth,
   requirePermission('guides:create'),
   generalLimiter,
@@ -15,7 +15,7 @@ router.post(
 );
 
 router.patch(
-  '/api/content-creator/guides/:id',
+  '/api/admin/guides/:id',
   requireAuth,
   requirePermission('guides:update'),
   generalLimiter,
@@ -23,7 +23,7 @@ router.patch(
 );
 
 router.delete(
-  '/api/content-creator/guides/:id',
+  '/api/admin/guides/:id',
   requireAuth,
   requirePermission('guides:delete'),
   generalLimiter,

@@ -5,8 +5,8 @@ import { attachPredefinedPdfToAct } from '../services/predefinedPdf.service.js';
 
 
 /**
- * Single Content Creator Write Endpoint
- * POST /api/content-creator/bearer-acts
+ * Single Admin Write Endpoint
+ * POST /api/admin/bearer-acts
  */
 export const contentCreatorWriteHandler = async (req, res, next) => {
   try {
@@ -17,7 +17,7 @@ export const contentCreatorWriteHandler = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 

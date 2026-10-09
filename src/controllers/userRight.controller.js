@@ -37,8 +37,8 @@ const validateUploadedImage = (file) => {
 };
 
 /**
- * Create User Right (Content Creator Only)
- * POST /api/content-creator/user-rights
+ * Create User Right (Admin Panel)
+ * POST /api/admin/user-rights
  */
 export const createUserRight = async (req, res, next) => {
   try {
@@ -49,7 +49,7 @@ export const createUserRight = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 
@@ -167,8 +167,8 @@ export const getSingleUserRight = async (req, res, next) => {
 };
 
 /**
- * Update User Right (Content Creator Only)
- * PATCH /api/content-creator/user-rights/:id
+ * Update User Right (Admin Panel)
+ * PATCH /api/admin/user-rights/:id
  */
 export const updateUserRight = async (req, res, next) => {
   try {
@@ -179,7 +179,7 @@ export const updateUserRight = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 
@@ -240,8 +240,8 @@ export const updateUserRight = async (req, res, next) => {
 };
 
 /**
- * Delete User Right (Content Creator Only)
- * DELETE /api/content-creator/user-rights/:id
+ * Delete User Right (Admin Panel)
+ * DELETE /api/admin/user-rights/:id
  */
 export const deleteUserRight = async (req, res, next) => {
   try {
@@ -252,7 +252,7 @@ export const deleteUserRight = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 

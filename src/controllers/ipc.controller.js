@@ -23,8 +23,8 @@ export const mapPublicIPCResponse = (section, includeContent = true) => {
 };
 
 /**
- * Create IPC Section (Content Creator Only)
- * POST /api/content-creator/ipc
+ * Create IPC Section (Admin Panel)
+ * POST /api/admin/ipc
  */
 export const createIPCSection = async (req, res, next) => {
   try {
@@ -35,7 +35,7 @@ export const createIPCSection = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 
@@ -93,8 +93,8 @@ export const createIPCSection = async (req, res, next) => {
 };
 
 /**
- * Edit IPC Section (Content Creator Only)
- * PATCH /api/content-creator/ipc/:ipcId
+ * Edit IPC Section (Admin Panel)
+ * PATCH /api/admin/ipc/:ipcId
  */
 export const editIPCSection = async (req, res, next) => {
   try {
@@ -105,7 +105,7 @@ export const editIPCSection = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 

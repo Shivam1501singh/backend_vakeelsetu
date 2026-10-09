@@ -17,8 +17,8 @@ export const mapUpdateResponse = (update) => {
 };
 
 /**
- * Create Update (Content Creator Only)
- * POST /api/content-creator/updates
+ * Create Update (Admin Panel)
+ * POST /api/admin/updates
  */
 export const createUpdate = async (req, res, next) => {
   try {
@@ -29,7 +29,7 @@ export const createUpdate = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 
@@ -129,8 +129,8 @@ export const getSingleUpdate = async (req, res, next) => {
 };
 
 /**
- * Update Update (Content Creator Only)
- * PATCH /api/content-creator/updates/:id
+ * Update Update (Admin Panel)
+ * PATCH /api/admin/updates/:id
  */
 export const updateUpdate = async (req, res, next) => {
   try {
@@ -141,7 +141,7 @@ export const updateUpdate = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 
@@ -181,8 +181,8 @@ export const updateUpdate = async (req, res, next) => {
 };
 
 /**
- * Delete Update (Content Creator Only)
- * DELETE /api/content-creator/updates/:id
+ * Delete Update (Admin Panel)
+ * DELETE /api/admin/updates/:id
  */
 export const deleteUpdate = async (req, res, next) => {
   try {
@@ -193,7 +193,7 @@ export const deleteUpdate = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 

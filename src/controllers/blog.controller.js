@@ -122,7 +122,8 @@ export const loginContentCreator = async (req, res, next) => {
 };
 
 /**
- * Create Blog (Content Creator Only)
+ * Create Blog (Admin Panel)
+ * POST /api/admin/blogs
  */
 export const createBlog = async (req, res, next) => {
   try {
@@ -132,7 +133,7 @@ export const createBlog = async (req, res, next) => {
     if (!req.user || (!isAdmin && req.user.type !== 'content_creator' && rawRole !== 'CONTENT_CREATOR')) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 
@@ -287,7 +288,8 @@ export const getSingleBlog = async (req, res, next) => {
 };
 
 /**
- * Update Blog (Content Creator Only & Owner Only)
+ * Update Blog (Admin Panel & Owner Only, or Admin)
+ * PUT /api/admin/blogs/:id
  */
 export const updateBlog = async (req, res, next) => {
   try {
@@ -297,7 +299,7 @@ export const updateBlog = async (req, res, next) => {
     if (!req.user || (!isAdmin && req.user.type !== 'content_creator' && rawRole !== 'CONTENT_CREATOR')) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 
@@ -390,7 +392,8 @@ export const updateBlog = async (req, res, next) => {
 };
 
 /**
- * Delete Blog (Content Creator Only & Owner Only, or Admin)
+ * Delete Blog (Admin Panel & Owner Only, or Admin)
+ * DELETE /api/admin/blogs/:id
  */
 export const deleteBlog = async (req, res, next) => {
   try {
@@ -400,7 +403,7 @@ export const deleteBlog = async (req, res, next) => {
     if (!req.user || (!isAdmin && req.user.type !== 'content_creator' && rawRole !== 'CONTENT_CREATOR')) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 

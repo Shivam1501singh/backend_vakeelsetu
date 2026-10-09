@@ -8,11 +8,11 @@ import { generalLimiter } from '../middleware/rate-limit.middleware.js';
 const router = express.Router();
 
 /**
- * Content Creator Single Write Endpoint (Authenticated, acts:create or acts:update permission required)
+ * Admin Single Write Endpoint (Authenticated, acts:create or acts:update permission required)
  * Handles CREATE & UPDATE for BEARER_ACT, ACT, and SECTION levels.
  */
 router.post(
-  '/api/content-creator/bearer-acts',
+  '/api/admin/bearer-acts',
   requireAuth,
   requirePermission('acts:create', 'acts:update'),
   generalLimiter,
@@ -20,10 +20,10 @@ router.post(
 );
 
 /**
- * Content Creator PDF Upload & Management Endpoints (Authenticated, act_pdfs permissions required)
+ * Admin PDF Upload & Management Endpoints (Authenticated, act_pdfs permissions required)
  */
 router.post(
-  '/api/content-creator/acts/:actId/pdfs',
+  '/api/admin/acts/:actId/pdfs',
   requireAuth,
   requirePermission('act_pdfs:upload'),
   generalLimiter,
@@ -32,7 +32,7 @@ router.post(
 );
 
 router.post(
-  '/api/content-creator/acts/pdfs',
+  '/api/admin/acts/pdfs',
   requireAuth,
   requirePermission('act_pdfs:upload'),
   generalLimiter,
@@ -41,7 +41,7 @@ router.post(
 );
 
 router.post(
-  '/api/content-creator/acts/:actId/predefined-pdfs',
+  '/api/admin/acts/:actId/predefined-pdfs',
   requireAuth,
   requirePermission('act_pdfs:upload'),
   generalLimiter,
@@ -49,7 +49,7 @@ router.post(
 );
 
 router.post(
-  '/api/content-creator/acts/predefined-pdfs/sync',
+  '/api/admin/acts/predefined-pdfs/sync',
   requireAuth,
   requirePermission('act_pdfs:sync'),
   generalLimiter,
@@ -57,7 +57,7 @@ router.post(
 );
 
 router.delete(
-  '/api/content-creator/acts/pdfs/:id',
+  '/api/admin/acts/pdfs/:id',
   requireAuth,
   requirePermission('act_pdfs:delete'),
   generalLimiter,

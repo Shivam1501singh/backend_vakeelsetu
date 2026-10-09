@@ -5,9 +5,9 @@ import { generalLimiter } from '../middleware/rate-limit.middleware.js';
 
 const router = express.Router();
 
-// Content Creator IPC Routes (Authenticated, ipc permissions required)
+// Admin IPC Routes (Authenticated, ipc permissions required)
 router.post(
-  '/api/content-creator/ipc',
+  '/api/admin/ipc',
   requireAuth,
   requirePermission('ipc:create'),
   generalLimiter,
@@ -15,7 +15,7 @@ router.post(
 );
 
 router.patch(
-  '/api/content-creator/ipc/:ipcId',
+  '/api/admin/ipc/:ipcId',
   requireAuth,
   requirePermission('ipc:update'),
   generalLimiter,

@@ -23,8 +23,8 @@ export const mapPublicBNSResponse = (section, includeContent = true) => {
 };
 
 /**
- * Create BNS Section (Content Creator Only)
- * POST /api/content-creator/bns
+ * Create BNS Section (Admin Panel)
+ * POST /api/admin/bns
  */
 export const createBNSSection = async (req, res, next) => {
   try {
@@ -35,7 +35,7 @@ export const createBNSSection = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 
@@ -93,8 +93,8 @@ export const createBNSSection = async (req, res, next) => {
 };
 
 /**
- * Edit BNS Section (Content Creator Only)
- * PATCH /api/content-creator/bns/:bnsId
+ * Edit BNS Section (Admin Panel)
+ * PATCH /api/admin/bns/:bnsId
  */
 export const editBNSSection = async (req, res, next) => {
   try {
@@ -105,7 +105,7 @@ export const editBNSSection = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 

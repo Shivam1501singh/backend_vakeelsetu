@@ -26,9 +26,9 @@ export const formatPdfResponse = (pdf, req = null) => {
 };
 
 /**
- * Content Creator: Upload Multiple PDFs for an Act
- * POST /api/content-creator/acts/:actId/pdfs
- * (Also supports POST /api/content-creator/acts/pdfs with actId in body)
+ * Admin: Upload Multiple PDFs for an Act
+ * POST /api/admin/acts/:actId/pdfs
+ * (Also supports POST /api/admin/acts/pdfs with actId in body)
  */
 export const uploadActPdfsHandler = async (req, res, next) => {
   const uploadedFiles = req.files || [];
@@ -45,7 +45,7 @@ export const uploadActPdfsHandler = async (req, res, next) => {
       }
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 
@@ -294,8 +294,8 @@ export const downloadPdf = async (req, res, next) => {
 };
 
 /**
- * Content Creator: Attach Predefined Local PDF to an Act
- * POST /api/content-creator/acts/:actId/predefined-pdfs
+ * Admin: Attach Predefined Local PDF to an Act
+ * POST /api/admin/acts/:actId/predefined-pdfs
  */
 export const attachPredefinedPdfHandler = async (req, res, next) => {
   try {
@@ -306,7 +306,7 @@ export const attachPredefinedPdfHandler = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 
@@ -337,8 +337,8 @@ export const attachPredefinedPdfHandler = async (req, res, next) => {
 };
 
 /**
- * Content Creator: Sync All Predefined PDFs in uploads/acts/
- * POST /api/content-creator/acts/predefined-pdfs/sync
+ * Admin: Sync All Predefined PDFs in uploads/acts/
+ * POST /api/admin/acts/predefined-pdfs/sync
  */
 export const syncPredefinedPdfsHandler = async (req, res, next) => {
   try {
@@ -349,7 +349,7 @@ export const syncPredefinedPdfsHandler = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 
@@ -372,8 +372,8 @@ export const syncPredefinedPdfsHandler = async (req, res, next) => {
 };
 
 /**
- * Content Creator: Delete PDF Attachment
- * DELETE /api/content-creator/acts/pdfs/:id
+ * Admin: Delete PDF Attachment
+ * DELETE /api/admin/acts/pdfs/:id
  */
 export const deleteActPdfHandler = async (req, res, next) => {
   try {
@@ -384,7 +384,7 @@ export const deleteActPdfHandler = async (req, res, next) => {
     if (!req.user || (!isAdmin && !isContentCreator)) {
       return res.status(403).json({
         success: false,
-        message: 'Access forbidden. Content Creator or Admin role required.'
+        message: 'Access forbidden. Admin panel access required.'
       });
     }
 

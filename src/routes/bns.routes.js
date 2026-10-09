@@ -5,9 +5,9 @@ import { generalLimiter } from '../middleware/rate-limit.middleware.js';
 
 const router = express.Router();
 
-// Content Creator BNS Routes (Authenticated, bns permissions required)
+// Admin BNS Routes (Authenticated, bns permissions required)
 router.post(
-  '/api/content-creator/bns',
+  '/api/admin/bns',
   requireAuth,
   requirePermission('bns:create'),
   generalLimiter,
@@ -15,7 +15,7 @@ router.post(
 );
 
 router.patch(
-  '/api/content-creator/bns/:bnsId',
+  '/api/admin/bns/:bnsId',
   requireAuth,
   requirePermission('bns:update'),
   generalLimiter,

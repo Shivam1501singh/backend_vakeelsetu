@@ -8,57 +8,81 @@ import {
   adminUpdateAdvocateCallAvailabilitySchema,
   adminUpdateAdvocateStatusSchema
 } from '../validators/admin.validator.js';
+import * as blogValidator from '../validators/blog.validator.js';
+import { getCurrentUserProfile } from '../services/auth.service.js';
 
 /**
- * Admin Login
+ * Admin / Staff Unified Login
  * POST /api/admin/login
- * Validates credentials exclusively against environment variables (ADMIN_USER_EMAIL, ADMIN_USER_PASSWORD)
+ * Validates credentials against environment variables (Admin) or ContentCreator table (Staff)
  */
 export const loginAdmin = async (req, res, next) => {
   try {
-    const { email, password } = req.body || {};
+    const validated = blogValidator.loginSchema.parse(req.body || {});
+    const { email, password } = validated;
 
-    if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email and password are required.'
-      });
-    }
-
+    const normalizedInputEmail = email.toLowerCase().trim();
     const envAdminEmail = process.env.ADMIN_USER_EMAIL;
     const envAdminPassword = process.env.ADMIN_USER_PASSWORD;
 
-    if (!envAdminEmail || !envAdminPassword) {
-      const err = new Error('Admin credentials are not configured on the server.');
-      err.statusCode = 500;
-      return next(err);
-    }
+    // 1. If email/password match ADMIN_USER_EMAIL / ADMIN_USER_PASSWORD -> signToken({ id: 'admin', type: 'admin' })
+    // If env admin creds are missing, skip step 1 (do not 500)
+    if (envAdminEmail && envAdminPassword) {
+      const normalizedEnvEmail = envAdminEmail.toLowerCase().trim();
+      if (normalizedInputEmail === normalizedEnvEmail && password === envAdminPassword) {
+        const token = signToken({ id: 'admin', type: 'admin' });
+        sendTokenCookie(res, token);
 
-    const normalizedInputEmail = email.toLowerCase().trim();
-    const normalizedEnvEmail = envAdminEmail.toLowerCase().trim();
-
-    const isEmailValid = normalizedInputEmail === normalizedEnvEmail;
-    const isPasswordValid = password === envAdminPassword;
-
-    if (!isEmailValid || !isPasswordValid) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid email or password.'
-      });
-    }
-
-    const token = signToken({ id: 'admin', type: 'admin' });
-    sendTokenCookie(res, token);
-
-    return res.status(200).json({
-      success: true,
-      message: 'Admin login successful',
-      token,
-      admin: {
-        id: 'admin',
-        fullName: 'System Administrator',
-        email: envAdminEmail
+        return res.status(200).json({
+          success: true,
+          message: 'Admin login successful',
+          token,
+          admin: {
+            id: 'admin',
+            fullName: 'System Administrator',
+            email: envAdminEmail,
+            accountType: 'ADMIN',
+            roles: ['ADMIN'],
+            permissions: ['*']
+          }
+        });
       }
+    }
+
+    // 2. Else find prisma.contentCreator by lowercased email; if found, isActive, and bcrypt.compare passes ->
+    //    signToken({ id: creator.id, type: 'content_creator' })
+    const creator = await prisma.contentCreator.findUnique({
+      where: { email: normalizedInputEmail }
+    });
+
+    if (creator && creator.isActive) {
+      const isMatch = await bcrypt.compare(password, creator.passwordHash);
+      if (isMatch) {
+        const token = signToken({ id: creator.id, type: 'content_creator' });
+        sendTokenCookie(res, token);
+
+        const profile = await getCurrentUserProfile(creator.id, 'content_creator');
+
+        return res.status(200).json({
+          success: true,
+          message: 'Admin login successful',
+          token,
+          admin: {
+            id: creator.id,
+            fullName: creator.fullName,
+            email: creator.email,
+            accountType: 'CONTENT_CREATOR',
+            roles: profile?.roles || ['CONTENT_CREATOR'],
+            permissions: profile?.permissions || []
+          }
+        });
+      }
+    }
+
+    // 3. Else 401 { success:false, message:'Invalid email or password.' }
+    return res.status(401).json({
+      success: false,
+      message: 'Invalid email or password.'
     });
   } catch (error) {
     next(error);

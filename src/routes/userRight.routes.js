@@ -7,9 +7,9 @@ import { generalLimiter } from '../middleware/rate-limit.middleware.js';
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
-// Content Creator User Rights Routes (Authenticated, user_rights permissions required)
+// Admin User Rights Routes (Authenticated, user_rights permissions required)
 router.post(
-  '/api/content-creator/user-rights',
+  '/api/admin/user-rights',
   requireAuth,
   requirePermission('user_rights:create'),
   generalLimiter,
@@ -18,7 +18,7 @@ router.post(
 );
 
 router.patch(
-  '/api/content-creator/user-rights/:id',
+  '/api/admin/user-rights/:id',
   requireAuth,
   requirePermission('user_rights:update'),
   generalLimiter,
@@ -27,7 +27,7 @@ router.patch(
 );
 
 router.delete(
-  '/api/content-creator/user-rights/:id',
+  '/api/admin/user-rights/:id',
   requireAuth,
   requirePermission('user_rights:delete'),
   generalLimiter,

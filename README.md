@@ -2183,33 +2183,12 @@ This feature adds a third role (`CONTENT_CREATOR`) to the application and introd
 
 ### 12.2 API Reference
 
-#### 1. Content Creator Login
-- **Endpoint:** `POST /api/content-creator/login`
-- **Request Body:**
-  ```json
-  {
-    "email": "trainee6@techvunex.in",
-    "password": "1234"
-  }
-  ```
-- **Response:**
-  ```json
-  {
-    "success": true,
-    "message": "Login successful",
-    "token": "JWT_TOKEN",
-    "contentCreator": {
-      "id": "content-creator-uuid",
-      "email": "trainee6@techvunex.in",
-      "fullName": "Content Creator"
-    }
-  }
-  ```
-  *(Note: It also sets the `auth_token` HTTP-only cookie).*
+#### 1. Content Creator Login (REMOVED)
+> **REMOVED**: `POST /api/admin/login` has been **removed** (returns 404). All back-office authentication is now unified under `POST /api/admin/login` for both Admin and Content Creator staff accounts. See Section 13.4 and Section 25 for details.
 
 #### 2. Create Blog
-- **Endpoint:** `POST /api/blogs`
-- **Authentication:** `CONTENT_CREATOR` role required.
+- **Endpoint:** `POST /api/admin/blogs`
+- **Authentication:** `CONTENT_CREATOR` or `ADMIN` role required (`blogs:create` permission).
 - **Content-Type:** `multipart/form-data`
 - **Form Fields:**
   - `image`: Image file (required, max 5MB, JPEG/PNG/WEBP)
@@ -2344,7 +2323,7 @@ This feature adds a third role (`CONTENT_CREATOR`) to the application and introd
   ```
 
 #### 5. Update Blog
-- **Endpoint:** `PUT /api/blogs/:id`
+- **Endpoint:** `PUT /api/admin/blogs/:id`
 - **Authentication:** `CONTENT_CREATOR` (Owner only)
 - **Content-Type:** `multipart/form-data`
 - **Form Fields:**
@@ -2395,7 +2374,7 @@ This feature adds a third role (`CONTENT_CREATOR`) to the application and introd
   ```
 
 #### 6. Delete Blog
-- **Endpoint:** `DELETE /api/blogs/:id`
+- **Endpoint:** `DELETE /api/admin/blogs/:id`
 - **Authentication:** `CONTENT_CREATOR` (Owner only)
 - **Response:**
   ```json
@@ -2521,18 +2500,18 @@ The system automatically seeds an idempotent Admin account:
 
 ### 13.4 Admin API Endpoints
 
-#### 1. Admin Login
+#### 1. Unified Admin & Staff Login
 * **Endpoint:** `POST /api/admin/login`
 * **Authentication:** Public
-* **Description:** Authenticates the Admin into the system. Admin credentials are verified exclusively from environment variables (`ADMIN_USER_EMAIL` and `ADMIN_USER_PASSWORD`) and are not validated against the database.
+* **Description:** Unified back-office login. It first checks if credentials match the primary environment Admin (`ADMIN_USER_EMAIL` and `ADMIN_USER_PASSWORD`). If they match, it signs an admin token. Otherwise, it verifies against active staff records in the database (`ContentCreator` table) via bcrypt password comparison.
 * **Request Body:**
   ```json
   {
-    "email": "your-admin-email@example.com",
-    "password": "your-admin-password"
+    "email": "admin@example.com",
+    "password": "password"
   }
   ```
-* **Response (200 OK):**
+* **Response 1 — Primary Admin (200 OK):**
   ```json
   {
     "success": true,
@@ -2540,16 +2519,36 @@ The system automatically seeds an idempotent Admin account:
     "token": "eyJhbGciOiJIUzI1Ni...",
     "admin": {
       "id": "admin",
-      "email": "your-admin-email@example.com",
-      "fullName": "System Administrator"
+      "email": "admin@vakeelsetu.com",
+      "fullName": "Administrator",
+      "role": "ADMIN",
+      "accountType": "ADMIN",
+      "roles": ["ADMIN"],
+      "permissions": ["*"]
     }
   }
   ```
-  *(Also sets HTTP-only `auth_token` cookie for web clients).*
+* **Response 2 — Content Creator Staff (200 OK):**
+  ```json
+  {
+    "success": true,
+    "message": "Content Creator login successful",
+    "token": "eyJhbGciOiJIUzI1Ni...",
+    "admin": {
+      "id": "creator-uuid",
+      "email": "creator@vakeelsetu.com",
+      "fullName": "Staff Writer",
+      "role": "CONTENT_CREATOR",
+      "accountType": "CONTENT_CREATOR",
+      "roles": ["CONTENT_CREATOR"],
+      "permissions": ["blogs:*", "guides:*", "updates:*"]
+    }
+  }
+  ```
+  *(Both set HTTP-only `auth_token` cookie for web clients).*
 * **Error Responses:**
-  * `400 Bad Request`: `{"success": false, "message": "Email and password are required."}`
+  * `400 Bad Request`: `{"success": false, "message": "Validation error..."}`
   * `401 Unauthorized`: `{"success": false, "message": "Invalid email or password."}`
-  * `500 Internal Server Error`: `{"success": false, "message": "Admin credentials are not configured on the server."}`
 
 #### 2. Create Content Creator Account
 * **Endpoint:** `POST /api/admin/content-creators`
@@ -3592,19 +3591,19 @@ The underlying architecture uses completely separate Prisma database models (`IP
 | `GET /api/ipc` | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/ipc/:ipcId` | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/ipc/search` | ✅ | ✅ | ✅ | ✅ |
-| `POST /api/content-creator/ipc` | ❌ | ❌ | ❌ | ✅ |
-| `PATCH /api/content-creator/ipc/:ipcId` | ❌ | ❌ | ❌ | ✅ |
+| `POST /api/admin/ipc` | ❌ | ❌ | ❌ | ✅ |
+| `PATCH /api/admin/ipc/:ipcId` | ❌ | ❌ | ❌ | ✅ |
 | `GET /api/bns` | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/bns/:bnsId` | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/bns/search` | ✅ | ✅ | ✅ | ✅ |
-| `POST /api/content-creator/bns` | ❌ | ❌ | ❌ | ✅ |
-| `PATCH /api/content-creator/bns/:bnsId` | ❌ | ❌ | ❌ | ✅ |
+| `POST /api/admin/bns` | ❌ | ❌ | ❌ | ✅ |
+| `PATCH /api/admin/bns/:bnsId` | ❌ | ❌ | ❌ | ✅ |
 
 ---
 
 ### 1. Content Creator — Create IPC Section
 
-- **Endpoint:** `POST /api/content-creator/ipc`
+- **Endpoint:** `POST /api/admin/ipc`
 - **Headers:**
   - `Content-Type: application/json`
   - `Authorization: Bearer <content_creator_jwt_token>` (or `auth_token` cookie)
@@ -3612,7 +3611,7 @@ The underlying architecture uses completely separate Prisma database models (`IP
 
 #### Postman Example Request
 ```http
-POST /api/content-creator/ipc
+POST /api/admin/ipc
 Content-Type: application/json
 Authorization: Bearer <content_creator_jwt_token>
 
@@ -3659,14 +3658,14 @@ Authorization: Bearer <content_creator_jwt_token>
 
 ### 2. Content Creator — Create BNS Section
 
-- **Endpoint:** `POST /api/content-creator/bns`
+- **Endpoint:** `POST /api/admin/bns`
 - **Headers:**
   - `Content-Type: application/json`
   - `Authorization: Bearer <content_creator_jwt_token>` (or `auth_token` cookie)
 
 #### Postman Example Request
 ```http
-POST /api/content-creator/bns
+POST /api/admin/bns
 Content-Type: application/json
 Authorization: Bearer <content_creator_jwt_token>
 
@@ -3692,7 +3691,7 @@ Authorization: Bearer <content_creator_jwt_token>
 
 #### Edit IPC Section
 ```http
-PATCH /api/content-creator/ipc/c1f7a2d8-5b4e-4e6f-8d9e-1a2b3c4d5e6f
+PATCH /api/admin/ipc/c1f7a2d8-5b4e-4e6f-8d9e-1a2b3c4d5e6f
 Content-Type: application/json
 Authorization: Bearer <content_creator_jwt_token>
 
@@ -3704,7 +3703,7 @@ Authorization: Bearer <content_creator_jwt_token>
 
 #### Edit BNS Section
 ```http
-PATCH /api/content-creator/bns/e2a1f9d3-6c5b-4a3d-9e8f-7a6b5c4d3e2f
+PATCH /api/admin/bns/e2a1f9d3-6c5b-4a3d-9e8f-7a6b5c4d3e2f
 Content-Type: application/json
 Authorization: Bearer <content_creator_jwt_token>
 
@@ -4884,16 +4883,16 @@ model UserRight {
 | :--- | :--- | :---: | :---: | :---: | :---: |
 | `/api/user-rights` | `GET` | ✅ | ✅ | ✅ | ✅ |
 | `/api/user-rights/:id` | `GET` | ✅ | ✅ | ✅ | ✅ |
-| `/api/content-creator/user-rights` | `POST` | ❌ | ❌ | ❌ | ✅ |
-| `/api/content-creator/user-rights/:id` | `PATCH` | ❌ | ❌ | ❌ | ✅ |
-| `/api/content-creator/user-rights/:id` | `DELETE` | ❌ | ❌ | ❌ | ✅ |
+| `/api/admin/user-rights` | `POST` | ❌ | ❌ | ❌ | ✅ |
+| `/api/admin/user-rights/:id` | `PATCH` | ❌ | ❌ | ❌ | ✅ |
+| `/api/admin/user-rights/:id` | `DELETE` | ❌ | ❌ | ❌ | ✅ |
 
 ---
 
 ### Endpoints Reference
 
 #### 1. Content Creator — Create User Right
-- **Endpoint:** `POST /api/content-creator/user-rights`
+- **Endpoint:** `POST /api/admin/user-rights`
 - **Authentication:** `CONTENT_CREATOR` role required (`requireAuth`, `requireRole('CONTENT_CREATOR')`)
 - **Content-Type:** `multipart/form-data` (or `application/json` if no photo is attached)
 - **Request Fields:**
@@ -4980,7 +4979,7 @@ model UserRight {
 ---
 
 #### 4. Content Creator — Update User Right
-- **Endpoint:** `PATCH /api/content-creator/user-rights/:id`
+- **Endpoint:** `PATCH /api/admin/user-rights/:id`
 - **Authentication:** `CONTENT_CREATOR` role required
 - **Content-Type:** `multipart/form-data` or `application/json`
 - **Request Fields (Optional):**
@@ -5006,7 +5005,7 @@ model UserRight {
 ---
 
 #### 5. Content Creator — Delete User Right
-- **Endpoint:** `DELETE /api/content-creator/user-rights/:id`
+- **Endpoint:** `DELETE /api/admin/user-rights/:id`
 - **Authentication:** `CONTENT_CREATOR` role required
 - **Behavior:** Permanently removes database record and deletes associated image from Cloudinary storage if present.
 - **Response (200 OK):**
@@ -5023,7 +5022,7 @@ model UserRight {
 
 #### 1. Content Creator Login
 - **Method:** `POST`
-- **URL:** `http://localhost:5000/api/content-creator/login`
+- **URL:** `http://localhost:5000/api/admin/login`
 - **Body (`raw JSON`):**
   ```json
   {
@@ -5035,7 +5034,7 @@ model UserRight {
 
 #### 2. Create User Right (with image)
 - **Method:** `POST`
-- **URL:** `http://localhost:5000/api/content-creator/user-rights`
+- **URL:** `http://localhost:5000/api/admin/user-rights`
 - **Headers:** `Authorization: Bearer <creator_token>`
 - **Body (`form-data`):**
   - `title` *(Text)*: `Right to Equality`
@@ -5054,7 +5053,7 @@ model UserRight {
 
 #### 5. Update User Right
 - **Method:** `PATCH`
-- **URL:** `http://localhost:5000/api/content-creator/user-rights/<user_right_id>`
+- **URL:** `http://localhost:5000/api/admin/user-rights/<user_right_id>`
 - **Headers:** `Authorization: Bearer <creator_token>`
 - **Body (`form-data` or `raw JSON`):**
   ```json
@@ -5066,7 +5065,7 @@ model UserRight {
 
 #### 6. Delete User Right
 - **Method:** `DELETE`
-- **URL:** `http://localhost:5000/api/content-creator/user-rights/<user_right_id>`
+- **URL:** `http://localhost:5000/api/admin/user-rights/<user_right_id>`
 - **Headers:** `Authorization: Bearer <creator_token>`
 
 ---
@@ -5121,9 +5120,9 @@ npx prisma db seed
 | :--- | :--- | :---: | :---: | :---: | :---: |
 | `/api/guides` | `GET` | ✅ | ✅ | ✅ | ✅ |
 | `/api/guides/:id` | `GET` | ✅ | ✅ | ✅ | ✅ |
-| `/api/content-creator/guides` | `POST` | ❌ | ❌ | ❌ | ✅ |
-| `/api/content-creator/guides/:id` | `PATCH` | ❌ | ❌ | ❌ | ✅ |
-| `/api/content-creator/guides/:id` | `DELETE` | ❌ | ❌ | ❌ | ✅ |
+| `/api/admin/guides` | `POST` | ❌ | ❌ | ❌ | ✅ |
+| `/api/admin/guides/:id` | `PATCH` | ❌ | ❌ | ❌ | ✅ |
+| `/api/admin/guides/:id` | `DELETE` | ❌ | ❌ | ❌ | ✅ |
 
 ---
 
@@ -5189,7 +5188,7 @@ npx prisma db seed
 ---
 
 #### 3. Content Creator — Create Guide
-- **Endpoint:** `POST /api/content-creator/guides`
+- **Endpoint:** `POST /api/admin/guides`
 - **Authentication:** `CONTENT_CREATOR` role required (`requireAuth`, `requireRole('CONTENT_CREATOR')`)
 - **Content-Type:** `application/json`
 - **Request Body:**
@@ -5224,7 +5223,7 @@ npx prisma db seed
 ---
 
 #### 4. Content Creator — Update Guide
-- **Endpoint:** `PATCH /api/content-creator/guides/:id`
+- **Endpoint:** `PATCH /api/admin/guides/:id`
 - **Authentication:** `CONTENT_CREATOR` role required
 - **Content-Type:** `application/json`
 - **Request Body (Partial updates allowed):**
@@ -5255,7 +5254,7 @@ npx prisma db seed
 ---
 
 #### 5. Content Creator — Delete Guide
-- **Endpoint:** `DELETE /api/content-creator/guides/:id`
+- **Endpoint:** `DELETE /api/admin/guides/:id`
 - **Authentication:** `CONTENT_CREATOR` role required
 - **Response (200 OK):**
   ```json
@@ -5278,7 +5277,7 @@ npx prisma db seed
 
 #### 1. Content Creator Login
 - **Method:** `POST`
-- **URL:** `http://localhost:5000/api/content-creator/login`
+- **URL:** `http://localhost:5000/api/admin/login`
 - **Body (`raw JSON`):**
   ```json
   {
@@ -5290,7 +5289,7 @@ npx prisma db seed
 
 #### 2. Create Guide
 - **Method:** `POST`
-- **URL:** `http://localhost:5000/api/content-creator/guides`
+- **URL:** `http://localhost:5000/api/admin/guides`
 - **Headers:**
   - `Authorization: Bearer <creator_token>`
   - `Content-Type: application/json`
@@ -5314,7 +5313,7 @@ npx prisma db seed
 
 #### 5. Update Guide
 - **Method:** `PATCH`
-- **URL:** `http://localhost:5000/api/content-creator/guides/<guide_id>`
+- **URL:** `http://localhost:5000/api/admin/guides/<guide_id>`
 - **Headers:**
   - `Authorization: Bearer <creator_token>`
   - `Content-Type: application/json`
@@ -5328,12 +5327,12 @@ npx prisma db seed
 
 #### 6. Delete Guide
 - **Method:** `DELETE`
-- **URL:** `http://localhost:5000/api/content-creator/guides/<guide_id>`
+- **URL:** `http://localhost:5000/api/admin/guides/<guide_id>`
 - **Headers:** `Authorization: Bearer <creator_token>`
 
 #### 7. Unauthorized / Forbidden Checks
-- Attempt `POST /api/content-creator/guides` without `Authorization` header -> Verify `401 Unauthorized`.
-- Attempt `POST /api/content-creator/guides` with a Normal User or Advocate token -> Verify `403 Forbidden`.
+- Attempt `POST /api/admin/guides` without `Authorization` header -> Verify `401 Unauthorized`.
+- Attempt `POST /api/admin/guides` with a Normal User or Advocate token -> Verify `403 Forbidden`.
 - Attempt `GET /api/guides/00000000-0000-0000-0000-000000000000` -> Verify `404 Not Found`.
 
 ---
@@ -5395,9 +5394,9 @@ npx prisma db seed
 | :--- | :--- | :---: | :---: | :---: | :---: |
 | `/api/updates` | `GET` | ✅ | ✅ | ✅ | ✅ |
 | `/api/updates/:id` | `GET` | ✅ | ✅ | ✅ | ✅ |
-| `/api/content-creator/updates` | `POST` | ❌ | ❌ | ❌ | ✅ |
-| `/api/content-creator/updates/:id` | `PATCH` | ❌ | ❌ | ❌ | ✅ |
-| `/api/content-creator/updates/:id` | `DELETE` | ❌ | ❌ | ❌ | ✅ |
+| `/api/admin/updates` | `POST` | ❌ | ❌ | ❌ | ✅ |
+| `/api/admin/updates/:id` | `PATCH` | ❌ | ❌ | ❌ | ✅ |
+| `/api/admin/updates/:id` | `DELETE` | ❌ | ❌ | ❌ | ✅ |
 
 Normal Users, Advocates, and unauthenticated visitors cannot create, update, or delete updates. All modification attempts without valid `CONTENT_CREATOR` role return standard `401 Unauthorized` or `403 Forbidden` responses.
 
@@ -5467,7 +5466,7 @@ Normal Users, Advocates, and unauthenticated visitors cannot create, update, or 
 ---
 
 #### 3. Content Creator — Create Update
-- **Endpoint:** `POST /api/content-creator/updates`
+- **Endpoint:** `POST /api/admin/updates`
 - **Authentication:** `CONTENT_CREATOR` role required (`requireAuth`, `requireRole('CONTENT_CREATOR')`)
 - **Content-Type:** `application/json`
 - **Request Body:**
@@ -5510,7 +5509,7 @@ Normal Users, Advocates, and unauthenticated visitors cannot create, update, or 
 ---
 
 #### 4. Content Creator — Update Update
-- **Endpoint:** `PATCH /api/content-creator/updates/:id`
+- **Endpoint:** `PATCH /api/admin/updates/:id`
 - **Authentication:** `CONTENT_CREATOR` role required
 - **Content-Type:** `application/json`
 - **Request Body (Partial updates supported):**
@@ -5543,7 +5542,7 @@ Normal Users, Advocates, and unauthenticated visitors cannot create, update, or 
 ---
 
 #### 5. Content Creator — Delete Update
-- **Endpoint:** `DELETE /api/content-creator/updates/:id`
+- **Endpoint:** `DELETE /api/admin/updates/:id`
 - **Authentication:** `CONTENT_CREATOR` role required
 - **Response (200 OK):**
   ```json
@@ -5566,7 +5565,7 @@ Normal Users, Advocates, and unauthenticated visitors cannot create, update, or 
 
 #### 1. Content Creator Login
 - **Method:** `POST`
-- **URL:** `http://localhost:5000/api/content-creator/login`
+- **URL:** `http://localhost:5000/api/admin/login`
 - **Body (`raw JSON`):**
   ```json
   {
@@ -5578,7 +5577,7 @@ Normal Users, Advocates, and unauthenticated visitors cannot create, update, or 
 
 #### 2. Create Update
 - **Method:** `POST`
-- **URL:** `http://localhost:5000/api/content-creator/updates`
+- **URL:** `http://localhost:5000/api/admin/updates`
 - **Headers:**
   - `Authorization: Bearer <creator_token>`
   - `Content-Type: application/json`
@@ -5603,7 +5602,7 @@ Normal Users, Advocates, and unauthenticated visitors cannot create, update, or 
 
 #### 5. Update Update
 - **Method:** `PATCH`
-- **URL:** `http://localhost:5000/api/content-creator/updates/<update_id>`
+- **URL:** `http://localhost:5000/api/admin/updates/<update_id>`
 - **Headers:**
   - `Authorization: Bearer <creator_token>`
   - `Content-Type: application/json`
@@ -5618,14 +5617,14 @@ Normal Users, Advocates, and unauthenticated visitors cannot create, update, or 
 
 #### 6. Delete Update
 - **Method:** `DELETE`
-- **URL:** `http://localhost:5000/api/content-creator/updates/<update_id>`
+- **URL:** `http://localhost:5000/api/admin/updates/<update_id>`
 - **Headers:** `Authorization: Bearer <creator_token>`
 
 #### 7. Unauthorized / Forbidden Checks
-- Attempt `POST /api/content-creator/updates` without `Authorization` header -> Verify `401 Unauthorized`.
-- Attempt `POST /api/content-creator/updates` with a Normal User or Advocate token -> Verify `403 Forbidden`.
-- Attempt `PATCH /api/content-creator/updates/<update_id>` as Normal User -> Verify `403 Forbidden`.
-- Attempt `DELETE /api/content-creator/updates/<update_id>` as Advocate -> Verify `403 Forbidden`.
+- Attempt `POST /api/admin/updates` without `Authorization` header -> Verify `401 Unauthorized`.
+- Attempt `POST /api/admin/updates` with a Normal User or Advocate token -> Verify `403 Forbidden`.
+- Attempt `PATCH /api/admin/updates/<update_id>` as Normal User -> Verify `403 Forbidden`.
+- Attempt `DELETE /api/admin/updates/<update_id>` as Advocate -> Verify `403 Forbidden`.
 - Attempt `GET /api/updates/00000000-0000-0000-0000-000000000000` -> Verify `404 Not Found`.
 
 ---
@@ -6402,7 +6401,7 @@ Act (Individual Law / Act)
 ActSection (Sections & Chapters)
 ```
 
-- **Content Creator Write Operations**: Single unified endpoint (`POST /api/content-creator/bearer-acts`) to create and update all levels of the hierarchy.
+- **Content Creator Write Operations**: Single unified endpoint (`POST /api/admin/bearer-acts`) to create and update all levels of the hierarchy.
 - **Public Read Access**: Full public access to read categories, acts, and sections without authentication.
 
 ---
@@ -6466,7 +6465,7 @@ Pre-seeded Acts under `Tech, Data & Cyber Laws`:
 
 ## 3. Content Creator Single Write API
 ### Endpoint
-`POST /api/content-creator/bearer-acts`
+`POST /api/admin/bearer-acts`
 
 ### Headers
 | Header | Value | Description |
@@ -7053,33 +7052,33 @@ GET /api/acts/00000000-0000-0000-0000-000000000000/search?q=property
 
 ### Content Creator Write Tests
 1. **Login as Content Creator:**
-   - `POST /api/content-creator/login` or `POST /api/auth/blog/login` with `{"email": "trainee6@techvunex.in", "password": "1234"}`.
+   - `POST /api/admin/login` or `POST /api/auth/blog/login` with `{"email": "trainee6@techvunex.in", "password": "1234"}`.
    - Save the returned `token`.
 2. **Create Bearer Act Category:**
-   - `POST /api/content-creator/bearer-acts` with `type: "BEARER_ACT", operation: "CREATE", data: { "name": "Custom Law Category" }`.
+   - `POST /api/admin/bearer-acts` with `type: "BEARER_ACT", operation: "CREATE", data: { "name": "Custom Law Category" }`.
    - Verify `201 Created`.
 3. **Create Act under Bearer Act:**
-   - `POST /api/content-creator/bearer-acts` with `type: "ACT", operation: "CREATE", data: { "bearerActId": "<id>", "heading": "Custom Act 2026", "act": "Custom Act", "year": 2026 }`.
+   - `POST /api/admin/bearer-acts` with `type: "ACT", operation: "CREATE", data: { "bearerActId": "<id>", "heading": "Custom Act 2026", "act": "Custom Act", "year": 2026 }`.
    - Verify `201 Created`.
 4. **Create Section under Act:**
-   - `POST /api/content-creator/bearer-acts` with `type: "SECTION", operation: "CREATE", data: { "actId": "<actId>", "section": "Section 1", "chapterNo": 1, "chapterName": "Intro", "title": "Overview", "description": "Legal text" }`.
+   - `POST /api/admin/bearer-acts` with `type: "SECTION", operation: "CREATE", data: { "actId": "<actId>", "section": "Section 1", "chapterNo": 1, "chapterName": "Intro", "title": "Overview", "description": "Legal text" }`.
    - Verify `201 Created`.
 5. **Update Bearer Act Category:**
-   - `POST /api/content-creator/bearer-acts` with `type: "BEARER_ACT", operation: "UPDATE", data: { "id": "<id>", "name": "Updated Custom Law Category" }`.
+   - `POST /api/admin/bearer-acts` with `type: "BEARER_ACT", operation: "UPDATE", data: { "id": "<id>", "name": "Updated Custom Law Category" }`.
    - Verify `200 OK`.
 6. **Update Act:**
-   - `POST /api/content-creator/bearer-acts` with `type: "ACT", operation: "UPDATE", data: { "id": "<actId>", "heading": "Updated Act Heading" }`.
+   - `POST /api/admin/bearer-acts` with `type: "ACT", operation: "UPDATE", data: { "id": "<actId>", "heading": "Updated Act Heading" }`.
    - Verify `200 OK`.
 7. **Update Section:**
-   - `POST /api/content-creator/bearer-acts` with `type: "SECTION", operation: "UPDATE", data: { "id": "<sectionId>", "title": "Updated Section Title" }`.
+   - `POST /api/admin/bearer-acts` with `type: "SECTION", operation: "UPDATE", data: { "id": "<sectionId>", "title": "Updated Section Title" }`.
    - Verify `200 OK`.
 8. **Try Invalid Parent IDs:**
    - Create Act with invalid `bearerActId` (`"00000000-0000-0000-0000-000000000000"`) -> Verify `404 Not Found`.
    - Create Section with invalid `actId` (`"00000000-0000-0000-0000-000000000000"`) -> Verify `404 Not Found`.
 9. **Try Invalid Entity Types:**
-   - `POST /api/content-creator/bearer-acts` with `type: "INVALID_TYPE"` -> Verify `400 Bad Request`.
+   - `POST /api/admin/bearer-acts` with `type: "INVALID_TYPE"` -> Verify `400 Bad Request`.
 10. **Try Invalid Operations:**
-    - `POST /api/content-creator/bearer-acts` with `operation: "DELETE"` -> Verify `400 Bad Request`.
+    - `POST /api/admin/bearer-acts` with `operation: "DELETE"` -> Verify `400 Bad Request`.
 11. **Verify Validation Errors:**
     - Omit required `name`, negative `year`, missing required fields -> Verify `400 Bad Request`.
 
@@ -7467,11 +7466,11 @@ Key capabilities:
 
 | Role | Method | Endpoint | Description | Auth Required |
 | :--- | :--- | :--- | :--- | :--- |
-| **Content Creator** | `POST` | `/api/content-creator/acts/:actId/pdfs` | Upload PDF(s) with `displayName` against an Act | `CONTENT_CREATOR` JWT / Cookie |
-| **Content Creator** | `POST` | `/api/content-creator/acts/pdfs` | Upload PDF(s) with `displayName` (actId in body/query) | `CONTENT_CREATOR` JWT / Cookie |
-| **Content Creator** | `POST` | `/api/content-creator/acts/:actId/predefined-pdfs` | Associate predefined local PDF to Act | `CONTENT_CREATOR` JWT / Cookie |
-| **Content Creator** | `POST` | `/api/content-creator/acts/predefined-pdfs/sync` | Auto-sync all predefined PDFs in folder | `CONTENT_CREATOR` JWT / Cookie |
-| **Content Creator** | `DELETE` | `/api/content-creator/acts/pdfs/:id` | Delete a PDF attachment record | `CONTENT_CREATOR` JWT / Cookie |
+| **Content Creator** | `POST` | `/api/admin/acts/:actId/pdfs` | Upload PDF(s) with `displayName` against an Act | `CONTENT_CREATOR` JWT / Cookie |
+| **Content Creator** | `POST` | `/api/admin/acts/pdfs` | Upload PDF(s) with `displayName` (actId in body/query) | `CONTENT_CREATOR` JWT / Cookie |
+| **Content Creator** | `POST` | `/api/admin/acts/:actId/predefined-pdfs` | Associate predefined local PDF to Act | `CONTENT_CREATOR` JWT / Cookie |
+| **Content Creator** | `POST` | `/api/admin/acts/predefined-pdfs/sync` | Auto-sync all predefined PDFs in folder | `CONTENT_CREATOR` JWT / Cookie |
+| **Content Creator** | `DELETE` | `/api/admin/acts/pdfs/:id` | Delete a PDF attachment record | `CONTENT_CREATOR` JWT / Cookie |
 | **Public** | `GET` | `/api/acts/:actId/pdfs` | Retrieve all PDFs attached to an Act (with display names) | None (Public) |
 | **Public** | `GET` | `/api/acts/pdfs/:id` | Retrieve single PDF metadata (with display name) | None (Public) |
 | **Public** | `GET` | `/api/acts/pdfs/:id/view` | View PDF inline in browser | None (Public) |
@@ -7485,7 +7484,7 @@ To upload PDFs using Postman:
 
 1. **Set Request Method & URL:**
    - Method: `POST`
-   - URL: `http://localhost:5000/api/content-creator/acts/<ACT_ID>/pdfs` (Replace `<ACT_ID>` with the Act UUID)
+   - URL: `http://localhost:5000/api/admin/acts/<ACT_ID>/pdfs` (Replace `<ACT_ID>` with the Act UUID)
 2. **Set Authentication Headers:**
    - Under the **Headers** tab, add:
      - Key: `Authorization`
@@ -7510,7 +7509,7 @@ To upload PDFs using Postman:
 
 #### 1. Upload PDF with Display Name for an Act
 - **Method:** `POST`
-- **URL:** `/api/content-creator/acts/27b7de9c-d477-4b71-9257-2e1d71057c72/pdfs`
+- **URL:** `/api/admin/acts/27b7de9c-d477-4b71-9257-2e1d71057c72/pdfs`
 - **Headers:**
   - `Authorization: Bearer <CONTENT_CREATOR_TOKEN>`
 - **Body (`form-data`):**
@@ -7644,7 +7643,7 @@ To upload PDFs using Postman:
 
 #### 6. Attach Predefined Local PDF
 - **Method:** `POST`
-- **URL:** `/api/content-creator/acts/:actId/predefined-pdfs`
+- **URL:** `/api/admin/acts/:actId/predefined-pdfs`
 - **Headers:**
   - `Authorization: Bearer <CONTENT_CREATOR_TOKEN>`
   - `Content-Type: application/json`
@@ -7681,7 +7680,7 @@ To upload PDFs using Postman:
 
 #### 7. Delete PDF Attachment
 - **Method:** `DELETE`
-- **URL:** `/api/content-creator/acts/pdfs/:id`
+- **URL:** `/api/admin/acts/pdfs/:id`
 - **Headers:**
   - `Authorization: Bearer <CONTENT_CREATOR_TOKEN>`
 
@@ -8108,27 +8107,27 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 | Module / Action | HTTP Method | Endpoint | Public | USER | ADVOCATE | CONTENT_CREATOR | ADMIN |
 |---|---|---|---|---|---|---|---|
-| **Bearer Acts Single Write** | `POST` | `/api/content-creator/bearer-acts` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Upload Act PDFs** | `POST` | `/api/content-creator/acts/:actId/pdfs` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Attach Predefined PDF** | `POST` | `/api/content-creator/acts/:actId/predefined-pdfs` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Sync Predefined PDFs** | `POST` | `/api/content-creator/acts/predefined-pdfs/sync` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Delete Act PDF** | `DELETE` | `/api/content-creator/acts/pdfs/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Create Blog** | `POST` | `/api/blogs` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Update Blog** | `PUT` | `/api/blogs/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed (Owner) | ✅ **Allowed (All)** |
-| **Delete Blog** | `DELETE` | `/api/blogs/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed (Owner) | ✅ **Allowed (All)** |
-| **Create Guide** | `POST` | `/api/content-creator/guides` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Update Guide** | `PATCH` | `/api/content-creator/guides/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Delete Guide** | `DELETE` | `/api/content-creator/guides/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Create Update** | `POST` | `/api/content-creator/updates` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Update Update** | `PATCH` | `/api/content-creator/updates/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Delete Update** | `DELETE` | `/api/content-creator/updates/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Create IPC Section** | `POST` | `/api/content-creator/ipc` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Edit IPC Section** | `PATCH` | `/api/content-creator/ipc/:ipcId` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Create BNS Section** | `POST` | `/api/content-creator/bns` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Edit BNS Section** | `PATCH` | `/api/content-creator/bns/:bnsId` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Create User Right** | `POST` | `/api/content-creator/user-rights` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Update User Right** | `PATCH` | `/api/content-creator/user-rights/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
-| **Delete User Right** | `DELETE` | `/api/content-creator/user-rights/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Bearer Acts Single Write** | `POST` | `/api/admin/bearer-acts` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Upload Act PDFs** | `POST` | `/api/admin/acts/:actId/pdfs` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Attach Predefined PDF** | `POST` | `/api/admin/acts/:actId/predefined-pdfs` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Sync Predefined PDFs** | `POST` | `/api/admin/acts/predefined-pdfs/sync` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Delete Act PDF** | `DELETE` | `/api/admin/acts/pdfs/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Create Blog** | `POST` | `/api/admin/blogs` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Update Blog** | `PUT` | `/api/admin/blogs/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed (Owner) | ✅ **Allowed (All)** |
+| **Delete Blog** | `DELETE` | `/api/admin/blogs/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed (Owner) | ✅ **Allowed (All)** |
+| **Create Guide** | `POST` | `/api/admin/guides` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Update Guide** | `PATCH` | `/api/admin/guides/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Delete Guide** | `DELETE` | `/api/admin/guides/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Create Update** | `POST` | `/api/admin/updates` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Update Update** | `PATCH` | `/api/admin/updates/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Delete Update** | `DELETE` | `/api/admin/updates/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Create IPC Section** | `POST` | `/api/admin/ipc` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Edit IPC Section** | `PATCH` | `/api/admin/ipc/:ipcId` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Create BNS Section** | `POST` | `/api/admin/bns` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Edit BNS Section** | `PATCH` | `/api/admin/bns/:bnsId` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Create User Right** | `POST` | `/api/admin/user-rights` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Update User Right** | `PATCH` | `/api/admin/user-rights/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
+| **Delete User Right** | `DELETE` | `/api/admin/user-rights/:id` | ❌ 401 | ❌ 403 | ❌ 403 | ✅ Allowed | ✅ **Allowed** |
 
 ---
 
@@ -8136,7 +8135,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 #### 1. Bearer Acts Hierarchy Management (Single Write API)
 - **Method:** `POST`
-- **Endpoint:** `/api/content-creator/bearer-acts`
+- **Endpoint:** `/api/admin/bearer-acts`
 - **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
 - **Required Role:** `ADMIN` or `CONTENT_CREATOR`
 - **Headers:** `Authorization: Bearer <admin_jwt>`, `Content-Type: application/json`
@@ -8241,7 +8240,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### A. Multipart PDF Upload
 - **Method:** `POST`
-- **Endpoint:** `/api/content-creator/acts/:actId/pdfs` *(or `/api/content-creator/acts/pdfs` with `actId` in form data)*
+- **Endpoint:** `/api/admin/acts/:actId/pdfs` *(or `/api/admin/acts/pdfs` with `actId` in form data)*
 - **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
 - **Content-Type:** `multipart/form-data`
 - **Form Data Fields:**
@@ -8273,7 +8272,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### B. Attach Predefined Local PDF
 - **Method:** `POST`
-- **Endpoint:** `/api/content-creator/acts/:actId/predefined-pdfs`
+- **Endpoint:** `/api/admin/acts/:actId/predefined-pdfs`
 - **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
 - **Request Body:**
 ```json
@@ -8303,7 +8302,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### C. Delete PDF Attachment
 - **Method:** `DELETE`
-- **Endpoint:** `/api/content-creator/acts/pdfs/:id`
+- **Endpoint:** `/api/admin/acts/pdfs/:id`
 - **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
 - **Response (`200 OK`):**
 ```json
@@ -8319,7 +8318,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### A. Create Guide
 - **Method:** `POST`
-- **Endpoint:** `/api/content-creator/guides`
+- **Endpoint:** `/api/admin/guides`
 - **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
 - **Request Body:**
 ```json
@@ -8345,7 +8344,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### B. Update Guide
 - **Method:** `PATCH`
-- **Endpoint:** `/api/content-creator/guides/:id`
+- **Endpoint:** `/api/admin/guides/:id`
 - **Request Body:**
 ```json
 {
@@ -8368,7 +8367,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### C. Delete Guide
 - **Method:** `DELETE`
-- **Endpoint:** `/api/content-creator/guides/:id`
+- **Endpoint:** `/api/admin/guides/:id`
 - **Response (`200 OK`):**
 ```json
 {
@@ -8383,7 +8382,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### A. Create Update
 - **Method:** `POST`
-- **Endpoint:** `/api/content-creator/updates`
+- **Endpoint:** `/api/admin/updates`
 - **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
 - **Request Body:**
 ```json
@@ -8411,7 +8410,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### B. Update Update
 - **Method:** `PATCH`
-- **Endpoint:** `/api/content-creator/updates/:id`
+- **Endpoint:** `/api/admin/updates/:id`
 - **Request Body:**
 ```json
 {
@@ -8435,7 +8434,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### C. Delete Update
 - **Method:** `DELETE`
-- **Endpoint:** `/api/content-creator/updates/:id`
+- **Endpoint:** `/api/admin/updates/:id`
 - **Response (`200 OK`):**
 ```json
 {
@@ -8450,7 +8449,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### A. Create IPC Section
 - **Method:** `POST`
-- **Endpoint:** `/api/content-creator/ipc`
+- **Endpoint:** `/api/admin/ipc`
 - **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
 - **Request Body:**
 ```json
@@ -8484,7 +8483,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### B. Edit IPC Section
 - **Method:** `PATCH`
-- **Endpoint:** `/api/content-creator/ipc/:ipcId`
+- **Endpoint:** `/api/admin/ipc/:ipcId`
 - **Request Body:**
 ```json
 {
@@ -8506,7 +8505,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### C. Create BNS Section
 - **Method:** `POST`
-- **Endpoint:** `/api/content-creator/bns`
+- **Endpoint:** `/api/admin/bns`
 - **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
 - **Request Body:**
 ```json
@@ -8536,7 +8535,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### D. Edit BNS Section
 - **Method:** `PATCH`
-- **Endpoint:** `/api/content-creator/bns/:bnsId`
+- **Endpoint:** `/api/admin/bns/:bnsId`
 - **Request Body:**
 ```json
 {
@@ -8562,7 +8561,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### A. Create User Right (Multipart / Optional Photo)
 - **Method:** `POST`
-- **Endpoint:** `/api/content-creator/user-rights`
+- **Endpoint:** `/api/admin/user-rights`
 - **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
 - **Content-Type:** `multipart/form-data` or `application/json`
 - **Form Fields:**
@@ -8587,7 +8586,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### B. Update User Right
 - **Method:** `PATCH`
-- **Endpoint:** `/api/content-creator/user-rights/:id`
+- **Endpoint:** `/api/admin/user-rights/:id`
 - **Content-Type:** `multipart/form-data` or `application/json`
 - **Form Fields:**
   - `title` (text, optional)
@@ -8609,7 +8608,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### C. Delete User Right
 - **Method:** `DELETE`
-- **Endpoint:** `/api/content-creator/user-rights/:id`
+- **Endpoint:** `/api/admin/user-rights/:id`
 - **Response (`200 OK`):**
 ```json
 {
@@ -8624,7 +8623,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### A. Create Blog
 - **Method:** `POST`
-- **Endpoint:** `/api/blogs`
+- **Endpoint:** `/api/admin/blogs`
 - **Authentication:** Bearer Token / Cookie (Admin or Content Creator)
 - **Content-Type:** `multipart/form-data`
 - **Form Fields:**
@@ -8657,7 +8656,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### B. Update Blog
 - **Method:** `PUT`
-- **Endpoint:** `/api/blogs/:id`
+- **Endpoint:** `/api/admin/blogs/:id`
 - **Authentication:** Bearer Token / Cookie (Admin or Content Creator Owner)
 - **Response (`200 OK`):**
 ```json
@@ -8673,7 +8672,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 ##### C. Delete Blog
 - **Method:** `DELETE`
-- **Endpoint:** `/api/blogs/:id`
+- **Endpoint:** `/api/admin/blogs/:id`
 - **Authentication:** Bearer Token / Cookie (Admin or Content Creator Owner)
 - **Response (`200 OK`):**
 ```json
@@ -8708,7 +8707,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 2. **Bearer Acts Hierarchy Write Test:**
    - **Method:** `POST`
-   - **URL:** `{{base_url}}/api/content-creator/bearer-acts`
+   - **URL:** `{{base_url}}/api/admin/bearer-acts`
    - **Headers:**
      - `Authorization: Bearer {{admin_token}}`
      - `Content-Type: application/json`
@@ -8723,7 +8722,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 3. **Multipart PDF Upload Test:**
    - **Method:** `POST`
-   - **URL:** `{{base_url}}/api/content-creator/acts/{{act_id}}/pdfs`
+   - **URL:** `{{base_url}}/api/admin/acts/{{act_id}}/pdfs`
    - **Headers:**
      - `Authorization: Bearer {{admin_token}}`
    - **Body:** Select `form-data`
@@ -8732,7 +8731,7 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 4. **Guides CRUD Test:**
    - **Method:** `POST`
-   - **URL:** `{{base_url}}/api/content-creator/guides`
+   - **URL:** `{{base_url}}/api/admin/guides`
    - **Headers:**
      - `Authorization: Bearer {{admin_token}}`
      - `Content-Type: application/json`
@@ -8746,7 +8745,549 @@ The authorization layer reuses the existing Content Creator endpoints with exten
 
 5. **Security Verification (Negative Tests):**
    - Attempt any of the above endpoints with a normal User token (`Authorization: Bearer {{user_token}}`) or Advocate token (`Authorization: Bearer {{advocate_token}}`).
-   - Expected status: `403 Forbidden` (`Access forbidden. Insufficient permissions.` or `Access forbidden. Content Creator or Admin role required.`).
+   - Expected status: `403 Forbidden` (`Access forbidden. Insufficient permissions.` or `Access forbidden. Admin panel access required.`).
    - Attempt without `Authorization` header.
    - Expected status: `401 Unauthorized` (`Authentication required. Please login.`).
 
+
+
+---
+
+## 25. Admin Panel — Unified Login, Roles & Content (Postman Guide)
+
+This section provides the complete reference and step-by-step Postman testing workflow for the unified Admin panel back-office API.
+All back-office routes now live exclusively under `/api/admin/*`. "Content Creator" is no longer a separate API prefix, but an RBAC role (`CONTENT_CREATOR`) assigned by the primary admin to staff records stored in the `ContentCreator` database table.
+
+---
+
+### 25.1 Route Migration Mapping (Old vs. New)
+
+| Category | Operation | HTTP Method | Old Route | New Route | Permissions Required |
+|---|---|---|---|---|---|
+| **Auth** | Unified Admin / Staff Login | `POST` | `/api/content-creator/login` *(removed, returns 404)* | `/api/admin/login` | None (Public login endpoint) |
+| **Blogs** | Create Blog | `POST` | `/api/blogs` | `/api/admin/blogs` | `blogs:create` or `blogs:*` / Admin |
+| **Blogs** | Update Blog | `PUT` | `/api/blogs/:id` | `/api/admin/blogs/:id` | `blogs:update` or `blogs:*` / Admin |
+| **Blogs** | Delete Blog | `DELETE` | `/api/blogs/:id` | `/api/admin/blogs/:id` | `blogs:delete` or `blogs:*` / Admin |
+| **IPC** | Create IPC Section | `POST` | `/api/content-creator/ipc` | `/api/admin/ipc` | `ipc:create` or `ipc:*` / Admin |
+| **IPC** | Update IPC Section | `PATCH` | `/api/content-creator/ipc/:ipcId` | `/api/admin/ipc/:ipcId` | `ipc:update` or `ipc:*` / Admin |
+| **BNS** | Create BNS Section | `POST` | `/api/content-creator/bns` | `/api/admin/bns` | `bns:create` or `bns:*` / Admin |
+| **BNS** | Update BNS Section | `PATCH` | `/api/content-creator/bns/:bnsId` | `/api/admin/bns/:bnsId` | `bns:update` or `bns:*` / Admin |
+| **Guides** | Create Guide | `POST` | `/api/content-creator/guides` | `/api/admin/guides` | `guides:create` or `guides:*` / Admin |
+| **Guides** | Update Guide | `PATCH` | `/api/content-creator/guides/:id` | `/api/admin/guides/:id` | `guides:update` or `guides:*` / Admin |
+| **Guides** | Delete Guide | `DELETE` | `/api/content-creator/guides/:id` | `/api/admin/guides/:id` | `guides:delete` or `guides:*` / Admin |
+| **Updates** | Create Update | `POST` | `/api/content-creator/updates` | `/api/admin/updates` | `updates:create` or `updates:*` / Admin |
+| **Updates** | Update Update | `PATCH` | `/api/content-creator/updates/:id` | `/api/admin/updates/:id` | `updates:update` or `updates:*` / Admin |
+| **Updates** | Delete Update | `DELETE` | `/api/content-creator/updates/:id` | `/api/admin/updates/:id` | `updates:delete` or `updates:*` / Admin |
+| **User Rights** | Create User Right | `POST` | `/api/content-creator/user-rights` | `/api/admin/user-rights` | `user_rights:create` or `user_rights:*` / Admin |
+| **User Rights** | Update User Right | `PATCH` | `/api/content-creator/user-rights/:id` | `/api/admin/user-rights/:id` | `user_rights:update` or `user_rights:*` / Admin |
+| **User Rights** | Delete User Right | `DELETE` | `/api/content-creator/user-rights/:id` | `/api/admin/user-rights/:id` | `user_rights:delete` or `user_rights:*` / Admin |
+| **Bearer Acts** | Hierarchy Operations | `POST` | `/api/content-creator/bearer-acts` | `/api/admin/bearer-acts` | `bearer_acts:create/update/delete` / Admin |
+| **Act PDFs** | Upload Multipart PDF | `POST` | `/api/content-creator/acts/:actId/pdfs` | `/api/admin/acts/:actId/pdfs` | `acts:create` or `acts:*` / Admin |
+| **Act PDFs** | Upload Multipart PDF | `POST` | `/api/content-creator/acts/pdfs` | `/api/admin/acts/pdfs` | `acts:create` or `acts:*` / Admin |
+| **Act PDFs** | Attach Predefined PDF | `POST` | `/api/content-creator/acts/:actId/predefined-pdfs` | `/api/admin/acts/:actId/predefined-pdfs` | `acts:create` or `acts:*` / Admin |
+| **Act PDFs** | Sync Predefined PDFs | `POST` | `/api/content-creator/acts/predefined-pdfs/sync` | `/api/admin/acts/predefined-pdfs/sync` | `acts:create` or `acts:*` / Admin |
+| **Act PDFs** | Delete PDF Attachment | `DELETE` | `/api/content-creator/acts/pdfs/:id` | `/api/admin/acts/pdfs/:id` | `acts:delete` or `acts:*` / Admin |
+| **Public Reading** | Public GET endpoints | `GET` | `/api/blogs`, `/api/ipc`, `/api/bns`, `/api/guides`, etc. | `/api/blogs`, `/api/ipc`, `/api/bns`, `/api/guides`, etc. | Public (No authentication required) |
+
+> **Note:** All old routes starting with `/api/content-creator/*` now strictly return `404 Not Found`. No backward-compatibility redirects or aliases are maintained.
+
+---
+
+### 25.2 Postman Environment Variables
+
+Configure the following variables in your Postman Environment:
+
+| Variable Name | Description | Example / Initial Value |
+|---|---|---|
+| `base_url` | Base URL of the backend API | `http://localhost:5000` |
+| `admin_email` | Primary Admin login email (from `.env`) | `admin@vakeelsetu.com` |
+| `admin_password` | Primary Admin password (from `.env`) | `SuperSecretAdminPassword123` |
+| `admin_token` | JWT token extracted from admin login | *(automatically populated by script)* |
+| `staff_email` | Content Creator staff email | `editor.staff@vakeelsetu.com` |
+| `staff_password` | Content Creator staff password | `SecureStaffPass!456` |
+| `staff_id` | UUID of created staff account | *(automatically populated by script)* |
+| `staff_token` | JWT token extracted from staff login | *(automatically populated by script)* |
+
+---
+
+### 25.3 End-to-End Postman Workflow
+
+Follow this complete step-by-step sequence to test Admin Panel authentication, RBAC role creation, staff assignment, permission enforcement, and route migration.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Admin as Main Admin
+    actor Staff as Staff Creator
+    participant API as Express API (/api/admin)
+
+    Admin->>API: 1. POST /api/admin/login (env credentials)
+    API-->>Admin: 200 OK (admin_token, accountType: ADMIN, permissions: ['*'])
+    Admin->>API: 2. GET /api/admin/permissions
+    API-->>Admin: 200 OK (all system permissions list)
+    Admin->>API: 3. POST /api/admin/roles (name: BLOG_EDITOR, perm: blogs:*)
+    API-->>Admin: 201 Created (role created)
+    Admin->>API: 4. POST /api/admin/content-creators (staff account)
+    API-->>Admin: 201 Created (staff_id generated)
+    Admin->>API: 5. POST /api/admin/users/:staffId/roles (assign BLOG_EDITOR)
+    API-->>Admin: 200 OK (role assigned)
+    Staff->>API: 6. POST /api/admin/login (staff credentials)
+    API-->>Staff: 200 OK (staff_token, accountType: CONTENT_CREATOR, permissions: blogs:*)
+    Staff->>API: 7. POST /api/admin/blogs (create blog)
+    API-->>Staff: 201 Created (authorized by blogs:create)
+    Staff->>API: 8. POST /api/admin/ipc (create IPC section)
+    API-->>Staff: 403 Forbidden (missing ipc:create permission)
+    Staff->>API: 9. GET /api/admin/advocates (list advocates)
+    API-->>Staff: 403 Forbidden (missing advocates:view permission)
+    Admin->>API: 10. POST /api/admin/ipc (create IPC section)
+    API-->>Admin: 201 Created (admin has wildcard '*')
+    Admin->>API: 11. POST /api/content-creator/ipc (old route)
+    API-->>Admin: 404 Not Found (old routes removed)
+```
+
+---
+
+#### Step 1: Admin Login
+Logs in using the root environment credentials (`ADMIN_USER_EMAIL` / `ADMIN_USER_PASSWORD`).
+
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/login`
+- **Headers:** `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "email": "{{admin_email}}",
+  "password": "{{admin_password}}"
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 200", function () {
+  pm.response.to.have.status(200);
+});
+
+const res = pm.response.json();
+pm.test("Admin login returns accountType ADMIN and wildcard permissions", function () {
+  pm.expect(res.success).to.be.true;
+  pm.expect(res.admin.accountType).to.eql("ADMIN");
+  pm.expect(res.admin.permissions).to.include("*");
+});
+
+if (res.token) {
+  pm.environment.set("admin_token", res.token);
+}
+```
+- **Response Sample (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Admin login successful",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "admin": {
+    "id": "admin",
+    "email": "admin@vakeelsetu.com",
+    "fullName": "Administrator",
+    "role": "ADMIN",
+    "accountType": "ADMIN",
+    "roles": ["ADMIN"],
+    "permissions": ["*"]
+  }
+}
+```
+
+---
+
+#### Step 2: List System Permissions
+Lists all granular permissions available in the RBAC matrix.
+
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/permissions`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 200", function () {
+  pm.response.to.have.status(200);
+});
+
+const res = pm.response.json();
+pm.test("Permissions array contains content permissions", function () {
+  pm.expect(res.success).to.be.true;
+  const permNames = res.permissions.map(p => p.name);
+  pm.expect(permNames).to.include("blogs:create");
+  pm.expect(permNames).to.include("ipc:create");
+});
+```
+- **Response Sample (`200 OK`):**
+```json
+{
+  "success": true,
+  "permissions": [
+    { "id": "p-1", "name": "blogs:create", "description": "Create blogs", "module": "blogs" },
+    { "id": "p-2", "name": "blogs:update", "description": "Update blogs", "module": "blogs" },
+    { "id": "p-3", "name": "blogs:delete", "description": "Delete blogs", "module": "blogs" },
+    { "id": "p-4", "name": "ipc:create", "description": "Create IPC sections", "module": "ipc" },
+    { "id": "p-5", "name": "bns:create", "description": "Create BNS sections", "module": "bns" }
+  ]
+}
+```
+
+---
+
+#### Step 3: Create Role `BLOG_EDITOR` (`blogs:*`)
+Creates a new custom role with wildcard permissions for blog operations only.
+
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/roles`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "name": "BLOG_EDITOR",
+  "description": "Content editor with blog management permissions only",
+  "permissionNames": ["blogs:*"]
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 201 or 200 (if role already exists)", function () {
+  pm.expect([200, 201]).to.include(pm.response.code);
+});
+```
+- **Response Sample (`201 Created`):**
+```json
+{
+  "success": true,
+  "message": "Role created successfully",
+  "role": {
+    "id": "role-uuid-1234",
+    "name": "BLOG_EDITOR",
+    "description": "Content editor with blog management permissions only",
+    "permissions": [
+      { "name": "blogs:*" }
+    ]
+  }
+}
+```
+
+---
+
+#### Step 4: Create Staff via `POST /api/admin/content-creators`
+Main admin registers a staff account in the `ContentCreator` table.
+
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/content-creators`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "fullName": "Editor Staff Member",
+  "email": "{{staff_email}}",
+  "password": "{{staff_password}}"
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 201", function () {
+  pm.response.to.have.status(201);
+});
+
+const res = pm.response.json();
+if (res.creator && res.creator.id) {
+  pm.environment.set("staff_id", res.creator.id);
+}
+```
+- **Response Sample (`201 Created`):**
+```json
+{
+  "success": true,
+  "message": "Content creator created successfully",
+  "creator": {
+    "id": "cc-uuid-9876",
+    "fullName": "Editor Staff Member",
+    "email": "editor.staff@vakeelsetu.com",
+    "isActive": true,
+    "createdAt": "2026-10-09T10:00:00.000Z"
+  }
+}
+```
+
+---
+
+#### Step 5: Assign Role `BLOG_EDITOR` to Staff
+Assigns the role `BLOG_EDITOR` to the newly created staff user using the RBAC assignment endpoint.
+
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/users/{{staff_id}}/roles`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "roleName": "BLOG_EDITOR",
+  "userType": "CONTENT_CREATOR"
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 200 or 201", function () {
+  pm.expect([200, 201]).to.include(pm.response.code);
+});
+```
+- **Response Sample (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Role assigned successfully"
+}
+```
+
+---
+
+#### Step 6: Staff Login
+The staff user logs in at the unified `POST /api/admin/login` endpoint using their email and password.
+
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/login`
+- **Headers:** `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "email": "{{staff_email}}",
+  "password": "{{staff_password}}"
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 200", function () {
+  pm.response.to.have.status(200);
+});
+
+const res = pm.response.json();
+pm.test("Staff login returns CONTENT_CREATOR accountType and BLOG_EDITOR roles", function () {
+  pm.expect(res.success).to.be.true;
+  pm.expect(res.admin.accountType).to.eql("CONTENT_CREATOR");
+  pm.expect(res.admin.roles).to.include("BLOG_EDITOR");
+  pm.expect(res.admin.permissions).to.include("blogs:*");
+});
+
+if (res.token) {
+  pm.environment.set("staff_token", res.token);
+}
+```
+- **Response Sample (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Content Creator login successful",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "admin": {
+    "id": "cc-uuid-9876",
+    "email": "editor.staff@vakeelsetu.com",
+    "fullName": "Editor Staff Member",
+    "role": "CONTENT_CREATOR",
+    "accountType": "CONTENT_CREATOR",
+    "roles": ["BLOG_EDITOR"],
+    "permissions": ["blogs:*"]
+  }
+}
+```
+
+---
+
+#### Step 7: Staff Creates Blog via `POST /api/admin/blogs` (Allowed: `201 Created`)
+Because staff has `blogs:*`, creating a blog succeeds.
+
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/blogs`
+- **Headers:**
+  - `Authorization: Bearer {{staff_token}}`
+- **Body:** Select `form-data`
+  - `heading` (Text): `Consumer Rights 2026`
+  - `title` (Text): `Navigating the E-Commerce Consumer Protection Rules`
+  - `date` (Text): `2026-10-09T00:00:00.000Z`
+  - `writtenBy` (Text): `Editor Staff Member`
+  - `content` (Text): `The latest 2026 amendments provide stringent protection...`
+  - `image` (File): *(Select a test image, e.g., image.png)*
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 201 Created", function () {
+  pm.response.to.have.status(201);
+});
+
+const res = pm.response.json();
+pm.test("Blog created successfully", function () {
+  pm.expect(res.success).to.be.true;
+  pm.expect(res.blog).to.have.property("id");
+});
+```
+- **Response Sample (`201 Created`):**
+```json
+{
+  "success": true,
+  "message": "Blog created successfully",
+  "blog": {
+    "id": "blog-uuid-456",
+    "heading": "Consumer Rights 2026",
+    "title": "Navigating the E-Commerce Consumer Protection Rules",
+    "date": "2026-10-09T00:00:00.000Z",
+    "writtenBy": "Editor Staff Member",
+    "content": "The latest 2026 amendments provide stringent protection...",
+    "image": "https://res.cloudinary.com/vakeelsetu/image/upload/sample.jpg",
+    "slug": "navigating-the-e-commerce-consumer-protection-rules"
+  }
+}
+```
+
+---
+
+#### Step 8: Staff Attempts to Create IPC Section (Forbidden: `403 Forbidden`)
+Staff only has `blogs:*`, so access to IPC section management is rejected.
+
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/ipc`
+- **Headers:**
+  - `Authorization: Bearer {{staff_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "sectionNo": "Section 500",
+  "heading": "Defamation",
+  "paragraph": "Whoever defames another...",
+  "explanation": "Explanation on reputation..."
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 403 Forbidden", function () {
+  pm.response.to.have.status(403);
+});
+
+const res = pm.response.json();
+pm.test("Error message indicates insufficient permissions", function () {
+  pm.expect(res.success).to.be.false;
+  pm.expect(res.message).to.eql("Access forbidden. Insufficient permissions.");
+});
+```
+- **Response Sample (`403 Forbidden`):**
+```json
+{
+  "success": false,
+  "message": "Access forbidden. Insufficient permissions."
+}
+```
+
+---
+
+#### Step 9: Staff Attempts to Access Advocates Directory Admin (Forbidden: `403 Forbidden`)
+Staff has no admin directory permission (`advocates:view`), ensuring isolation between content creation and user management.
+
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/advocates`
+- **Headers:**
+  - `Authorization: Bearer {{staff_token}}`
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 403 Forbidden", function () {
+  pm.response.to.have.status(403);
+});
+
+const res = pm.response.json();
+pm.test("Access rejected", function () {
+  pm.expect(res.success).to.be.false;
+  pm.expect(res.message).to.eql("Access forbidden. Insufficient permissions.");
+});
+```
+- **Response Sample (`403 Forbidden`):**
+```json
+{
+  "success": false,
+  "message": "Access forbidden. Insufficient permissions."
+}
+```
+
+---
+
+#### Step 10: Admin Hits Content Routes (Allowed: `201 Created` / `200 OK`)
+The main administrator account retains global access (`*`) across all `/api/admin/*` routes.
+
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/ipc`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "sectionNo": "Section 500",
+  "heading": "Defamation",
+  "paragraph": "Whoever defames another...",
+  "explanation": "Explanation on reputation..."
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 201 Created", function () {
+  pm.response.to.have.status(201);
+});
+
+const res = pm.response.json();
+pm.test("Admin successfully creates IPC section", function () {
+  pm.expect(res.success).to.be.true;
+});
+```
+- **Response Sample (`201 Created`):**
+```json
+{
+  "success": true,
+  "message": "IPC section created successfully",
+  "data": {
+    "id": "ipc-uuid-789",
+    "sectionNo": "Section 500",
+    "heading": "Defamation",
+    "paragraph": "Whoever defames another..."
+  }
+}
+```
+
+---
+
+#### Step 11: Access Old Route Path (Expected: `404 Not Found`)
+Verify that legacy `/api/content-creator/*` paths return 404 with no silent redirects.
+
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/content-creator/ipc`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "sectionNo": "Section 500",
+  "heading": "Defamation"
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 404 Not Found", function () {
+  pm.response.to.have.status(404);
+});
+```
+- **Response Sample (`404 Not Found`):**
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Error</title>
+</head>
+<body>
+<pre>Cannot POST /api/content-creator/ipc</pre>
+</body>
+</html>
+```
