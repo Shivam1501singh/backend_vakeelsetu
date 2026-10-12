@@ -12,6 +12,8 @@ router.post('/login', generalLimiter, adminController.loginAdmin);
 // Content Creator Staff Management
 router.post('/content-creators', requireAuth, requirePermission('content_creators:create'), generalLimiter, adminController.createContentCreator);
 router.get('/content-creators', requireAuth, requirePermission('content_creators:view'), generalLimiter, adminController.listContentCreators);
+router.get('/content-creators/:id', requireAuth, requirePermission('content_creators:view'), generalLimiter, adminController.getContentCreatorDetails);
+router.put('/content-creators/:id/roles', requireAuth, requirePermission('roles:manage'), generalLimiter, adminController.updateStaffRoles);
 
 // Advocate Management (Protected by fine-grained RBAC permissions; Admin has full access)
 router.get('/advocates/deletion-requests', requireAuth, requirePermission('advocates:view'), generalLimiter, adminController.listPendingAdvocateDeletionRequests);

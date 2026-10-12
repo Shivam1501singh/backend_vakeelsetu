@@ -6,7 +6,10 @@ export const createRoleSchema = z.object({
     .min(2, { message: 'Role name must be at least 2 characters.' })
     .max(50, { message: 'Role name cannot exceed 50 characters.' })
     .regex(/^[A-Z0-9_]+$/, { message: 'Role name must contain only uppercase letters, numbers, and underscores (e.g. LEAD_USER).' })
-    .transform(v => v.toUpperCase()),
+    .transform(v => v.toUpperCase())
+    .refine(v => !['ADMIN', 'USER', 'ADVOCATE'].includes(v), {
+      message: 'This role name is reserved.'
+    }),
   displayName: z.string({ required_error: 'Display name is required.' })
     .trim()
     .min(2, { message: 'Display name must be at least 2 characters.' })
@@ -23,6 +26,9 @@ export const updateRoleSchema = z.object({
     .max(50, { message: 'Role name cannot exceed 50 characters.' })
     .regex(/^[A-Z0-9_]+$/, { message: 'Role name must contain only uppercase letters, numbers, and underscores.' })
     .transform(v => v.toUpperCase())
+    .refine(v => !['ADMIN', 'USER', 'ADVOCATE'].includes(v), {
+      message: 'This role name is reserved.'
+    })
     .optional(),
   displayName: z.string()
     .trim()

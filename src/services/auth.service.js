@@ -725,40 +725,6 @@ export const getCurrentUserProfile = async (id, accountType) => {
     return null;
   }
 
-  // Fetch assigned active RBAC roles and permissions
-  let assignedRoles = [];
-  let assignedPermissions = [];
-
-  try {
-    const userRoles = await prisma.userRole.findMany({
-      where: { userId: profile.id, role: { isActive: true } },
-      include: {
-        role: {
-          include: {
-            permissions: {
-              include: {
-                permission: true
-              }
-            }
-          }
-        }
-      }
-    });
-
-    assignedRoles = userRoles.map((ur) => ur.role.name);
-    const permSet = new Set();
-    userRoles.forEach((ur) => {
-      ur.role.permissions.forEach((rp) => {
-        if (rp.permission && !permSet.has(rp.permission.code)) {
-          permSet.add(rp.permission.code);
-          assignedPermissions.push(rp.permission.code);
-        }
-      });
-    });
-  } catch (err) {
-    console.error('Error fetching RBAC permissions in getCurrentUserProfile:', err);
-  }
-
   if (normalizedType === 'user') {
     return {
       id: profile.id,
@@ -770,11 +736,44 @@ export const getCurrentUserProfile = async (id, accountType) => {
       pincode: profile.pincode,
       status: profile.status,
       type: 'user',
-      role: assignedRoles.length > 0 ? assignedRoles[0] : 'USER',
-      roles: assignedRoles.length > 0 ? assignedRoles : ['USER'],
-      permissions: assignedPermissions
+      role: 'USER',
+      roles: ['USER'],
+      permissions: []
     };
   } else if (normalizedType === 'content_creator') {
+    let assignedRoles = [];
+    let assignedPermissions = [];
+
+    try {
+      const userRoles = await prisma.userRole.findMany({
+        where: { userId: profile.id, role: { isActive: true } },
+        include: {
+          role: {
+            include: {
+              permissions: {
+                include: {
+                  permission: true
+                }
+              }
+            }
+          }
+        }
+      });
+
+      assignedRoles = userRoles.map((ur) => ur.role.name);
+      const permSet = new Set();
+      userRoles.forEach((ur) => {
+        ur.role.permissions.forEach((rp) => {
+          if (rp.permission && !permSet.has(rp.permission.code)) {
+            permSet.add(rp.permission.code);
+            assignedPermissions.push(rp.permission.code);
+          }
+        });
+      });
+    } catch (err) {
+      console.error('Error fetching RBAC permissions in getCurrentUserProfile:', err);
+    }
+
     const creatorRoles = assignedRoles.length > 0 ? assignedRoles : ['CONTENT_CREATOR'];
     return {
       id: profile.id,

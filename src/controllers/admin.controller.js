@@ -6,10 +6,13 @@ import { finalizeAdvocateDeletion } from '../services/advocateDeletion.service.j
 import {
   adminApproveAdvocateSchema,
   adminUpdateAdvocateCallAvailabilitySchema,
-  adminUpdateAdvocateStatusSchema
+  adminUpdateAdvocateStatusSchema,
+  createStaffAccountSchema,
+  updateStaffRolesSchema
 } from '../validators/admin.validator.js';
 import * as blogValidator from '../validators/blog.validator.js';
 import { getCurrentUserProfile } from '../services/auth.service.js';
+import { checkUserPermission } from '../services/rbac.service.js';
 
 /**
  * Admin / Staff Unified Login
@@ -90,22 +93,26 @@ export const loginAdmin = async (req, res, next) => {
 };
 
 /**
- * Create Content Creator (ADMIN only)
+ * Create Staff Account (Content Creator) with inline Roles
  * POST /api/admin/content-creators
  */
 export const createContentCreator = async (req, res, next) => {
   try {
-    const { fullName, email, password } = req.body || {};
-
-    if (!fullName || !email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'fullName, email, and password are required.'
-      });
-    }
+    const validated = createStaffAccountSchema.parse(req.body);
+    const { fullName, email, password, roleIds, roleNames } = validated;
 
     const normalizedEmail = email.toLowerCase().trim();
 
+    // Reject if email matches env admin
+    const envAdminEmail = (process.env.ADMIN_USER_EMAIL || '').toLowerCase().trim();
+    if (envAdminEmail && normalizedEmail === envAdminEmail) {
+      return res.status(400).json({
+        success: false,
+        message: 'This email is reserved for the main admin account.'
+      });
+    }
+
+    // Check duplicate staff email
     const existing = await prisma.contentCreator.findUnique({
       where: { email: normalizedEmail }
     });
@@ -113,28 +120,138 @@ export const createContentCreator = async (req, res, next) => {
     if (existing) {
       return res.status(400).json({
         success: false,
-        message: 'A content creator with this email already exists.'
+        message: 'A staff account with this email already exists.'
       });
     }
 
+    // Check privilege escalation: caller must have roles:manage or be main admin if roles provided
+    const isCallerAdmin = req.user?.type?.toLowerCase() === 'admin' || req.user?.role === 'ADMIN';
+    const rolesProvided = (Array.isArray(roleIds) && roleIds.length > 0) || (Array.isArray(roleNames) && roleNames.length > 0);
+
+    if (rolesProvided && !isCallerAdmin) {
+      const hasRolesManage = await checkUserPermission(req.user.id, ['roles:manage'], req.user.type);
+      if (!hasRolesManage) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden: Requires roles:manage permission to assign roles.'
+        });
+      }
+    }
+
+    // Resolve roles (default to CONTENT_CREATOR if neither provided)
+    let targetRoleIds = roleIds || [];
+    let targetRoleNames = roleNames || [];
+
+    if (targetRoleIds.length === 0 && targetRoleNames.length === 0) {
+      targetRoleNames = ['CONTENT_CREATOR'];
+    }
+
+    const [rolesById, rolesByName] = await Promise.all([
+      targetRoleIds.length > 0
+        ? prisma.role.findMany({
+            where: { id: { in: targetRoleIds } },
+            include: {
+              permissions: {
+                include: { permission: true }
+              }
+            }
+          })
+        : [],
+      targetRoleNames.length > 0
+        ? prisma.role.findMany({
+            where: { name: { in: targetRoleNames } },
+            include: {
+              permissions: {
+                include: { permission: true }
+              }
+            }
+          })
+        : []
+    ]);
+
+    const invalidRoles = [];
+    const rolesByIdMap = new Map(rolesById.map((r) => [r.id, r]));
+    const rolesByNameMap = new Map(rolesByName.map((r) => [r.name, r]));
+
+    for (const rid of targetRoleIds) {
+      const r = rolesByIdMap.get(rid);
+      if (!r || !r.isActive) {
+        invalidRoles.push(rid);
+      }
+    }
+
+    for (const rname of targetRoleNames) {
+      const r = rolesByNameMap.get(rname);
+      if (!r || !r.isActive) {
+        invalidRoles.push(rname);
+      }
+    }
+
+    if (invalidRoles.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'One or more roles are invalid or inactive.',
+        invalidRoles: Array.from(new Set(invalidRoles))
+      });
+    }
+
+    // Merge and deduplicate resolved roles
+    const roleMap = new Map();
+    for (const r of rolesById) roleMap.set(r.id, r);
+    for (const r of rolesByName) roleMap.set(r.id, r);
+    const resolvedRoles = Array.from(roleMap.values());
+
+    const permSet = new Set();
+    for (const r of resolvedRoles) {
+      for (const rp of r.permissions) {
+        if (rp.permission?.code) {
+          permSet.add(rp.permission.code);
+        }
+      }
+    }
+    const permissions = Array.from(permSet);
+
     const passwordHash = await bcrypt.hash(password, 10);
 
-    const creator = await prisma.contentCreator.create({
-      data: {
-        fullName: fullName.trim(),
-        email: normalizedEmail,
-        passwordHash
-      }
+    const creator = await prisma.$transaction(async (tx) => {
+      const newCreator = await tx.contentCreator.create({
+        data: {
+          fullName: fullName.trim(),
+          email: normalizedEmail,
+          passwordHash
+        }
+      });
+
+      await tx.userRole.createMany({
+        data: resolvedRoles.map((r) => ({
+          userId: newCreator.id,
+          roleId: r.id,
+          userType: 'CONTENT_CREATOR'
+        })),
+        skipDuplicates: true
+      });
+
+      return newCreator;
     });
 
     return res.status(201).json({
       success: true,
-      message: 'Content creator created successfully',
+      message: 'Staff account created successfully',
       creator: {
         id: creator.id,
+        name: creator.fullName,
         fullName: creator.fullName,
         email: creator.email,
         isActive: creator.isActive,
+        accountType: 'CONTENT_CREATOR',
+        role: resolvedRoles[0]?.name || 'CONTENT_CREATOR',
+        roles: resolvedRoles.map((r) => r.name),
+        roleDetails: resolvedRoles.map((r) => ({
+          id: r.id,
+          name: r.name,
+          displayName: r.displayName
+        })),
+        permissions,
         createdAt: creator.createdAt
       }
     });
@@ -144,7 +261,7 @@ export const createContentCreator = async (req, res, next) => {
 };
 
 /**
- * List Content Creators (ADMIN only)
+ * List Content Creator Staff with Roles (ADMIN / content_creators:view)
  * GET /api/admin/content-creators
  */
 export const listContentCreators = async (req, res, next) => {
@@ -160,9 +277,299 @@ export const listContentCreators = async (req, res, next) => {
       }
     });
 
+    const creatorIds = creators.map((c) => c.id);
+    const userRoles = await prisma.userRole.findMany({
+      where: { userId: { in: creatorIds } },
+      include: {
+        role: {
+          select: {
+            id: true,
+            name: true,
+            displayName: true,
+            isActive: true
+          }
+        }
+      }
+    });
+
+    const rolesByUserId = new Map();
+    for (const ur of userRoles) {
+      if (!rolesByUserId.has(ur.userId)) {
+        rolesByUserId.set(ur.userId, []);
+      }
+      if (ur.role) {
+        rolesByUserId.get(ur.userId).push({
+          id: ur.role.id,
+          name: ur.role.name,
+          displayName: ur.role.displayName,
+          isActive: ur.role.isActive
+        });
+      }
+    }
+
+    const formattedCreators = creators.map((c) => {
+      const userRolesList = rolesByUserId.get(c.id) || [];
+      const roleNames = userRolesList.map((r) => r.name);
+      return {
+        ...c,
+        name: c.fullName,
+        role: roleNames[0] || 'CONTENT_CREATOR',
+        roles: roleNames.length > 0 ? roleNames : ['CONTENT_CREATOR'],
+        roleDetails: userRolesList
+      };
+    });
+
     return res.status(200).json({
       success: true,
-      creators
+      creators: formattedCreators
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get Staff Details & Permissions (content_creators:view)
+ * GET /api/admin/content-creators/:id
+ */
+export const getContentCreatorDetails = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const creator = await prisma.contentCreator.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true
+      }
+    });
+
+    if (!creator) {
+      return res.status(404).json({
+        success: false,
+        message: 'Staff account not found.'
+      });
+    }
+
+    const userRoles = await prisma.userRole.findMany({
+      where: { userId: creator.id },
+      include: {
+        role: {
+          include: {
+            permissions: {
+              include: {
+                permission: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    const activeRoles = userRoles
+      .filter((ur) => ur.role && ur.role.isActive)
+      .map((ur) => ur.role);
+
+    let roles = [];
+    let permissions = [];
+    let effectiveDefaultRole = undefined;
+
+    if (activeRoles.length > 0) {
+      roles = activeRoles.map((r) => ({
+        id: r.id,
+        name: r.name,
+        displayName: r.displayName,
+        isActive: r.isActive
+      }));
+
+      const permSet = new Set();
+      for (const r of activeRoles) {
+        for (const rp of r.permissions) {
+          if (rp.permission?.code) {
+            permSet.add(rp.permission.code);
+          }
+        }
+      }
+      permissions = Array.from(permSet);
+    } else {
+      roles = [];
+      effectiveDefaultRole = 'CONTENT_CREATOR';
+      const defaultRole = await prisma.role.findUnique({
+        where: { name: 'CONTENT_CREATOR' },
+        include: {
+          permissions: {
+            include: {
+              permission: true
+            }
+          }
+        }
+      });
+      if (defaultRole && defaultRole.isActive) {
+        permissions = defaultRole.permissions
+          .map((rp) => rp.permission?.code)
+          .filter(Boolean);
+      }
+    }
+
+    const roleNames = activeRoles.map((r) => r.name);
+    return res.status(200).json({
+      success: true,
+      creator: {
+        id: creator.id,
+        name: creator.fullName,
+        fullName: creator.fullName,
+        email: creator.email,
+        isActive: creator.isActive,
+        accountType: 'CONTENT_CREATOR',
+        role: roleNames[0] || effectiveDefaultRole || 'CONTENT_CREATOR',
+        roles: roleNames.length > 0 ? roleNames : ['CONTENT_CREATOR'],
+        roleDetails: roles,
+        ...(effectiveDefaultRole ? { effectiveDefaultRole } : {}),
+        permissions,
+        createdAt: creator.createdAt,
+        updatedAt: creator.updatedAt
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Update Staff Roles (roles:manage)
+ * PUT /api/admin/content-creators/:id/roles
+ */
+export const updateStaffRoles = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const validated = updateStaffRolesSchema.parse(req.body);
+
+    const creator = await prisma.contentCreator.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true
+      }
+    });
+
+    if (!creator) {
+      return res.status(404).json({
+        success: false,
+        message: 'Staff account not found.'
+      });
+    }
+
+    const targetRoleIds = validated.roleIds || [];
+    const targetRoleNames = validated.roleNames || [];
+
+    const [rolesById, rolesByName] = await Promise.all([
+      targetRoleIds.length > 0
+        ? prisma.role.findMany({
+            where: { id: { in: targetRoleIds } },
+            include: {
+              permissions: {
+                include: { permission: true }
+              }
+            }
+          })
+        : [],
+      targetRoleNames.length > 0
+        ? prisma.role.findMany({
+            where: { name: { in: targetRoleNames } },
+            include: {
+              permissions: {
+                include: { permission: true }
+              }
+            }
+          })
+        : []
+    ]);
+
+    const invalidRoles = [];
+    const rolesByIdMap = new Map(rolesById.map((r) => [r.id, r]));
+    const rolesByNameMap = new Map(rolesByName.map((r) => [r.name, r]));
+
+    for (const rid of targetRoleIds) {
+      const r = rolesByIdMap.get(rid);
+      if (!r || !r.isActive) {
+        invalidRoles.push(rid);
+      }
+    }
+
+    for (const rname of targetRoleNames) {
+      const r = rolesByNameMap.get(rname);
+      if (!r || !r.isActive) {
+        invalidRoles.push(rname);
+      }
+    }
+
+    if (invalidRoles.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'One or more roles are invalid or inactive.',
+        invalidRoles: Array.from(new Set(invalidRoles))
+      });
+    }
+
+    const roleMap = new Map();
+    for (const r of rolesById) roleMap.set(r.id, r);
+    for (const r of rolesByName) roleMap.set(r.id, r);
+    const resolvedRoles = Array.from(roleMap.values());
+
+    await prisma.$transaction([
+      prisma.userRole.deleteMany({
+        where: { userId: creator.id }
+      }),
+      prisma.userRole.createMany({
+        data: resolvedRoles.map((r) => ({
+          userId: creator.id,
+          roleId: r.id,
+          userType: 'CONTENT_CREATOR'
+        })),
+        skipDuplicates: true
+      })
+    ]);
+
+    const permSet = new Set();
+    for (const r of resolvedRoles) {
+      for (const rp of r.permissions) {
+        if (rp.permission?.code) {
+          permSet.add(rp.permission.code);
+        }
+      }
+    }
+    const permissions = Array.from(permSet);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Staff roles updated successfully',
+      creator: {
+        id: creator.id,
+        name: creator.fullName,
+        fullName: creator.fullName,
+        email: creator.email,
+        isActive: creator.isActive,
+        accountType: 'CONTENT_CREATOR',
+        role: resolvedRoles[0]?.name || 'CONTENT_CREATOR',
+        roles: resolvedRoles.map((r) => r.name),
+        roleDetails: resolvedRoles.map((r) => ({
+          id: r.id,
+          name: r.name,
+          displayName: r.displayName,
+          isActive: r.isActive
+        })),
+        permissions,
+        createdAt: creator.createdAt,
+        updatedAt: creator.updatedAt
+      }
     });
   } catch (error) {
     next(error);

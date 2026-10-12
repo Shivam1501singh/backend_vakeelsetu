@@ -493,12 +493,24 @@ export const resolveUserAccount = async (userId, userType = 'USER') => {
 
 /**
  * Assign a Role to a User (Idempotent)
+ * Strictly restricted to Admin Panel (staff / ContentCreator) accounts.
  */
 export const assignRoleToUser = async ({ userId, roleId, roleName, userType = 'USER' }) => {
-  const { account, userType: resolvedType } = await resolveUserAccount(userId, userType);
+  const staffAccount = await prisma.contentCreator.findUnique({ where: { id: userId } });
 
-  if (!account) {
-    const err = new Error('Target user account not found.');
+  if (!staffAccount) {
+    const [isUser, isAdvocate] = await Promise.all([
+      prisma.user.findUnique({ where: { id: userId }, select: { id: true } }),
+      prisma.advocate.findUnique({ where: { id: userId }, select: { id: true } })
+    ]);
+
+    if (isUser || isAdvocate) {
+      const err = new Error('Roles can only be assigned to Admin Panel (staff) accounts. Clients and advocates cannot have roles.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const err = new Error('Target staff account not found.');
     err.statusCode = 404;
     throw err;
   }
@@ -530,12 +542,12 @@ export const assignRoleToUser = async ({ userId, roleId, roleName, userType = 'U
       }
     },
     update: {
-      userType: resolvedType
+      userType: 'CONTENT_CREATOR'
     },
     create: {
       userId,
       roleId: role.id,
-      userType: resolvedType
+      userType: 'CONTENT_CREATOR'
     },
     include: {
       role: {
@@ -656,6 +668,10 @@ export const getUserRolesAndPermissions = async (userId, userType = null) => {
  * Evaluates whether a user has the required permission(s).
  */
 export const checkUserPermission = async (userId, requiredPermissions = [], userType = null) => {
+  if (userType && userType.toLowerCase() !== 'content_creator') {
+    return false;
+  }
+
   if (!requiredPermissions || requiredPermissions.length === 0) {
     return true;
   }
@@ -772,6 +788,7 @@ export const listUsersAdmin = async ({ page = 1, limit = 20, search, status, rol
 
   let formattedUsers = users.map((u) => ({
     ...u,
+    rolesAllowed: false,
     assignedRoles: rolesByUserId[u.id] || []
   }));
 
@@ -825,6 +842,7 @@ export const getUserDetailsAdmin = async (userId) => {
     phoneVerified: user.phoneVerified,
     isActive: user.isActive,
     status: user.status,
+    rolesAllowed: false,
     deletionRequestedAt: user.deletionRequestedAt,
     scheduledDeletionAt: user.scheduledDeletionAt,
     roles: userRolesInfo.roles,

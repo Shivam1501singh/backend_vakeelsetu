@@ -71,7 +71,7 @@ export const optionalAuth = async (req, res, next) => {
   next();
 };
 
-import { checkUserPermission, getUserRolesAndPermissions } from '../services/rbac.service.js';
+import { checkUserPermission } from '../services/rbac.service.js';
 
 export const requireRole = (...roles) => {
   const allowedRoles = roles.map(r => r.toUpperCase());
@@ -92,16 +92,6 @@ export const requireRole = (...roles) => {
       }
 
       if (allowedRoles.includes(rawRole)) {
-        return next();
-      }
-
-      // Check assigned RBAC roles for this user
-      const userRolesInfo = await getUserRolesAndPermissions(req.user.id, req.user.type);
-      const hasMatchingRole = userRolesInfo.roleNames.some(roleName =>
-        allowedRoles.includes(roleName.toUpperCase())
-      );
-
-      if (hasMatchingRole) {
         return next();
       }
 

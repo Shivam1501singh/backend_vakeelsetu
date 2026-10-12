@@ -7959,7 +7959,10 @@ User ──> UserRole ──> Role ──> RolePermission ──> Permission
 
 ---
 
-### 10. Assign Role to User
+### 10. Assign Role to Staff Account (Legacy Endpoint)
+> [!IMPORTANT]
+> **Staff Only**: Roles in this system are strictly for Admin Panel staff accounts (`ContentCreator`). Normal clients (`User`) and advocates (`Advocate`) cannot hold roles. This endpoint accepts only staff account IDs. Passing a client or advocate ID returns `400 Bad Request`. To assign roles directly upon creation, use `POST /api/admin/content-creators`.
+
 - **Method:** `POST`
 - **URL:** `/api/admin/users/:userId/roles`
 - **Authentication:** Bearer Token / Cookie (Admin / `roles:manage`)
@@ -7968,7 +7971,7 @@ User ──> UserRole ──> Role ──> RolePermission ──> Permission
 ```json
 {
   "roleName": "LEAD_USER",
-  "userType": "USER"
+  "userType": "CONTENT_CREATOR"
 }
 ```
 - **Response (200 OK):**
@@ -9019,7 +9022,7 @@ if (res.creator && res.creator.id) {
 ---
 
 #### Step 5: Assign Role `BLOG_EDITOR` to Staff
-Assigns the role `BLOG_EDITOR` to the newly created staff user using the RBAC assignment endpoint.
+Assigns the role `BLOG_EDITOR` to the newly created staff user using the RBAC assignment endpoint. Note: Roles can only be assigned to Admin Panel staff accounts (`ContentCreator`). Clients and advocates cannot have roles.
 
 - **Method:** `POST`
 - **URL:** `{{base_url}}/api/admin/users/{{staff_id}}/roles`
@@ -9291,3 +9294,627 @@ pm.test("Status code is 404 Not Found", function () {
 </body>
 </html>
 ```
+
+
+---
+
+## 26. Staff Accounts & Role Assignment (Admin Panel) — Postman Guide
+
+> [!IMPORTANT]
+> **Business Rules for RBAC & Staff Accounts:**
+> 1. **Staff Only:** Only accounts created from the Admin Panel (`ContentCreator` / staff accounts) can have RBAC roles. Normal clients (`User`) and advocates (`Advocate`) can NEVER get a role. They stay plain client/advocate accounts.
+> 2. **Flexible Active Roles:** The admin can assign any active role—seeded (`CONTENT_CREATOR`, `LEAD_USER`) or any custom role created through `/api/admin/roles`. One or more roles per staff account.
+> 3. **Inline Role Assignment:** Roles are assigned in the SAME API that creates the staff account: `POST /api/admin/content-creators`.
+> 4. **Role Modification:** The admin can later update/replace a staff account's full role set at `PUT /api/admin/content-creators/:id/roles`.
+> 5. **Client/Advocate Role Isolation:** Any legacy roles previously assigned to clients/advocates have zero effect at runtime and can be safely removed using the cleanup script (`npm run cleanup:non-staff-roles`).
+> 6. **Root Admin Omnipotence:** The main Admin (`ADMIN_USER_EMAIL` / `ADMIN_USER_PASSWORD`) maintains full global access (`*`) to everything.
+
+---
+
+### 26.1 Endpoint Reference
+
+| Method | Endpoint | Permission | Purpose |
+|---|---|---|---|
+| `POST` | `/api/admin/content-creators` | `content_creators:create` | Create a staff account with inline roles (defaults to `CONTENT_CREATOR` if no roles provided). |
+| `GET` | `/api/admin/content-creators` | `content_creators:view` | List all staff accounts with their assigned roles (optimized batch query, no N+1). |
+| `GET` | `/api/admin/content-creators/:id` | `content_creators:view` | Retrieve a single staff account's profile, assigned roles, and effective permissions. |
+| `PUT` | `/api/admin/content-creators/:id/roles` | `roles:manage` | Replace a staff account's full role set (requires at least one active role). |
+| `POST` | `/api/admin/users/:userId/roles` | `roles:manage` | Legacy assignment endpoint (now strictly works for staff account IDs only; rejects clients/advocates with 400). |
+| `DELETE` | `/api/admin/users/:userId/roles/:roleId` | `roles:manage` | Remove a specific assigned role from an account. |
+
+---
+
+### 26.2 Request & Response Samples
+
+#### 1. Create Staff Account with Specific Roles
+- **Endpoint:** `POST /api/admin/content-creators`
+- **Request Body:**
+```json
+{
+  "fullName": "Blog Editor One",
+  "email": "blog.editor@vakeelsetu.com",
+  "password": "Editor@12345",
+  "roleNames": ["BLOG_EDITOR"]
+}
+```
+- **Response (`201 Created`):**
+```json
+{
+  "success": true,
+  "message": "Staff account created successfully",
+  "creator": {
+    "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
+    "fullName": "Blog Editor One",
+    "email": "blog.editor@vakeelsetu.com",
+    "isActive": true,
+    "accountType": "CONTENT_CREATOR",
+    "roles": [
+      {
+        "id": "7649542a-d221-4f1b-87b6-19e34e56bc78",
+        "name": "BLOG_EDITOR",
+        "displayName": "Blog Editor"
+      }
+    ],
+    "permissions": [
+      "blogs:read",
+      "blogs:create",
+      "blogs:update",
+      "blogs:delete"
+    ],
+    "createdAt": "2026-10-12T05:40:00.000Z"
+  }
+}
+```
+
+#### 2. Create Staff Account with Default Role (No Roles Sent)
+- **Endpoint:** `POST /api/admin/content-creators`
+- **Request Body:**
+```json
+{
+  "fullName": "Standard Content Staff",
+  "email": "staff.default@vakeelsetu.com",
+  "password": "DefaultPass@123"
+}
+```
+- **Response (`201 Created`):**
+```json
+{
+  "success": true,
+  "message": "Staff account created successfully",
+  "creator": {
+    "id": "staff-uuid-2",
+    "fullName": "Standard Content Staff",
+    "email": "staff.default@vakeelsetu.com",
+    "isActive": true,
+    "accountType": "CONTENT_CREATOR",
+    "roles": [
+      {
+        "id": "role-uuid-cc",
+        "name": "CONTENT_CREATOR",
+        "displayName": "Content Creator"
+      }
+    ],
+    "permissions": [
+      "blogs:read", "blogs:create", "blogs:update", "blogs:delete",
+      "acts:read", "acts:create", "acts:update", "acts:delete",
+      "act_pdfs:upload", "act_pdfs:delete", "act_pdfs:sync",
+      "ipc:create", "ipc:update", "bns:create", "bns:update",
+      "guides:create", "guides:update", "guides:delete",
+      "updates:create", "updates:update", "updates:delete",
+      "user_rights:create", "user_rights:update", "user_rights:delete"
+    ],
+    "createdAt": "2026-10-12T05:41:00.000Z"
+  }
+}
+```
+
+#### 3. List Staff Accounts with Roles
+- **Endpoint:** `GET /api/admin/content-creators`
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "creators": [
+    {
+      "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
+      "fullName": "Blog Editor One",
+      "email": "blog.editor@vakeelsetu.com",
+      "isActive": true,
+      "roles": [
+        {
+          "id": "7649542a-d221-4f1b-87b6-19e34e56bc78",
+          "name": "BLOG_EDITOR",
+          "displayName": "Blog Editor",
+          "isActive": true
+        }
+      ],
+      "createdAt": "2026-10-12T05:40:00.000Z"
+    }
+  ]
+}
+```
+
+#### 4. Get Staff Account Details
+- **Endpoint:** `GET /api/admin/content-creators/:id`
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "creator": {
+    "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
+    "fullName": "Blog Editor One",
+    "email": "blog.editor@vakeelsetu.com",
+    "isActive": true,
+    "accountType": "CONTENT_CREATOR",
+    "roles": [
+      {
+        "id": "7649542a-d221-4f1b-87b6-19e34e56bc78",
+        "name": "BLOG_EDITOR",
+        "displayName": "Blog Editor",
+        "isActive": true
+      }
+    ],
+    "permissions": [
+      "blogs:read",
+      "blogs:create",
+      "blogs:update",
+      "blogs:delete"
+    ],
+    "createdAt": "2026-10-12T05:40:00.000Z",
+    "updatedAt": "2026-10-12T05:40:00.000Z"
+  }
+}
+```
+
+#### 5. Update Staff Account Roles
+- **Endpoint:** `PUT /api/admin/content-creators/:id/roles`
+- **Request Body:**
+```json
+{
+  "roleNames": ["BLOG_EDITOR", "LEAD_USER"]
+}
+```
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Staff roles updated successfully",
+  "creator": {
+    "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
+    "fullName": "Blog Editor One",
+    "email": "blog.editor@vakeelsetu.com",
+    "isActive": true,
+    "accountType": "CONTENT_CREATOR",
+    "roles": [
+      {
+        "id": "7649542a-d221-4f1b-87b6-19e34e56bc78",
+        "name": "BLOG_EDITOR",
+        "displayName": "Blog Editor",
+        "isActive": true
+      },
+      {
+        "id": "7990f52a-719b-490f-a463-b851b22268c8",
+        "name": "LEAD_USER",
+        "displayName": "Lead User",
+        "isActive": true
+      }
+    ],
+    "permissions": [
+      "blogs:read", "blogs:create", "blogs:update", "blogs:delete",
+      "users:view", "advocates:view", "feedback:view", "consultancy:view"
+    ],
+    "createdAt": "2026-10-12T05:40:00.000Z",
+    "updatedAt": "2026-10-12T05:45:00.000Z"
+  }
+}
+```
+
+---
+
+### 26.3 Error Responses Table
+
+| Case | Status | Message |
+|---|---|---|
+| Validation failure | `400 Bad Request` | Zod validation message |
+| Email = main admin email | `400 Bad Request` | `This email is reserved for the main admin account.` |
+| Duplicate staff email | `400 Bad Request` | `A staff account with this email already exists.` |
+| Invalid or inactive role | `400 Bad Request` | `One or more roles are invalid or inactive.` (with `invalidRoles: [...]`) |
+| Roles sent without `roles:manage` | `403 Forbidden` | `You need the roles:manage permission to assign roles.` |
+| Role assigned to a client or advocate | `400 Bad Request` | `Roles can only be assigned to Admin Panel (staff) accounts. Clients and advocates cannot have roles.` |
+| Staff account not found | `404 Not Found` | `Staff account not found.` |
+| PUT with no roles | `400 Bad Request` | `At least one role is required.` |
+| Reserved role name | `400 Bad Request` | `This role name is reserved.` |
+
+---
+
+### 26.4 Postman Environment Variables
+
+| Variable Name | Description | Example / Populated From |
+|---|---|---|
+| `base_url` | Base URL of the API server | `http://localhost:5000` |
+| `admin_email` | Primary Admin email | `admin@vakeelsetu.com` |
+| `admin_password` | Primary Admin password | `SuperSecretAdminPassword123` |
+| `admin_token` | JWT Token for Main Admin | Saved from Step 1 |
+| `role_id` | UUID of created custom role | Saved from Step 2 |
+| `staff_id` | UUID of created staff account | Saved from Step 3 |
+| `staff_token` | JWT Token for staff account | Saved from Step 9 |
+| `client_user_id` | UUID of a registered client (`User`) | Existing client ID |
+| `advocate_id` | UUID of a registered lawyer (`Advocate`) | Existing advocate ID |
+
+---
+
+### 26.5 Step-by-Step Postman Verification Flow
+
+#### Step 1: Main Admin Login
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/login`
+- **Headers:** `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "email": "{{admin_email}}",
+  "password": "{{admin_password}}"
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 200", function () {
+  pm.response.to.have.status(200);
+});
+const res = pm.response.json();
+if (res.token) {
+  pm.environment.set("admin_token", res.token);
+}
+```
+
+---
+
+#### Step 2: Create Role `BLOG_EDITOR`
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/roles`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "name": "BLOG_EDITOR",
+  "displayName": "Blog Editor",
+  "description": "Can manage blogs",
+  "permissionCodes": ["blogs:read", "blogs:create", "blogs:update", "blogs:delete"]
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 201 or 200 (if already exists)", function () {
+  pm.expect([200, 201]).to.include(pm.response.code);
+});
+const res = pm.response.json();
+if (res.role && res.role.id) {
+  pm.environment.set("role_id", res.role.id);
+}
+```
+
+---
+
+#### Step 3: Create Staff with Role `BLOG_EDITOR`
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/content-creators`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "fullName": "Blog Editor One",
+  "email": "blog.editor@vakeelsetu.com",
+  "password": "Editor@12345",
+  "roleNames": ["BLOG_EDITOR"]
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 201 Created", function () {
+  pm.response.to.have.status(201);
+});
+const res = pm.response.json();
+pm.test("Staff has BLOG_EDITOR role", function () {
+  pm.expect(res.creator.roles[0].name).to.eql("BLOG_EDITOR");
+});
+if (res.creator && res.creator.id) {
+  pm.environment.set("staff_id", res.creator.id);
+}
+```
+
+---
+
+#### Step 4: Create Staff with NO Roles (Defaults to `CONTENT_CREATOR`)
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/content-creators`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "fullName": "Default Role Staff",
+  "email": "default.staff@vakeelsetu.com",
+  "password": "DefaultPass@123"
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 201 Created", function () {
+  pm.response.to.have.status(201);
+});
+const res = pm.response.json();
+pm.test("Staff defaults to CONTENT_CREATOR role", function () {
+  pm.expect(res.creator.roles.some(r => r.name === "CONTENT_CREATOR")).to.be.true;
+});
+```
+
+---
+
+#### Step 5: Create Staff with Invalid Role (Expected: `400 Bad Request`)
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/content-creators`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "fullName": "Bad Role Staff",
+  "email": "bad.role@vakeelsetu.com",
+  "password": "Editor@12345",
+  "roleNames": ["DOES_NOT_EXIST"]
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 400 Bad Request", function () {
+  pm.response.to.have.status(400);
+});
+const res = pm.response.json();
+pm.test("Returns invalidRoles array containing DOES_NOT_EXIST", function () {
+  pm.expect(res.invalidRoles).to.include("DOES_NOT_EXIST");
+});
+```
+
+---
+
+#### Step 6: List Staff Accounts (Roles Visible)
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/content-creators`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 200 OK", function () {
+  pm.response.to.have.status(200);
+});
+const res = pm.response.json();
+pm.test("Creators list has roles array", function () {
+  pm.expect(res.creators[0]).to.have.property("roles");
+});
+```
+
+---
+
+#### Step 7: Get Staff Details
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/content-creators/{{staff_id}}`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 200 OK", function () {
+  pm.response.to.have.status(200);
+});
+const res = pm.response.json();
+pm.test("Creator details return roles and permissions", function () {
+  pm.expect(res.creator.roles).to.be.an("array");
+  pm.expect(res.creator.permissions).to.be.an("array");
+});
+```
+
+---
+
+#### Step 8: Update Staff Roles to `["BLOG_EDITOR", "LEAD_USER"]`
+- **Method:** `PUT`
+- **URL:** `{{base_url}}/api/admin/content-creators/{{staff_id}}/roles`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "roleNames": ["BLOG_EDITOR", "LEAD_USER"]
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 200 OK", function () {
+  pm.response.to.have.status(200);
+});
+const res = pm.response.json();
+pm.test("Staff now has both roles", function () {
+  const roleNames = res.creator.roles.map(r => r.name);
+  pm.expect(roleNames).to.include("BLOG_EDITOR");
+  pm.expect(roleNames).to.include("LEAD_USER");
+});
+```
+
+---
+
+#### Step 9: Staff Login
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/login`
+- **Headers:** `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "email": "blog.editor@vakeelsetu.com",
+  "password": "Editor@12345"
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 200 OK", function () {
+  pm.response.to.have.status(200);
+});
+const res = pm.response.json();
+pm.test("Staff login returns both roles", function () {
+  pm.expect(res.admin.roles).to.include("BLOG_EDITOR");
+  pm.expect(res.admin.roles).to.include("LEAD_USER");
+});
+if (res.token) {
+  pm.environment.set("staff_token", res.token);
+}
+```
+
+---
+
+#### Step 10: Staff Permission Enforcement Tests
+- **Sub-test A (Allowed):** `GET {{base_url}}/api/admin/users` with `Bearer {{staff_token}}` $ightarrow$ Returns `200 OK` (because `LEAD_USER` role grants `users:view`).
+- **Sub-test B (Forbidden):** `POST {{base_url}}/api/admin/ipc` with `Bearer {{staff_token}}` $ightarrow$ Returns `403 Forbidden` (`ipc:create` is not in `BLOG_EDITOR` or `LEAD_USER`).
+
+---
+
+#### Step 11: Assign Role to Client User (Expected: `400 Bad Request`)
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/users/{{client_user_id}}/roles`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "roleName": "LEAD_USER"
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 400 Bad Request", function () {
+  pm.response.to.have.status(400);
+});
+const res = pm.response.json();
+pm.test("Correct error message returned", function () {
+  pm.expect(res.message).to.eql("Roles can only be assigned to Admin Panel (staff) accounts. Clients and advocates cannot have roles.");
+});
+```
+
+---
+
+#### Step 12: Assign Role to Advocate User (Expected: `400 Bad Request`)
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/users/{{advocate_id}}/roles`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "roleName": "LEAD_USER"
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 400 Bad Request", function () {
+  pm.response.to.have.status(400);
+});
+const res = pm.response.json();
+pm.test("Correct error message returned", function () {
+  pm.expect(res.message).to.eql("Roles can only be assigned to Admin Panel (staff) accounts. Clients and advocates cannot have roles.");
+});
+```
+
+---
+
+#### Step 13: Client Details Verification
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/users/{{client_user_id}}`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 200 OK", function () {
+  pm.response.to.have.status(200);
+});
+const res = pm.response.json();
+pm.test("rolesAllowed is false for clients", function () {
+  pm.expect(res.user.rolesAllowed).to.be.false;
+});
+```
+
+---
+
+#### Step 14: Privilege Escalation Prevention (Staff Creating Staff with Roles)
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/content-creators`
+- **Headers:**
+  - `Authorization: Bearer {{staff_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "fullName": "Unauthorized Staff",
+  "email": "unauthorized@vakeelsetu.com",
+  "password": "Password@123",
+  "roleNames": ["LEAD_USER"]
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 403 Forbidden", function () {
+  pm.response.to.have.status(403);
+});
+const res = pm.response.json();
+pm.test("Rejection message indicates missing roles:manage permission", function () {
+  pm.expect(res.message).to.eql("You need the roles:manage permission to assign roles.");
+});
+```
+
+---
+
+#### Step 15: Create Role with Reserved Name (Expected: `400 Bad Request`)
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/roles`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "name": "ADVOCATE",
+  "displayName": "Advocate Role"
+}
+```
+- **Tests Script (Postman):**
+```javascript
+pm.test("Status code is 400 Bad Request", function () {
+  pm.response.to.have.status(400);
+});
+const res = pm.response.json();
+pm.test("Validation error indicates role name is reserved", function () {
+  pm.expect(JSON.stringify(res)).to.include("This role name is reserved.");
+});
+```
+
+---
+
+### 26.6 Non-Staff Role Cleanup Script Usage
+
+To identify and remove legacy roles mistakenly assigned to clients or advocates:
+
+1. **Dry Run (Read Only):**
+   ```bash
+   npm run cleanup:non-staff-roles
+   ```
+   Inspect the output table to review all detected non-staff assignments.
+
+2. **Apply Cleanup (Deletes invalid rows):**
+   ```bash
+   npm run cleanup:non-staff-roles -- --apply
+   ```
+   Deletes the records from the `UserRole` table.
