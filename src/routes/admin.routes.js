@@ -18,8 +18,10 @@ router.put('/content-creators/:id/roles', requireAuth, requirePermission('roles:
 // Advocate Management (Protected by fine-grained RBAC permissions; Admin has full access)
 router.get('/advocates/deletion-requests', requireAuth, requirePermission('advocates:view'), generalLimiter, adminController.listPendingAdvocateDeletionRequests);
 router.get('/advocates/pending', requireAuth, requirePermission('advocates:view'), generalLimiter, adminController.listPendingAdvocates);
+router.get('/advocates/rejected', requireAuth, requirePermission('advocates:view'), generalLimiter, adminController.listRejectedAdvocates);
 router.get('/advocates', requireAuth, requirePermission('advocates:view'), generalLimiter, adminController.listAdvocates);
 router.get('/advocates/:advocateId', requireAuth, requirePermission('advocates:view'), generalLimiter, adminController.getAdvocateReviewProfile);
+router.patch('/advocates/:advocateId/profile', requireAuth, requirePermission('advocates:edit'), generalLimiter, adminController.updateAdvocateProfileByAdmin);
 router.patch('/advocates/:advocateId/approve', requireAuth, requirePermission('advocates:approve'), generalLimiter, adminController.approveAdvocate);
 router.patch('/advocates/:advocateId/reject', requireAuth, requirePermission('advocates:reject'), generalLimiter, adminController.rejectAdvocate);
 router.patch('/advocates/:advocateId/status', requireAuth, requirePermission('advocates:update_status'), generalLimiter, adminController.updateAdvocateStatus);

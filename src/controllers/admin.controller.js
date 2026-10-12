@@ -8,7 +8,8 @@ import {
   adminUpdateAdvocateCallAvailabilitySchema,
   adminUpdateAdvocateStatusSchema,
   createStaffAccountSchema,
-  updateStaffRolesSchema
+  updateStaffRolesSchema,
+  adminAdvocateProfileUpdateSchema
 } from '../validators/admin.validator.js';
 import * as blogValidator from '../validators/blog.validator.js';
 import { getCurrentUserProfile } from '../services/auth.service.js';
@@ -582,7 +583,22 @@ export const updateStaffRoles = async (req, res, next) => {
  */
 export const listAdvocates = async (req, res, next) => {
   try {
+    const { approvalStatus } = req.query;
+    const where = {};
+
+    if (approvalStatus !== undefined) {
+      const normalizedStatus = String(approvalStatus).trim().toUpperCase();
+      if (!['PENDING', 'APPROVED', 'REJECTED'].includes(normalizedStatus)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid approvalStatus. Allowed: PENDING, APPROVED, REJECTED'
+        });
+      }
+      where.approvalStatus = normalizedStatus;
+    }
+
     const advocates = await prisma.advocate.findMany({
+      where,
       orderBy: { createdAt: 'desc' },
       include: {
         _count: {
@@ -604,6 +620,7 @@ export const listAdvocates = async (req, res, next) => {
       rejectionReason: adv.rejectionReason || null,
       submittedForApprovalAt: adv.submittedForApprovalAt || null,
       approvedAt: adv.approvedAt || null,
+      rejectedAt: adv.rejectedAt || null,
       likeCount: adv._count?.likes ?? 0,
       lawType: adv.bestPracticeArea || (adv.practiceAreas && adv.practiceAreas.length > 0 ? adv.practiceAreas[0] : null),
       barCouncilId: adv.barCouncilId,
@@ -670,6 +687,102 @@ export const listPendingAdvocates = async (req, res, next) => {
 };
 
 /**
+ * Shared formatter for advocate review / detail responses
+ * Ensures passwordHash and aadhaarNumber are never leaked
+ */
+export const formatAdvocateReviewData = (advocate) => {
+  if (!advocate) return null;
+  const { passwordHash, aadhaarNumber, ...safeAdvocate } = advocate;
+
+  return {
+    ...safeAdvocate,
+    name: advocate.fullName,
+    barId: advocate.barCouncilId,
+    profileImage: advocate.profilePhotoUrl,
+    lawType: advocate.bestPracticeArea || (advocate.practiceAreas && advocate.practiceAreas.length > 0 ? advocate.practiceAreas[0] : null),
+    experience: advocate.experienceYears,
+    accountStatus: advocate.status,
+    callAvailability: advocate.callAvailability ?? false,
+    likeCount: advocate._count?.likes ?? 0
+  };
+};
+
+/**
+ * List Rejected Advocates for Admin Management (ADMIN / advocates:view)
+ * GET /api/admin/advocates/rejected
+ */
+export const listRejectedAdvocates = async (req, res, next) => {
+  try {
+    const { search } = req.query;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const skip = (page - 1) * limit;
+
+    const where = { approvalStatus: 'REJECTED' };
+
+    if (search && search.trim()) {
+      const q = search.trim();
+      where.OR = [
+        { fullName: { contains: q, mode: 'insensitive' } },
+        { email: { contains: q, mode: 'insensitive' } },
+        { phone: { contains: q, mode: 'insensitive' } },
+        { barCouncilId: { contains: q, mode: 'insensitive' } }
+      ];
+    }
+
+    const [total, advocates] = await Promise.all([
+      prisma.advocate.count({ where }),
+      prisma.advocate.findMany({
+        where,
+        orderBy: { rejectedAt: 'desc' },
+        skip,
+        take: limit
+      })
+    ]);
+
+    const data = advocates.map(adv => ({
+      id: adv.id,
+      name: adv.fullName,
+      fullName: adv.fullName,
+      email: adv.email,
+      phone: adv.phone,
+      barId: adv.barCouncilId,
+      barCouncilId: adv.barCouncilId,
+      profileImage: adv.profilePhotoUrl,
+      profilePhotoUrl: adv.profilePhotoUrl,
+      lawType: adv.bestPracticeArea || (adv.practiceAreas && adv.practiceAreas.length > 0 ? adv.practiceAreas[0] : null),
+      bestPracticeArea: adv.bestPracticeArea,
+      experience: adv.experienceYears,
+      experienceYears: adv.experienceYears,
+      city: adv.city,
+      state: adv.state,
+      pincode: adv.pincode,
+      approvalStatus: adv.approvalStatus,
+      rejectionReason: adv.rejectionReason,
+      rejectedAt: adv.rejectedAt,
+      rejectedById: adv.rejectedById,
+      submittedForApprovalAt: adv.submittedForApprovalAt,
+      accountStatus: adv.status,
+      callAvailability: adv.callAvailability ?? false,
+      createdAt: adv.createdAt
+    }));
+
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Review Advocate Profile (ADMIN only)
  * GET /api/admin/advocates/:advocateId
  */
@@ -693,25 +806,175 @@ export const getAdvocateReviewProfile = async (req, res, next) => {
       });
     }
 
-    // Exclude passwordHash and sensitive authentication secrets
-    const { passwordHash, aadhaarNumber, ...safeAdvocate } = advocate;
-
-    const advocateData = {
-      ...safeAdvocate,
-      name: advocate.fullName,
-      barId: advocate.barCouncilId,
-      profileImage: advocate.profilePhotoUrl,
-      lawType: advocate.bestPracticeArea || (advocate.practiceAreas && advocate.practiceAreas.length > 0 ? advocate.practiceAreas[0] : null),
-      experience: advocate.experienceYears,
-      accountStatus: advocate.status,
-      callAvailability: advocate.callAvailability ?? false,
-      likeCount: advocate._count?.likes ?? 0
-    };
+    const advocateData = formatAdvocateReviewData(advocate);
 
     return res.status(200).json({
       success: true,
       data: advocateData,
       advocate: advocateData
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Update Advocate Profile by Admin (ADMIN / advocates:edit)
+ * PATCH /api/admin/advocates/:advocateId/profile
+ */
+export const updateAdvocateProfileByAdmin = async (req, res, next) => {
+  try {
+    const { advocateId } = req.params;
+    const validated = adminAdvocateProfileUpdateSchema.parse(req.body);
+
+    const advocate = await prisma.advocate.findUnique({
+      where: { id: advocateId },
+      include: {
+        _count: {
+          select: { likes: true, reviews: true }
+        }
+      }
+    });
+
+    if (!advocate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Advocate not found'
+      });
+    }
+
+    // Check Bar Council ID uniqueness if provided and differs from current
+    if (validated.barCouncilId !== undefined && validated.barCouncilId !== advocate.barCouncilId) {
+      const duplicate = await prisma.advocate.findFirst({
+        where: {
+          barCouncilId: validated.barCouncilId,
+          NOT: { id: advocateId }
+        }
+      });
+      if (duplicate) {
+        return res.status(400).json({
+          success: false,
+          message: 'Bar Council ID is already registered to another advocate.'
+        });
+      }
+    }
+
+    // Build updateData using alias mapping
+    const updateData = {};
+
+    // Admin-editable identity fields
+    if (validated.fullName !== undefined) updateData.fullName = validated.fullName;
+    if (validated.gender !== undefined) updateData.gender = validated.gender;
+    if (validated.barCouncilId !== undefined) updateData.barCouncilId = validated.barCouncilId;
+
+    // Direct professional fields
+    if (validated.casesHandled !== undefined) updateData.casesHandled = validated.casesHandled;
+    if (validated.practiceAreas !== undefined) updateData.practiceAreas = validated.practiceAreas;
+    if (validated.bestPracticeArea !== undefined) updateData.bestPracticeArea = validated.bestPracticeArea;
+    if (validated.topCourtPractised !== undefined) updateData.topCourtPractised = validated.topCourtPractised;
+    if (validated.courtPractice !== undefined) updateData.courtPractice = validated.courtPractice;
+    if (validated.completeAddress !== undefined) updateData.completeAddress = validated.completeAddress;
+    if (validated.offlineVisitingFee !== undefined) updateData.offlineVisitingFee = validated.offlineVisitingFee;
+    if (validated.state !== undefined) updateData.state = validated.state;
+    if (validated.city !== undefined) updateData.city = validated.city;
+    if (validated.pincode !== undefined) updateData.pincode = validated.pincode;
+
+    // Aliases
+    if (validated.bio !== undefined) {
+      updateData.about = validated.bio;
+    } else if (validated.about !== undefined) {
+      updateData.about = validated.about;
+    }
+
+    if (validated.experience !== undefined) {
+      updateData.experienceYears = validated.experience;
+    } else if (validated.experienceYears !== undefined) {
+      updateData.experienceYears = validated.experienceYears;
+    }
+
+    if (validated.videoChargePerMinute !== undefined) {
+      updateData.videoCallChargePerMinute = validated.videoChargePerMinute;
+    } else if (validated.videoCallChargePerMinute !== undefined) {
+      updateData.videoCallChargePerMinute = validated.videoCallChargePerMinute;
+    }
+
+    if (validated.voiceChargePerMinute !== undefined) {
+      updateData.voiceCallChargePerMinute = validated.voiceChargePerMinute;
+    } else if (validated.voiceCallChargePerMinute !== undefined) {
+      updateData.voiceCallChargePerMinute = validated.voiceCallChargePerMinute;
+    }
+
+    if (validated.languages !== undefined) {
+      updateData.languagesSpoken = validated.languages;
+    } else if (validated.languagesSpoken !== undefined) {
+      updateData.languagesSpoken = validated.languagesSpoken;
+    }
+
+    // Compute changedFields
+    const changedFields = [];
+    const decimalFields = ['videoCallChargePerMinute', 'voiceCallChargePerMinute', 'offlineVisitingFee'];
+    const arrayFields = ['languagesSpoken', 'courtPractice', 'practiceAreas'];
+
+    for (const key of Object.keys(updateData)) {
+      if (decimalFields.includes(key)) {
+        const oldNum = advocate[key] !== null && advocate[key] !== undefined ? Number(advocate[key]) : null;
+        const newNum = updateData[key] !== null && updateData[key] !== undefined ? Number(updateData[key]) : null;
+        if (oldNum !== newNum) {
+          changedFields.push({ field: key, oldValue: oldNum, newValue: newNum });
+        }
+      } else if (arrayFields.includes(key)) {
+        const oldArr = advocate[key] || [];
+        const newArr = updateData[key] || [];
+        if (JSON.stringify(oldArr) !== JSON.stringify(newArr)) {
+          changedFields.push({ field: key, oldValue: oldArr, newValue: newArr });
+        }
+      } else {
+        const oldVal = advocate[key];
+        const newVal = updateData[key];
+        if (oldVal !== newVal) {
+          changedFields.push({ field: key, oldValue: oldVal ?? null, newValue: newVal ?? null });
+        }
+      }
+    }
+
+    // If nothing changed, do not write to DB
+    if (changedFields.length === 0) {
+      const advocateData = formatAdvocateReviewData(advocate);
+      return res.status(200).json({
+        success: true,
+        message: 'No changes detected.',
+        data: advocateData,
+        advocate: advocateData,
+        changedFields: []
+      });
+    }
+
+    // Execute update while strictly preserving all approval/status fields
+    const updatedAdvocate = await prisma.advocate.update({
+      where: { id: advocateId },
+      data: updateData,
+      include: {
+        _count: {
+          select: { likes: true, reviews: true }
+        }
+      }
+    });
+
+    console.log('[ADMIN ADVOCATE EDIT]', {
+      advocateId,
+      editedBy: req.user?.id,
+      editorType: req.user?.type,
+      fields: changedFields.map(c => c.field)
+    });
+
+    const advocateData = formatAdvocateReviewData(updatedAdvocate);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Advocate profile updated successfully by admin',
+      data: advocateData,
+      advocate: advocateData,
+      changedFields
     });
   } catch (error) {
     next(error);

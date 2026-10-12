@@ -1,5 +1,11 @@
 # Frontend Integration Guide & API Reference
 
+> [!IMPORTANT]
+> **Admin Panel & RBAC Architecture Updates (Breaking Changes)**:
+> - All back-office routes live exclusively under `/api/admin/*` with unified authentication via `POST /api/admin/login` (see **Section 25**).
+> - RBAC roles are strictly isolated to Admin Panel staff (`ContentCreator`) accounts with inline role assignment on creation (see **Section 26**).
+> - Admin advocate profile editing (`PATCH /api/admin/advocates/:id/profile`) and rejected profiles queue (`GET /api/admin/advocates/rejected`) are documented in **Section 27**.
+
 This document serves as a complete integration guide for frontend developers to connect their React/Vite (or any frontend client) application to the backend authentication services. 
 
 It covers both the **User** and the upgraded **Advocate** registration and login flows, including API specifications, validation requirements, and frontend integration code snippets.
@@ -2184,7 +2190,7 @@ This feature adds a third role (`CONTENT_CREATOR`) to the application and introd
 ### 12.2 API Reference
 
 #### 1. Content Creator Login (REMOVED)
-> **REMOVED**: `POST /api/admin/login` has been **removed** (returns 404). All back-office authentication is now unified under `POST /api/admin/login` for both Admin and Content Creator staff accounts. See Section 13.4 and Section 25 for details.
+> **REMOVED**: `POST /api/content-creator/login` has been **removed** (returns 404). All back-office authentication is now unified under `POST /api/admin/login` for both Admin and Content Creator staff accounts. See Section 13.4 and Section 25 for details.
 
 #### 2. Create Blog
 - **Endpoint:** `POST /api/admin/blogs`
@@ -2474,12 +2480,12 @@ The system supports four distinct roles:
 
 ---
 
-### 13.2 Default Admin Credentials & Seeding
+### 13.2 Admin Credentials & Environment Configuration
 
-The system automatically seeds an idempotent Admin account:
-* **Email:** `it2@techvunex.in`
-* **Password:** `123456` *(Stored as a bcrypt password hash, never plain text)*
-* **Role:** `ADMIN`
+The primary System Administrator account authenticates via environment variables configured in `.env`:
+* **Email Variable:** `ADMIN_USER_EMAIL` (e.g. `shivam.alka03@gmail.com`)
+* **Password Variable:** `ADMIN_USER_PASSWORD`
+* **Role:** `ADMIN` (unrestricted system bypass for all permissions)
 
 ---
 
@@ -2499,6 +2505,8 @@ The system automatically seeds an idempotent Admin account:
 ---
 
 ### 13.4 Admin API Endpoints
+
+> **Advocate Profile Editing & Rejected Queue:** For full documentation on editing advocate profiles (`PATCH /api/admin/advocates/:advocateId/profile`) and viewing rejected profiles (`GET /api/admin/advocates/rejected`), see **Section 27**.
 
 #### 1. Unified Admin & Staff Login
 * **Endpoint:** `POST /api/admin/login`
@@ -2532,16 +2540,15 @@ The system automatically seeds an idempotent Admin account:
   ```json
   {
     "success": true,
-    "message": "Content Creator login successful",
+    "message": "Admin login successful",
     "token": "eyJhbGciOiJIUzI1Ni...",
     "admin": {
       "id": "creator-uuid",
       "email": "creator@vakeelsetu.com",
       "fullName": "Staff Writer",
-      "role": "CONTENT_CREATOR",
       "accountType": "CONTENT_CREATOR",
       "roles": ["CONTENT_CREATOR"],
-      "permissions": ["blogs:*", "guides:*", "updates:*"]
+      "permissions": ["blogs:read", "blogs:create", "blogs:update", "blogs:delete", "acts:read", "acts:create", "acts:update", "acts:delete", "act_pdfs:upload", "act_pdfs:delete", "act_pdfs:sync", "ipc:create", "ipc:update", "bns:create", "bns:update", "guides:create", "guides:update", "guides:delete", "updates:create", "updates:update", "updates:delete", "user_rights:create", "user_rights:update", "user_rights:delete"]
     }
   }
   ```
@@ -2550,54 +2557,73 @@ The system automatically seeds an idempotent Admin account:
   * `400 Bad Request`: `{"success": false, "message": "Validation error..."}`
   * `401 Unauthorized`: `{"success": false, "message": "Invalid email or password."}`
 
-#### 2. Create Content Creator Account
+#### 2. Create Content Creator Staff Account
 * **Endpoint:** `POST /api/admin/content-creators`
-* **Authentication:** `ADMIN` required (`requireAuth`, `requireRole('ADMIN')`)
+* **Authentication:** `ADMIN` or staff with `content_creators:create` permission (assigning roles requires `roles:manage`)
+* **Pointer:** See **Section 26** for complete RBAC staff creation specification and test flow.
 * **Request Body:**
   ```json
   {
-    "name": "Content Creator Name",
+    "fullName": "Content Creator Name",
     "email": "creator@example.com",
-    "password": "securePassword",
-    "bio": "Short bio about the content creator.",
-    "image": "https://example.com/image.jpg"
+    "password": "Password@123",
+    "roleNames": ["CONTENT_CREATOR"]
   }
   ```
+  *(Accepts `fullName` or `name`. If `roleNames` and `roleIds` are omitted, defaults automatically to `["CONTENT_CREATOR"]`)*.
 * **Response (201 Created):**
   ```json
   {
     "success": true,
-    "message": "Content Creator account created successfully",
-    "contentCreator": {
+    "message": "Staff account created successfully",
+    "creator": {
       "id": "creator-uuid",
       "name": "Content Creator Name",
       "fullName": "Content Creator Name",
       "email": "creator@example.com",
-      "image": "https://example.com/image.jpg",
-      "bio": "Short bio about the content creator.",
+      "isActive": true,
+      "accountType": "CONTENT_CREATOR",
       "role": "CONTENT_CREATOR",
-      "createdAt": "2026-09-01T07:48:51.138Z"
+      "roles": ["CONTENT_CREATOR"],
+      "roleDetails": [
+        {
+          "id": "role-uuid",
+          "name": "CONTENT_CREATOR",
+          "displayName": "Content Creator"
+        }
+      ],
+      "permissions": ["blogs:read", "blogs:create", "..."],
+      "createdAt": "2026-10-12T06:00:00.000Z"
     }
   }
   ```
-  *(Password/passwordHash is NEVER returned in the response. Creating a duplicate email returns `409 Conflict`).*
+  *(Returns `400 Bad Request` if email is registered to main admin or another staff member, or if roles are invalid; returns `403 Forbidden` if staff caller lacks `roles:manage`)*.
 
-#### 3. List Content Creators
+#### 3. List Content Creator Staff Accounts
 * **Endpoint:** `GET /api/admin/content-creators`
-* **Authentication:** `ADMIN` required
+* **Authentication:** `ADMIN` or staff with `content_creators:view` permission
+* **Pointer:** See **Section 26** for staff details (`GET /api/admin/content-creators/:id`) and role updates (`PUT /api/admin/content-creators/:id/roles`).
 * **Response (200 OK):**
   ```json
   {
     "success": true,
-    "contentCreators": [
+    "creators": [
       {
         "id": "creator-uuid",
         "name": "Techvunex Legal Content Team",
         "fullName": "Techvunex Legal Content Team",
         "email": "trainee6@techvunex.in",
-        "image": "https://...",
-        "bio": "Legal content creator...",
+        "isActive": true,
         "role": "CONTENT_CREATOR",
+        "roles": ["CONTENT_CREATOR"],
+        "roleDetails": [
+          {
+            "id": "role-uuid",
+            "name": "CONTENT_CREATOR",
+            "displayName": "Content Creator",
+            "isActive": true
+          }
+        ],
         "createdAt": "2026-08-01T00:00:00.000Z"
       }
     ]
@@ -2677,6 +2703,8 @@ The system automatically seeds an idempotent Admin account:
 
 ## 14. ADVOCATE PROFILE APPROVAL WORKFLOW
 
+> **Admin Profile Corrections & Rejected Queue:** The admin panel supports direct profile corrections on pending, rejected, or approved profiles (`PATCH /api/admin/advocates/:advocateId/profile`) and dedicated rejected queue inspection (`GET /api/admin/advocates/rejected`). See **Section 27** for the complete Postman workflow and field specifications.
+
 This section documents the Advocate profile approval flow introduced between registration/profile completion and public visibility/booking.
 
 ### 14.1 Status & Visibility Rules Matrix
@@ -2738,6 +2766,16 @@ REJECTED
 
 #### 2. Admin View Pending Advocates Queue
 * **Endpoint:** `GET /api/admin/advocates/pending`
+
+#### 2b. Admin View Rejected Advocates Queue
+* **Endpoint:** `GET /api/admin/advocates/rejected`
+* **Authentication:** `ADMIN` or staff with `advocates:view`
+* **Description:** Lists all rejected advocate profiles with rejection reason, rejection date, and submitted timestamp. See Section 27 for full parameters.
+
+#### 2c. Admin Edit Advocate Profile Data
+* **Endpoint:** `PATCH /api/admin/advocates/:advocateId/profile`
+* **Authentication:** `ADMIN` or staff with `advocates:edit`
+* **Description:** Allows admin to correct profile data (experience, practice areas, bio, name, bar council ID) without altering approval status. See Section 27 for full parameters.
 * **Authentication:** `ADMIN` required (`requireAuth`, `requireRole('ADMIN')`)
 * **Response (200 OK):**
   ```json
@@ -3060,10 +3098,10 @@ All Advocate listing and public profile endpoints (`GET /api/advocates`, `GET /a
    - Verify the response contains `likeCount`, `isLiked`, `team`, and all existing Advocate fields.
 3. **Like Advocate**
    - Call `POST /api/advocates/:advocateId/like` as User A.
-   - Then fetch `GET /api/advocates/:advocateId` $\rightarrow$ Verify `isLiked: true` and `likeCount` has increased by 1.
+   - Then fetch `GET /api/advocates/:advocateId` → Verify `isLiked: true` and `likeCount` has increased by 1.
 4. **Unlike Advocate**
    - Call `DELETE /api/advocates/:advocateId/like` as User A.
-   - Then fetch `GET /api/advocates/:advocateId` $\rightarrow$ Verify `isLiked: false` and `likeCount` has decreased.
+   - Then fetch `GET /api/advocates/:advocateId` → Verify `isLiked: false` and `likeCount` has decreased.
 5. **Create Team Mate**
    - Login as Advocate A.
    - Search Advocate B by Name or BAR ID (`GET /api/advocates/search?query=...`).
@@ -3074,14 +3112,14 @@ All Advocate listing and public profile endpoints (`GET /api/advocates`, `GET /a
    - Verify `team` array contains Advocate B.
 7. **Verify Pending Team Requests Are Hidden**
    - Create a new Team Request from Advocate A to Advocate C, but do NOT complete OTP verification.
-   - Fetch Advocate A's profile as a Normal User $\rightarrow$ Verify pending Advocate C does NOT appear in `team`.
+   - Fetch Advocate A's profile as a Normal User → Verify pending Advocate C does NOT appear in `team`.
 8. **Verify Blocked Team Member Rule**
    - Admin changes a team member's status to `BLOCKED`.
-   - Fetch Advocate profile as a Normal User $\rightarrow$ Verify the blocked Advocate is excluded from `team`.
+   - Fetch Advocate profile as a Normal User → Verify the blocked Advocate is excluded from `team`.
 9. **Verify Multiple Users' Likes**
    - Login as User B and like the same Advocate.
-   - Fetch profile as User B $\rightarrow$ Verify `isLiked: true` and `likeCount` reflects both likes.
-   - Switch back to User A $\rightarrow$ Verify `isLiked` is calculated per authenticated User, not globally stored.
+   - Fetch profile as User B → Verify `isLiked: true` and `likeCount` reflects both likes.
+   - Switch back to User A → Verify `isLiked` is calculated per authenticated User, not globally stored.
 
 ---
 
@@ -7052,7 +7090,7 @@ GET /api/acts/00000000-0000-0000-0000-000000000000/search?q=property
 
 ### Content Creator Write Tests
 1. **Login as Content Creator:**
-   - `POST /api/admin/login` or `POST /api/auth/blog/login` with `{"email": "trainee6@techvunex.in", "password": "1234"}`.
+   - `POST /api/admin/login` with `{"email": "trainee6@techvunex.in", "password": "1234"}`.
    - Save the returned `token`.
 2. **Create Bearer Act Category:**
    - `POST /api/admin/bearer-acts` with `type: "BEARER_ACT", operation: "CREATE", data: { "name": "Custom Law Category" }`.
@@ -8104,7 +8142,7 @@ User ──> UserRole ──> Role ──> RolePermission ──> Permission
 
 The platform provides full parity of content management operations to the **System Administrator (`ADMIN`)**. The Admin can perform all create/write, update, and delete actions across the entire legal hierarchy, statutory modules, articles, and citizen legal guidance systems that were previously dedicated to the `CONTENT_CREATOR` role.
 
-The authorization layer reuses the existing Content Creator endpoints with extended role permissions (`ADMIN` or `CONTENT_CREATOR`), guaranteeing that no duplicate business logic exists and that existing Content Creator flows remain completely backward-compatible.
+All content management endpoints now live under the unified `/api/admin/*` route prefix with fine-grained RBAC permissions (see **Section 25** for migration mappings and Postman workflows).
 
 ### Role Authorization Matrix
 
@@ -8768,28 +8806,28 @@ All back-office routes now live exclusively under `/api/admin/*`. "Content Creat
 | Category | Operation | HTTP Method | Old Route | New Route | Permissions Required |
 |---|---|---|---|---|---|
 | **Auth** | Unified Admin / Staff Login | `POST` | `/api/content-creator/login` *(removed, returns 404)* | `/api/admin/login` | None (Public login endpoint) |
-| **Blogs** | Create Blog | `POST` | `/api/blogs` | `/api/admin/blogs` | `blogs:create` or `blogs:*` / Admin |
-| **Blogs** | Update Blog | `PUT` | `/api/blogs/:id` | `/api/admin/blogs/:id` | `blogs:update` or `blogs:*` / Admin |
-| **Blogs** | Delete Blog | `DELETE` | `/api/blogs/:id` | `/api/admin/blogs/:id` | `blogs:delete` or `blogs:*` / Admin |
-| **IPC** | Create IPC Section | `POST` | `/api/content-creator/ipc` | `/api/admin/ipc` | `ipc:create` or `ipc:*` / Admin |
-| **IPC** | Update IPC Section | `PATCH` | `/api/content-creator/ipc/:ipcId` | `/api/admin/ipc/:ipcId` | `ipc:update` or `ipc:*` / Admin |
-| **BNS** | Create BNS Section | `POST` | `/api/content-creator/bns` | `/api/admin/bns` | `bns:create` or `bns:*` / Admin |
-| **BNS** | Update BNS Section | `PATCH` | `/api/content-creator/bns/:bnsId` | `/api/admin/bns/:bnsId` | `bns:update` or `bns:*` / Admin |
-| **Guides** | Create Guide | `POST` | `/api/content-creator/guides` | `/api/admin/guides` | `guides:create` or `guides:*` / Admin |
-| **Guides** | Update Guide | `PATCH` | `/api/content-creator/guides/:id` | `/api/admin/guides/:id` | `guides:update` or `guides:*` / Admin |
-| **Guides** | Delete Guide | `DELETE` | `/api/content-creator/guides/:id` | `/api/admin/guides/:id` | `guides:delete` or `guides:*` / Admin |
-| **Updates** | Create Update | `POST` | `/api/content-creator/updates` | `/api/admin/updates` | `updates:create` or `updates:*` / Admin |
-| **Updates** | Update Update | `PATCH` | `/api/content-creator/updates/:id` | `/api/admin/updates/:id` | `updates:update` or `updates:*` / Admin |
-| **Updates** | Delete Update | `DELETE` | `/api/content-creator/updates/:id` | `/api/admin/updates/:id` | `updates:delete` or `updates:*` / Admin |
-| **User Rights** | Create User Right | `POST` | `/api/content-creator/user-rights` | `/api/admin/user-rights` | `user_rights:create` or `user_rights:*` / Admin |
-| **User Rights** | Update User Right | `PATCH` | `/api/content-creator/user-rights/:id` | `/api/admin/user-rights/:id` | `user_rights:update` or `user_rights:*` / Admin |
-| **User Rights** | Delete User Right | `DELETE` | `/api/content-creator/user-rights/:id` | `/api/admin/user-rights/:id` | `user_rights:delete` or `user_rights:*` / Admin |
-| **Bearer Acts** | Hierarchy Operations | `POST` | `/api/content-creator/bearer-acts` | `/api/admin/bearer-acts` | `bearer_acts:create/update/delete` / Admin |
-| **Act PDFs** | Upload Multipart PDF | `POST` | `/api/content-creator/acts/:actId/pdfs` | `/api/admin/acts/:actId/pdfs` | `acts:create` or `acts:*` / Admin |
-| **Act PDFs** | Upload Multipart PDF | `POST` | `/api/content-creator/acts/pdfs` | `/api/admin/acts/pdfs` | `acts:create` or `acts:*` / Admin |
-| **Act PDFs** | Attach Predefined PDF | `POST` | `/api/content-creator/acts/:actId/predefined-pdfs` | `/api/admin/acts/:actId/predefined-pdfs` | `acts:create` or `acts:*` / Admin |
-| **Act PDFs** | Sync Predefined PDFs | `POST` | `/api/content-creator/acts/predefined-pdfs/sync` | `/api/admin/acts/predefined-pdfs/sync` | `acts:create` or `acts:*` / Admin |
-| **Act PDFs** | Delete PDF Attachment | `DELETE` | `/api/content-creator/acts/pdfs/:id` | `/api/admin/acts/pdfs/:id` | `acts:delete` or `acts:*` / Admin |
+| **Blogs** | Create Blog | `POST` | `/api/blogs` | `/api/admin/blogs` | `blogs:create` / Admin |
+| **Blogs** | Update Blog | `PUT` | `/api/blogs/:id` | `/api/admin/blogs/:id` | `blogs:update` / Admin |
+| **Blogs** | Delete Blog | `DELETE` | `/api/blogs/:id` | `/api/admin/blogs/:id` | `blogs:delete` / Admin |
+| **IPC** | Create IPC Section | `POST` | `/api/content-creator/ipc` | `/api/admin/ipc` | `ipc:create` / Admin |
+| **IPC** | Update IPC Section | `PATCH` | `/api/content-creator/ipc/:ipcId` | `/api/admin/ipc/:ipcId` | `ipc:update` / Admin |
+| **BNS** | Create BNS Section | `POST` | `/api/content-creator/bns` | `/api/admin/bns` | `bns:create` / Admin |
+| **BNS** | Update BNS Section | `PATCH` | `/api/content-creator/bns/:bnsId` | `/api/admin/bns/:bnsId` | `bns:update` / Admin |
+| **Guides** | Create Guide | `POST` | `/api/content-creator/guides` | `/api/admin/guides` | `guides:create` / Admin |
+| **Guides** | Update Guide | `PATCH` | `/api/content-creator/guides/:id` | `/api/admin/guides/:id` | `guides:update` / Admin |
+| **Guides** | Delete Guide | `DELETE` | `/api/content-creator/guides/:id` | `/api/admin/guides/:id` | `guides:delete` / Admin |
+| **Updates** | Create Update | `POST` | `/api/content-creator/updates` | `/api/admin/updates` | `updates:create` / Admin |
+| **Updates** | Update Update | `PATCH` | `/api/content-creator/updates/:id` | `/api/admin/updates/:id` | `updates:update` / Admin |
+| **Updates** | Delete Update | `DELETE` | `/api/content-creator/updates/:id` | `/api/admin/updates/:id` | `updates:delete` / Admin |
+| **User Rights** | Create User Right | `POST` | `/api/content-creator/user-rights` | `/api/admin/user-rights` | `user_rights:create` / Admin |
+| **User Rights** | Update User Right | `PATCH` | `/api/content-creator/user-rights/:id` | `/api/admin/user-rights/:id` | `user_rights:update` / Admin |
+| **User Rights** | Delete User Right | `DELETE` | `/api/content-creator/user-rights/:id` | `/api/admin/user-rights/:id` | `user_rights:delete` / Admin |
+| **Bearer Acts** | Hierarchy Operations | `POST` | `/api/content-creator/bearer-acts` | `/api/admin/bearer-acts` | `acts:create` or `acts:update` / Admin |
+| **Act PDFs** | Upload Multipart PDF | `POST` | `/api/content-creator/acts/:actId/pdfs` | `/api/admin/acts/:actId/pdfs` | `act_pdfs:upload` / Admin |
+| **Act PDFs** | Upload Multipart PDF | `POST` | `/api/content-creator/acts/pdfs` | `/api/admin/acts/pdfs` | `act_pdfs:upload` / Admin |
+| **Act PDFs** | Attach Predefined PDF | `POST` | `/api/content-creator/acts/:actId/predefined-pdfs` | `/api/admin/acts/:actId/predefined-pdfs` | `act_pdfs:upload` / Admin |
+| **Act PDFs** | Sync Predefined PDFs | `POST` | `/api/content-creator/acts/predefined-pdfs/sync` | `/api/admin/acts/predefined-pdfs/sync` | `act_pdfs:sync` / Admin |
+| **Act PDFs** | Delete PDF Attachment | `DELETE` | `/api/content-creator/acts/pdfs/:id` | `/api/admin/acts/pdfs/:id` | `act_pdfs:delete` / Admin |
 | **Public Reading** | Public GET endpoints | `GET` | `/api/blogs`, `/api/ipc`, `/api/bns`, `/api/guides`, etc. | `/api/blogs`, `/api/ipc`, `/api/bns`, `/api/guides`, etc. | Public (No authentication required) |
 
 > **Note:** All old routes starting with `/api/content-creator/*` now strictly return `404 Not Found`. No backward-compatibility redirects or aliases are maintained.
@@ -9918,3 +9956,478 @@ To identify and remove legacy roles mistakenly assigned to clients or advocates:
    npm run cleanup:non-staff-roles -- --apply
    ```
    Deletes the records from the `UserRole` table.
+
+---
+
+## 27. Admin Edit Advocate Profile & Rejected Profiles — Postman Guide
+
+### 27.1 Overview
+This guide covers the administrative workflow for editing advocate profiles and managing rejected advocate applications:
+* **Who can edit:** Primary System Administrator (`ADMIN`, environment login) has full bypass access. Staff accounts require the dedicated `advocates:edit` RBAC permission.
+* **Who can view rejected profiles:** Primary Admin or any staff account with the `advocates:view` permission (e.g. `LEAD_USER` role).
+* **Approval Status Preservation:** Profile edits **never** alter `approvalStatus`. A `PENDING` profile remains `PENDING`, a `REJECTED` profile remains `REJECTED`, and an `APPROVED` profile remains `APPROVED`. Timestamps (`submittedForApprovalAt`, `approvedAt`, `rejectedAt`) and `rejectionReason` are completely preserved during edits.
+* **Database Seeding:** Run `node prisma/seedRbac.js` once to ensure the new `advocates:edit` permission is created in the database.
+
+---
+
+### 27.2 Endpoint Reference Table
+
+| Method | Endpoint | Required Permission | Purpose |
+|---|---|---|---|
+| `PATCH` | `/api/admin/advocates/:advocateId/profile` | `advocates:edit` | Admin edits advocate profile data (pending, rejected, or approved) |
+| `GET` | `/api/admin/advocates/rejected` | `advocates:view` | Lists all rejected advocate profiles with rejection reason & date |
+| `GET` | `/api/admin/advocates?approvalStatus=REJECTED` | `advocates:view` | Filters all advocates by approval status (`PENDING`, `APPROVED`, `REJECTED`) |
+| `GET` | `/api/admin/advocates/:advocateId` | `advocates:view` | Detailed profile review including `rejectionReason` & timestamps |
+| `PATCH` | `/api/admin/advocates/:advocateId/approve` | `advocates:approve` | Approves advocate profile (works directly on pending or rejected) |
+| `PATCH` | `/api/admin/advocates/:advocateId/reject` | `advocates:reject` | Rejects advocate profile with reason |
+
+---
+
+### 27.3 Editable vs. Non-Editable Fields
+
+| Field Category | Fields | Behavior & Rules |
+|---|---|---|
+| **Identity Fields (Admin-Only)** | `fullName`, `gender`, `barCouncilId` | Admin can correct spelling/typos or Bar Council ID. `barCouncilId` is validated for uniqueness across all other advocates. |
+| **Professional Profile Fields** | `experienceYears`, `casesHandled`, `bestPracticeArea`, `topCourtPractised`, `practiceAreas` (array), `courtPractice` (array), `completeAddress`, `offlineVisitingFee`, `state`, `city`, `pincode`, `about` | Updated directly. Decimals are parsed safely; empty or non-existent fields are ignored. |
+| **Supported Aliases** | `bio` (alias for `about`), `experience` (alias for `experienceYears`), `videoChargePerMinute` (alias for `videoCallChargePerMinute`), `voiceChargePerMinute` (alias for `voiceCallChargePerMinute`), `languages` (alias for `languagesSpoken`) | Fully supported for backward-compatibility with client/advocate self-service payloads. |
+| **Biography Word Count Rule** | `bio` / `about` | **Strictly enforced:** Must contain between **50 and 500 words** (evaluated via `validateBioWords`). |
+| **STRICTLY NON-EDITABLE (Rejected with 400)** | `email`, `phone`, `aadhaarNumber`, `password`, `passwordHash`, `approvalStatus`, `status`, `callAvailability`, `deletionStatus`, `isOnline`, `lastSeenAt`, `averageRating`, `totalReviews`, `profilePhotoUrl`, `latitude`, `longitude` | Zod `.strict()` rejects any unknown or un-editable keys with an unrecognized key error. Identity verification and status flags have dedicated lifecycles. |
+
+---
+
+### 27.4 Request & Response Samples
+
+#### 1. Edit Advocate Profile (`PATCH /api/admin/advocates/:advocateId/profile`)
+**Request Body:**
+```json
+{
+  "experienceYears": 6,
+  "bestPracticeArea": "Criminal Law",
+  "practiceAreas": ["Criminal Law", "Family Law"],
+  "bio": "Advocate Rahul Mehta is a seasoned legal professional with extensive experience in criminal litigation, corporate compliance, and constitutional matters across higher courts in India. He has successfully represented clients in numerous complex cases, ensuring strategic advocacy and dedicated representation with the highest ethical standards across multiple legal jurisdictions and regional forums."
+}
+```
+
+**Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Advocate profile updated successfully by admin",
+  "data": {
+    "id": "advocate-uuid",
+    "name": "Adv. Rahul Mehta",
+    "fullName": "Adv. Rahul Mehta",
+    "email": "rahul@example.com",
+    "phone": "9876543210",
+    "barId": "D/1234/2015",
+    "barCouncilId": "D/1234/2015",
+    "gender": "Male",
+    "experience": 6,
+    "experienceYears": 6,
+    "bestPracticeArea": "Criminal Law",
+    "lawType": "Criminal Law",
+    "practiceAreas": ["Criminal Law", "Family Law"],
+    "about": "Advocate Rahul Mehta is a seasoned legal professional...",
+    "state": "Delhi",
+    "city": "New Delhi",
+    "pincode": "110001",
+    "approvalStatus": "PENDING",
+    "submittedForApprovalAt": "2026-10-10T09:00:00.000Z",
+    "rejectionReason": null,
+    "approvedAt": null,
+    "accountStatus": "ACTIVE",
+    "callAvailability": false,
+    "createdAt": "2026-10-01T10:00:00.000Z",
+    "updatedAt": "2026-10-12T13:15:00.000Z"
+  },
+  "advocate": {
+    "id": "advocate-uuid",
+    "name": "Adv. Rahul Mehta",
+    "fullName": "Adv. Rahul Mehta",
+    "email": "rahul@example.com",
+    "phone": "9876543210",
+    "barId": "D/1234/2015",
+    "barCouncilId": "D/1234/2015",
+    "experience": 6,
+    "experienceYears": 6,
+    "bestPracticeArea": "Criminal Law",
+    "lawType": "Criminal Law",
+    "approvalStatus": "PENDING",
+    "accountStatus": "ACTIVE"
+  },
+  "changedFields": [
+    {
+      "field": "experienceYears",
+      "oldValue": 3,
+      "newValue": 6
+    },
+    {
+      "field": "about",
+      "oldValue": "Old biography...",
+      "newValue": "Advocate Rahul Mehta is a seasoned legal professional..."
+    }
+  ]
+}
+```
+
+#### 2. List Rejected Advocates (`GET /api/admin/advocates/rejected`)
+**Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "advocate-uuid",
+      "name": "Adv. Suresh Verma",
+      "fullName": "Adv. Suresh Verma",
+      "email": "suresh.verma@example.com",
+      "phone": "9876543299",
+      "barId": "UP/5432/2018",
+      "barCouncilId": "UP/5432/2018",
+      "profileImage": "https://res.cloudinary.com/.../profile.jpg",
+      "profilePhotoUrl": "https://res.cloudinary.com/.../profile.jpg",
+      "lawType": "Family Law",
+      "bestPracticeArea": "Family Law",
+      "experience": 5,
+      "experienceYears": 5,
+      "city": "Lucknow",
+      "state": "Uttar Pradesh",
+      "pincode": "226001",
+      "approvalStatus": "REJECTED",
+      "rejectionReason": "Bar Council ID does not match certificate",
+      "rejectedAt": "2026-10-12T06:00:00.000Z",
+      "rejectedById": "admin",
+      "submittedForApprovalAt": "2026-10-10T09:00:00.000Z",
+      "accountStatus": "ACTIVE",
+      "callAvailability": false,
+      "createdAt": "2026-10-01T10:00:00.000Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 1,
+    "totalPages": 1
+  }
+}
+```
+
+---
+
+### 27.5 Error Response Reference Table
+
+| Case | Status | Message / Error Format |
+|---|---|---|
+| Validation failure (e.g. bio < 50 words) | `400 Bad Request` | `{"success": false, "message": "Bio must contain at least 50 words."}` |
+| Unknown or non-editable field (`email`, `phone`, `approvalStatus`, ...) | `400 Bad Request` | `{"success": false, "message": "Unrecognized key(s) in object: 'email'"}` |
+| Empty body (`{}`) | `400 Bad Request` | `{"success": false, "message": "Provide at least one field to update."}` |
+| Duplicate Bar Council ID | `400 Bad Request` | `{"success": false, "message": "Bar Council ID is already registered to another advocate."}` |
+| Advocate not found | `404 Not Found` | `{"success": false, "message": "Advocate not found"}` |
+| Invalid `approvalStatus` filter query | `400 Bad Request` | `{"success": false, "message": "Invalid approvalStatus. Allowed: PENDING, APPROVED, REJECTED"}` |
+| Missing permission | `403 Forbidden` | `{"success": false, "message": "Access forbidden. Insufficient permissions."}` |
+| No token provided | `401 Unauthorized` | `{"success": false, "message": "Authentication required. Please login."}` |
+
+---
+
+### 27.6 Postman Environment Variables
+
+| Variable Name | Description | Example / Populated By |
+|---|---|---|
+| `base_url` | Base URL of the backend API | `http://localhost:5000` |
+| `admin_email` | Primary Admin email | `shivam.alka03@gmail.com` |
+| `admin_password` | Primary Admin password | `1234567` |
+| `admin_token` | JWT returned on admin login | Step 1 script |
+| `pending_advocate_id` | ID of advocate in pending approval queue | Step 2 script |
+| `rejected_advocate_id` | ID of rejected advocate | Step 11 script |
+| `other_bar_council_id` | Existing Bar Council ID of another advocate | Populated manually or test runner |
+| `staff_token` | JWT token of staff with `LEAD_USER` role | Step 17 test |
+| `advocate_token` | JWT token of an advocate | Step 18 test |
+
+---
+
+### 27.7 Step-by-Step 18-Step Postman Workflow
+
+#### Step 1: Admin Login
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/login`
+- **Headers:** `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "email": "{{admin_email}}",
+  "password": "{{admin_password}}"
+}
+```
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.environment.set("admin_token", res.token);
+```
+
+---
+
+#### Step 2: Get Pending Advocates Queue
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/advocates/pending`
+- **Headers:** `Authorization: Bearer {{admin_token}}`
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.expect(res.data).to.be.an("array").that.is.not.empty;
+pm.environment.set("pending_advocate_id", res.data[0].id);
+```
+
+---
+
+#### Step 3: Review Advocate Details
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/advocates/{{pending_advocate_id}}`
+- **Headers:** `Authorization: Bearer {{admin_token}}`
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.expect(res.data.id).to.eql(pm.environment.get("pending_advocate_id"));
+```
+
+---
+
+#### Step 4: Admin Edits Pending Profile (Success)
+- **Method:** `PATCH`
+- **URL:** `{{base_url}}/api/admin/advocates/{{pending_advocate_id}}/profile`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "experienceYears": 6,
+  "bestPracticeArea": "Criminal Law",
+  "practiceAreas": ["Criminal Law", "Family Law"],
+  "bio": "Advocate Rahul Mehta is a seasoned legal professional with extensive experience in criminal litigation, corporate compliance, and constitutional matters across higher courts in India. He has successfully represented clients in numerous complex cases, ensuring strategic advocacy and dedicated representation with the highest ethical standards across multiple legal jurisdictions and regional forums."
+}
+```
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.expect(res.data.approvalStatus).to.eql("PENDING");
+pm.expect(res.changedFields).to.be.an("array");
+```
+
+---
+
+#### Step 5: Edit with Short Bio (Expected: `400 Bad Request`)
+- **Method:** `PATCH`
+- **URL:** `{{base_url}}/api/admin/advocates/{{pending_advocate_id}}/profile`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "bio": "Too short bio."
+}
+```
+- **Tests Script:**
+```javascript
+pm.test("Status code is 400 Bad Request", () => pm.response.to.have.status(400));
+const res = pm.response.json();
+pm.expect(JSON.stringify(res)).to.include("Bio must contain at least 50 words.");
+```
+
+---
+
+#### Step 6: Edit with Non-Editable Field (Expected: `400 Bad Request`)
+- **Method:** `PATCH`
+- **URL:** `{{base_url}}/api/admin/advocates/{{pending_advocate_id}}/profile`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "email": "malicious@update.com"
+}
+```
+- **Tests Script:**
+```javascript
+pm.test("Status code is 400 Bad Request", () => pm.response.to.have.status(400));
+const res = pm.response.json();
+pm.expect(JSON.stringify(res)).to.include("Unrecognized key(s) in object: 'email'");
+```
+
+---
+
+#### Step 7: Edit with Empty Body (Expected: `400 Bad Request`)
+- **Method:** `PATCH`
+- **URL:** `{{base_url}}/api/admin/advocates/{{pending_advocate_id}}/profile`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{}
+```
+- **Tests Script:**
+```javascript
+pm.test("Status code is 400 Bad Request", () => pm.response.to.have.status(400));
+const res = pm.response.json();
+pm.expect(res.message).to.eql("Provide at least one field to update.");
+```
+
+---
+
+#### Step 8: Edit with Duplicate Bar Council ID (Expected: `400 Bad Request`)
+- **Method:** `PATCH`
+- **URL:** `{{base_url}}/api/admin/advocates/{{pending_advocate_id}}/profile`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "barCouncilId": "{{other_bar_council_id}}"
+}
+```
+- **Tests Script:**
+```javascript
+pm.test("Status code is 400 Bad Request", () => pm.response.to.have.status(400));
+const res = pm.response.json();
+pm.expect(res.message).to.eql("Bar Council ID is already registered to another advocate.");
+```
+
+---
+
+#### Step 9: Edit Non-Existent Advocate (Expected: `404 Not Found`)
+- **Method:** `PATCH`
+- **URL:** `{{base_url}}/api/admin/advocates/00000000-0000-0000-0000-000000000000/profile`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "experienceYears": 10
+}
+```
+- **Tests Script:**
+```javascript
+pm.test("Status code is 404 Not Found", () => pm.response.to.have.status(404));
+const res = pm.response.json();
+pm.expect(res.message).to.eql("Advocate not found");
+```
+
+---
+
+#### Step 10: Approve Edited Profile & Verify Public View
+- **Method:** `PATCH`
+- **URL:** `{{base_url}}/api/admin/advocates/{{pending_advocate_id}}/approve`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:** `{}`
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.expect(res.data.approvalStatus).to.eql("APPROVED");
+```
+
+---
+
+#### Step 11: Reject an Advocate Profile
+- **Method:** `PATCH`
+- **URL:** `{{base_url}}/api/admin/advocates/{{pending_advocate_2_id}}/reject`
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "reason": "Bar Council ID does not match certificate"
+}
+```
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.expect(res.data.approvalStatus).to.eql("REJECTED");
+pm.environment.set("rejected_advocate_id", res.data.id);
+```
+
+---
+
+#### Step 12: List Rejected Advocates
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/advocates/rejected`
+- **Headers:** `Authorization: Bearer {{admin_token}}`
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+const found = res.data.find(a => a.id === pm.environment.get("rejected_advocate_id"));
+pm.expect(found).to.not.be.undefined;
+pm.expect(found.rejectionReason).to.eql("Bar Council ID does not match certificate");
+pm.expect(found.rejectedAt).to.not.be.null;
+```
+
+---
+
+#### Step 13: Search and Paginate Rejected Advocates
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/advocates/rejected?search=Rahul&page=1&limit=10`
+- **Headers:** `Authorization: Bearer {{admin_token}}`
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.expect(res.pagination).to.have.property("totalPages");
+```
+
+---
+
+#### Step 14: Filter All Advocates by Approval Status
+- **Sub-test A (Allowed):** `GET {{base_url}}/api/admin/advocates?approvalStatus=REJECTED` with `Bearer {{admin_token}}` → Returns `200 OK`, each item has `approvalStatus: 'REJECTED'` and `rejectedAt`.
+- **Sub-test B (Invalid query):** `GET {{base_url}}/api/admin/advocates?approvalStatus=WRONG` with `Bearer {{admin_token}}` → Returns `400 Bad Request` (`Invalid approvalStatus. Allowed: PENDING, APPROVED, REJECTED`).
+
+---
+
+#### Step 15: View Rejected Advocate Detail
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/advocates/{{rejected_advocate_id}}`
+- **Headers:** `Authorization: Bearer {{admin_token}}`
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.expect(res.data.approvalStatus).to.eql("REJECTED");
+pm.expect(res.data.rejectionReason).to.eql("Bar Council ID does not match certificate");
+```
+
+---
+
+#### Step 16: Admin Edits Rejected Profile & Approves
+1. **Edit profile data:** `PATCH {{base_url}}/api/admin/advocates/{{rejected_advocate_id}}/profile` with updated `barCouncilId` and bio → Returns `200 OK`, `approvalStatus` stays `"REJECTED"`.
+2. **Approve directly:** `PATCH {{base_url}}/api/admin/advocates/{{rejected_advocate_id}}/approve` → Returns `200 OK`, `approvalStatus` becomes `"APPROVED"`.
+3. **Queue removal:** `GET {{base_url}}/api/admin/advocates/rejected` → Advocate is no longer listed in the rejected queue.
+
+---
+
+#### Step 17: Staff Account Permission Check (`LEAD_USER`)
+- **Sub-test A (Allowed view):** `GET {{base_url}}/api/admin/advocates/rejected` with `Bearer {{staff_token}}` (`LEAD_USER` role having `advocates:view`) → Returns `200 OK`.
+- **Sub-test B (Forbidden edit):** `PATCH {{base_url}}/api/admin/advocates/{{pending_advocate_id}}/profile` with `Bearer {{staff_token}}` → Returns `403 Forbidden` (`Access forbidden. Insufficient permissions.`).
+
+---
+
+#### Step 18: Advocate Role Block
+- **Method:** `PATCH`
+- **URL:** `{{base_url}}/api/admin/advocates/{{pending_advocate_id}}/profile`
+- **Headers:** `Authorization: Bearer {{advocate_token}}`
+- **Body:** `{ "experienceYears": 10 }`
+- **Tests Script:**
+```javascript
+pm.test("Status code is 403 Forbidden", () => pm.response.to.have.status(403));
+```

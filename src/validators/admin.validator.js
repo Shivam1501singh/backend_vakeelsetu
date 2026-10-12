@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  advocateProfileUpdateSchema,
+  genderSchema,
+  barCouncilIdSchema
+} from './advocate.validator.js';
 
 export const adminApproveAdvocateSchema = z.object({
   approvalStatus: z.enum(['APPROVED', 'REJECTED']).optional(),
@@ -54,3 +59,16 @@ export const updateStaffRolesSchema = z.object({
 }).strict().refine(data => (Array.isArray(data.roleIds) && data.roleIds.length > 0) || (Array.isArray(data.roleNames) && data.roleNames.length > 0), {
   message: 'At least one role is required.'
 });
+
+export const adminAdvocateProfileUpdateSchema = advocateProfileUpdateSchema.extend({
+  fullName: z.string()
+    .trim()
+    .min(2, { message: 'Full name must be at least 2 characters.' })
+    .max(100, { message: 'Full name cannot exceed 100 characters.' })
+    .optional(),
+  gender: genderSchema.optional(),
+  barCouncilId: barCouncilIdSchema.optional()
+}).strict().refine((data) => Object.keys(data).length > 0, {
+  message: 'Provide at least one field to update.'
+});
+

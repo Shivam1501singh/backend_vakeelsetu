@@ -1,141 +1,166 @@
-# Implementation Plan: Restricting Roles to Admin-Panel Staff Accounts & Inline Role Assignment
+# Implementation Plan: Admin Advocate Profile Editing & Rejected Profiles
 
-This document outlines the detailed architecture, audit findings, proposed endpoint modifications, risk mitigations, and execution strategy for restricting RBAC roles exclusively to Admin-Panel staff accounts (`ContentCreator`) in the VakeelSetu backend.
+## 1. Current Behaviour Analysis
 
----
+We analyzed the current codebase and verified the following existing behavior:
 
-## 1. Current Behaviour Found in Codebase
+1. **Advocate Self-Service Profile Update**:
+   - Advocates update their profile via `PATCH /api/advocate/profile`.
+   - Handled by `src/controllers/advocate.profile.controller.js` (`updateProfile`).
+   - Validated against `advocateProfileUpdateSchema` (`.strict()`) in `src/validators/advocate.validator.js`.
+   - Enforces a 50–500 word limit on the biography using `validateBioWords`.
+   - Maps payload aliases:
+     - `bio` / `about` → `about`
+     - `experience` / `experienceYears` → `experienceYears`
+     - `videoChargePerMinute` / `videoCallChargePerMinute` → `videoCallChargePerMinute`
+     - `voiceChargePerMinute` / `voiceCallChargePerMinute` → `voiceCallChargePerMinute`
+     - `languages` / `languagesSpoken` → `languagesSpoken`
+   - Ignores `practiceAreaIds` in `updateProfile` (only direct `practiceAreas` array of strings is persisted to the database).
+   - Sensitive fields (`fullName`, `email`, `phone`, `gender`, `barCouncilId`, `aadhaarNumber`, `passwordHash`) cannot be edited by the advocate via `PATCH /api/advocate/profile`.
 
-1. **Staff Account Creation Lacks Role Assignment & Validation:**
-   - `POST /api/admin/content-creators` in `src/controllers/admin.controller.js` accepts `{ fullName, email, password }` with manual truthy checks and no Zod schema.
-   - No roles or permissions are returned in the response or assigned during creation.
-   - Callers currently have to call a separate endpoint (`POST /api/admin/users/:userId/roles`) to assign a role after creation.
-   - Staff creation does not prevent creating an account whose email matches the environment admin credentials (`ADMIN_USER_EMAIL`), which would cause an account that can never log in because `POST /api/admin/login` prioritizes environment credentials.
+2. **Advocate Approval Workflow**:
+   - Advocates submit for approval via `POST /api/advocate/profile/submit-for-approval` (alias `/api/advocates/profile/submit-for-approval`).
+   - This sets `approvalStatus: 'PENDING'`, `submittedForApprovalAt: new Date()`, and clears `rejectionReason: null`.
+   - Admin approves via `PATCH /api/admin/advocates/:advocateId/approve` (`advocates:approve`), setting `approvalStatus: 'APPROVED'`, `approvedAt: new Date()`, `approvedById`, `status: 'ACTIVE'`, and clearing `rejectionReason: null`. It does **not** restrict prior status to `PENDING` (a `REJECTED` advocate can be approved directly).
+   - Admin rejects via `PATCH /api/admin/advocates/:advocateId/reject` (`advocates:reject`), setting `approvalStatus: 'REJECTED'`, `callAvailability: false`, `rejectedAt: new Date()`, `rejectedById`, and `rejectionReason: reason`.
 
-2. **Staff Listing & Details Gap:**
-   - `GET /api/admin/content-creators` returns only `{ id, fullName, email, isActive, createdAt }`. Assigned roles are completely missing from the listing.
-   - There is no single staff detail route (`GET /api/admin/content-creators/:id`) to inspect a staff member's active roles and effective permissions.
-   - There is no dedicated route (`PUT /api/admin/content-creators/:id/roles`) to update a staff member's role set.
+3. **Existing Admin Advocate Endpoints (`src/routes/admin.routes.js`)**:
+   - `GET /api/admin/advocates/pending` (`advocates:view`): queries `where: { approvalStatus: 'PENDING' }`, ordered by `submittedForApprovalAt: desc`.
+   - `GET /api/admin/advocates` (`advocates:view`): lists all advocates without filtering, ordered by `createdAt: desc`.
+   - `GET /api/admin/advocates/:advocateId` (`advocates:view`): returns `{ success: true, data: advocateData, advocate: advocateData }`, excluding `passwordHash` and `aadhaarNumber`. Already includes `rejectionReason`, `rejectedAt`, `submittedForApprovalAt`, and `approvedAt`.
 
-3. **Polymorphic Leak in User Role Assignment (The Root Bug):**
-   - In `src/services/rbac.service.js`, `assignRoleToUser` relies on `resolveUserAccount(userId, userType)`, which scans `prisma.user`, `prisma.contentCreator`, `prisma.advocate`, and `prisma.admin`.
-   - Consequently, `POST /api/admin/users/:userId/roles` allows assigning roles to normal clients (`User`) and advocates (`Advocate`).
-   - **Live DB Inspection Finding:** 3 records currently exist in `prisma.userRole`. 1 belongs to a `CONTENT_CREATOR`, while **2 records belong to `USER` accounts** with `LEAD_USER` and `CONTENT_CREATOR` roles assigned!
-
-4. **Runtime Side-Effects on Normal Clients:**
-   - In `src/services/auth.service.js` (`getCurrentUserProfile`), `prisma.userRole` is queried for both `user` and `content_creator`.
-   - For `user`, it sets `role = assignedRoles[0] || 'USER'`. If a client was given `LEAD_USER`, their `req.user.role` becomes `'LEAD_USER'`. Consequently, `requireRole('USER')` on client features (like consultancy or likes) rejects the client with `403 Forbidden`.
-   - In `src/middleware/auth.middleware.js` (`requireRole`), there is a fallback check `getUserRolesAndPermissions` that allows any user possessing a matching RBAC role name to bypass `requireRole('USER'|'ADVOCATE')`.
-   - In `src/services/rbac.service.js` (`checkUserPermission`), permissions are evaluated for any user type rather than being restricted to staff accounts.
-
-5. **No Guard Against Reserved System Role Names:**
-   - In `src/validators/rbac.validator.js` (`createRoleSchema`, `updateRoleSchema`), there is no validation preventing users from creating custom roles named `ADMIN`, `USER`, or `ADVOCATE`.
-   - **Live DB Inspection Finding:** Existing roles in the database are only `CONTENT_CREATOR` and `LEAD_USER`. No conflicting roles (`ADMIN`, `USER`, `ADVOCATE`) exist in the database.
-
----
-
-## 2. Exact List of Files to Change
-
-| File Path | Action | Description |
-|---|---|---|
-| `src/validators/admin.validator.js` | Modify | Add `createStaffAccountSchema` and `updateStaffRolesSchema`. |
-| `src/controllers/admin.controller.js` | Modify | Update `createContentCreator`, update `listContentCreators` to include roles without N+1, add `getContentCreatorDetails`, and add `updateStaffRoles`. |
-| `src/routes/admin.routes.js` | Modify | Register `GET /content-creators/:id` and `PUT /content-creators/:id/roles`. |
-| `src/validators/rbac.validator.js` | Modify | Add reserved role names validation (`ADMIN`, `USER`, `ADVOCATE`) in `createRoleSchema` and `updateRoleSchema`. |
-| `src/services/rbac.service.js` | Modify | Restrict `assignRoleToUser` strictly to `ContentCreator` (return 400 for clients/advocates); restrict `checkUserPermission` to `content_creator`; add `rolesAllowed: false` in `listUsersAdmin` and `getUserDetailsAdmin`. |
-| `src/services/auth.service.js` | Modify | In `getCurrentUserProfile`, load RBAC roles only when `normalizedType === 'content_creator'`; enforce static `role: 'USER', roles: ['USER'], permissions: []` for clients. |
-| `src/middleware/auth.middleware.js` | Modify | In `requireRole`, remove the RBAC role fallback lookup (`getUserRolesAndPermissions`). Allow only admin and exact base role match. |
-| `scripts/cleanup-non-staff-roles.js` | **New** | Standalone script to detect and clean up orphaned/non-staff `UserRole` rows (supports dry run and `--apply`). |
-| `package.json` | Modify | Add `"cleanup:non-staff-roles": "node scripts/cleanup-non-staff-roles.js"`. |
-| `README.md` | Modify | Update RBAC notes, Section 25, and add Section 26 (`Staff Accounts & Role Assignment — Postman Guide`). |
-| `proceed.md` | **New** | This implementation plan in the repo root. |
+4. **RBAC and Wildcards**:
+   - `checkUserPermission` in `src/services/rbac.service.js` performs strict exact-string match: `userPermissionSet.has(perm)`. **It does not support wildcards (`*` or `xxx:*`)**.
+   - The main Admin (`type: 'admin'`) unconditionally bypasses permission checks in `requirePermission`.
+   - Staff accounts (`content_creator`) require explicit permissions seeded in the database.
 
 ---
 
-## 3. New and Changed Endpoints with Request/Response Samples
+## 2. Files to Change
 
-### 3.1 `POST /api/admin/content-creators` (Create Staff with Roles)
-- **Middleware:** `requireAuth`, `requirePermission('content_creators:create')`, `generalLimiter`
-- **Validation:**
-  - `fullName`: string, trimmed, 2-100 characters.
-  - `email`: string, valid email, trimmed, lowercase.
-  - `password`: string, min 8 characters.
-  - `roleIds`: optional array of UUIDs.
-  - `roleNames`: optional array of trimmed uppercase strings.
-  - `.strict()`
-- **Privilege Escalation Guard:** If `roleIds` or `roleNames` are provided and caller is not main admin and lacks `roles:manage`, return `403 Forbidden` (`{"success": false, "message": "You need the roles:manage permission to assign roles."}`).
-- **Default:** If neither `roleIds` nor `roleNames` provided, defaults to `['CONTENT_CREATOR']`.
-- **Pre-flight Role Validation:** Validates that all requested roles exist and are active. If any fail, returns `400 Bad Request` with `invalidRoles: [...]` without creating the staff record.
-- **Atomic Transaction:** Creates `contentCreator` and assigns `userRole` rows in one `prisma.$transaction`.
+| File | Nature of Change |
+| :--- | :--- |
+| `prisma/seedRbac.js` | Add `advocates:edit` to `DEFAULT_PERMISSIONS` (idempotent seed). Do NOT add to staff roles. |
+| `src/validators/admin.validator.js` | Export new `adminAdvocateProfileUpdateSchema` extending `advocateProfileUpdateSchema` with `fullName`, `gender`, and `barCouncilId`, enforcing `.strict()` and non-empty body refine. |
+| `src/controllers/admin.controller.js` | 1. Implement `updateAdvocateProfileByAdmin` (`PATCH /advocates/:advocateId/profile`) with alias mapping, Bar Council ID uniqueness check, `changedFields` diffing, and audit logging.<br>2. Extract shared `formatAdvocateReviewData` helper for detail and update responses.<br>3. Implement `listRejectedAdvocates` (`GET /advocates/rejected`) with search and pagination.<br>4. Add optional `approvalStatus` filter and `rejectedAt` field to `listAdvocates` (`GET /advocates`). |
+| `src/routes/admin.routes.js` | 1. Mount `GET /advocates/rejected` before `GET /advocates/:advocateId` (`advocates:view`).<br>2. Mount `PATCH /advocates/:advocateId/profile` (`advocates:edit`). |
+| `README.md` | Add Section 27 (Postman Guide for Admin Advocate Edit & Rejected Profiles) and fix the 9 documentation cleanup items. |
+| `proceed.md` | Planning, design specifications, and open question answers. |
 
-#### Request Sample:
-```json
-POST /api/admin/content-creators
-Authorization: Bearer <ADMIN_OR_STAFF_TOKEN>
+---
+
+## 3. New and Changed Endpoints
+
+### 3.1 `PATCH /api/admin/advocates/:advocateId/profile` [NEW]
+- **Middleware:** `requireAuth`, `requirePermission('advocates:edit')`, `generalLimiter`
+- **Validation:** `adminAdvocateProfileUpdateSchema` (`.strict()`):
+  - Base fields from `advocateProfileUpdateSchema`: `experienceYears`, `casesHandled`, `bestPracticeArea`, `about`, `bio` (50–500 words via `validateBioWords`), `courtPractice`, `completeAddress`, `videoCallChargePerMinute`, `voiceCallChargePerMinute`, `offlineVisitingFee`, `state`, `city`, `pincode`, `practiceAreas`, `topCourtPractised`.
+  - Aliases: `experience` → `experienceYears`, `videoChargePerMinute` → `videoCallChargePerMinute`, `voiceChargePerMinute` → `voiceCallChargePerMinute`, `languages` → `languagesSpoken`.
+  - Added identity fields:
+    - `fullName`: `z.string().trim().min(2).max(100).optional()`
+    - `gender`: `genderSchema.optional()`
+    - `barCouncilId`: `barCouncilIdSchema.optional()`
+  - Strictly rejected unknown/non-editable fields: `email`, `phone`, `aadhaarNumber`, `password`, `approvalStatus`, `status`, `callAvailability`, `deletionStatus`, `isOnline`, `lastSeenAt`, `averageRating`, `totalReviews`, `profilePhotoUrl`, `latitude`, `longitude`.
+  - Empty body check: returns `400 Bad Request` with message `"Provide at least one field to update."`.
+- **Controller Logic:**
+  1. Parse body via `adminAdvocateProfileUpdateSchema`.
+  2. Find advocate by `advocateId`; return `404` (`"Advocate not found"`) if missing.
+  3. If `barCouncilId` is provided and different from current: check uniqueness via `prisma.advocate.findFirst({ where: { barCouncilId, NOT: { id: advocateId } } })`. If exists, return `400` (`"Bar Council ID is already registered to another advocate."`).
+  4. Map aliases to DB fields. `practiceAreaIds` is ignored (matching advocate controller behavior).
+  5. Compare old and new values:
+     - Decimal fields (`videoCallChargePerMinute`, `voiceCallChargePerMinute`, `offlineVisitingFee`): compare converted `Number()`.
+     - Array fields (`languagesSpoken`, `courtPractice`, `practiceAreas`): compare `JSON.stringify()`.
+     - Scalar fields: strict equality `oldVal !== newVal`.
+  6. If no fields changed (`changedFields.length === 0`): return `200 OK` with `changedFields: []`, message `"No changes detected."`, and skip DB update.
+  7. If changed: execute `prisma.advocate.update`. **Preserve all approval and status fields** (`approvalStatus`, `submittedForApprovalAt`, `rejectionReason`, `approvedAt`, `status`, `callAvailability`).
+  8. Log audit line: `console.log('[ADMIN ADVOCATE EDIT]', { advocateId, editedBy: req.user.id, editorType: req.user.type, fields: changedFields.map(c => c.field) })`.
+  9. Return `200 OK` with formatted advocate data (excluding `passwordHash` and `aadhaarNumber`) and `changedFields`.
+
+#### Sample Request:
+```http
+PATCH /api/admin/advocates/91205007-7870-496d-977d-4f594761380e/profile HTTP/1.1
+Authorization: Bearer <admin_token>
 Content-Type: application/json
 
 {
-  "fullName": "Blog Editor One",
-  "email": "blog.editor@vakeelsetu.com",
-  "password": "Editor@12345",
-  "roleNames": ["BLOG_EDITOR"]
+  "experienceYears": 6,
+  "bestPracticeArea": "Criminal Law",
+  "practiceAreas": ["Criminal Law", "Family Law"],
+  "bio": "Advocate Rahul Mehta is a seasoned legal professional with extensive experience in criminal litigation, corporate compliance, and constitutional matters across higher courts in India. He has successfully represented clients in numerous complex cases, ensuring strategic advocacy and dedicated representation with the highest ethical standards."
 }
 ```
 
-#### Response Sample (`201 Created`):
+#### Sample Response (`200 OK`):
 ```json
 {
   "success": true,
-  "message": "Staff account created successfully",
-  "creator": {
-    "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
-    "fullName": "Blog Editor One",
-    "email": "blog.editor@vakeelsetu.com",
-    "isActive": true,
-    "accountType": "CONTENT_CREATOR",
-    "roles": [
-      {
-        "id": "7649542a-d221-4f1b-87b6-19e34e56bc78",
-        "name": "BLOG_EDITOR",
-        "displayName": "Blog Editor"
-      }
-    ],
-    "permissions": [
-      "blogs:read",
-      "blogs:create",
-      "blogs:update",
-      "blogs:delete"
-    ],
-    "createdAt": "2026-10-12T05:40:00.000Z"
-  }
-}
-```
-
----
-
-### 3.2 `GET /api/admin/content-creators` (List Staff with Roles)
-- **Middleware:** `requireAuth`, `requirePermission('content_creators:view')`, `generalLimiter`
-- **Optimization:** Loads staff accounts, collects IDs, and queries `prisma.userRole.findMany({ where: { userId: { in: ids } } })` with `include: { role: { select: { id: true, name: true, displayName: true, isActive: true } } }` in a single query (no N+1).
-
-#### Response Sample (`200 OK`):
-```json
-{
-  "success": true,
-  "creators": [
+  "message": "Advocate profile updated successfully by admin",
+  "data": {
+    "id": "91205007-7870-496d-977d-4f594761380e",
+    "name": "Adv. Rahul Mehta",
+    "fullName": "Adv. Rahul Mehta",
+    "email": "rahul@example.com",
+    "phone": "9876543210",
+    "barId": "D/1234/2015",
+    "barCouncilId": "D/1234/2015",
+    "gender": "Male",
+    "experience": 6,
+    "experienceYears": 6,
+    "casesHandled": 120,
+    "lawType": "Criminal Law",
+    "bestPracticeArea": "Criminal Law",
+    "practiceAreas": ["Criminal Law", "Family Law"],
+    "about": "Advocate Rahul Mehta is a seasoned legal professional...",
+    "state": "Delhi",
+    "city": "New Delhi",
+    "pincode": "110001",
+    "approvalStatus": "PENDING",
+    "submittedForApprovalAt": "2026-10-10T09:00:00.000Z",
+    "rejectionReason": null,
+    "approvedAt": null,
+    "accountStatus": "ACTIVE",
+    "callAvailability": false,
+    "createdAt": "2026-10-01T10:00:00.000Z",
+    "updatedAt": "2026-10-12T13:15:00.000Z"
+  },
+  "advocate": {
+    "id": "91205007-7870-496d-977d-4f594761380e",
+    "name": "Adv. Rahul Mehta",
+    "fullName": "Adv. Rahul Mehta",
+    "email": "rahul@example.com",
+    "phone": "9876543210",
+    "barId": "D/1234/2015",
+    "barCouncilId": "D/1234/2015",
+    "gender": "Male",
+    "experience": 6,
+    "experienceYears": 6,
+    "casesHandled": 120,
+    "lawType": "Criminal Law",
+    "bestPracticeArea": "Criminal Law",
+    "practiceAreas": ["Criminal Law", "Family Law"],
+    "about": "Advocate Rahul Mehta is a seasoned legal professional...",
+    "state": "Delhi",
+    "city": "New Delhi",
+    "pincode": "110001",
+    "approvalStatus": "PENDING",
+    "submittedForApprovalAt": "2026-10-10T09:00:00.000Z",
+    "rejectionReason": null,
+    "approvedAt": null,
+    "accountStatus": "ACTIVE",
+    "callAvailability": false,
+    "createdAt": "2026-10-01T10:00:00.000Z",
+    "updatedAt": "2026-10-12T13:15:00.000Z"
+  },
+  "changedFields": [
     {
-      "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
-      "fullName": "Blog Editor One",
-      "email": "blog.editor@vakeelsetu.com",
-      "isActive": true,
-      "roles": [
-        {
-          "id": "7649542a-d221-4f1b-87b6-19e34e56bc78",
-          "name": "BLOG_EDITOR",
-          "displayName": "Blog Editor",
-          "isActive": true
-        }
-      ],
-      "createdAt": "2026-10-12T05:40:00.000Z"
+      "field": "experienceYears",
+      "oldValue": 3,
+      "newValue": 6
+    },
+    {
+      "field": "about",
+      "oldValue": "Old biography snippet...",
+      "newValue": "Advocate Rahul Mehta is a seasoned legal professional..."
     }
   ]
 }
@@ -143,169 +168,176 @@ Content-Type: application/json
 
 ---
 
-### 3.3 `GET /api/admin/content-creators/:id` (Staff Details & Permissions)
-- **Middleware:** `requireAuth`, `requirePermission('content_creators:view')`, `generalLimiter`
-- Returns 404 (`"Staff account not found."`) if not found.
-- If staff account has no active role, returns `roles: []`, `effectiveDefaultRole: "CONTENT_CREATOR"`, and populates `permissions` from the active seeded `CONTENT_CREATOR` role.
+### 3.2 `GET /api/admin/advocates/rejected` [NEW]
+- **Middleware:** `requireAuth`, `requirePermission('advocates:view')`, `generalLimiter`
+- **Mount Position:** In `src/routes/admin.routes.js`, mounted **immediately before** `GET /advocates/:advocateId` to ensure the static path `/rejected` is never shadowed by parameter `:advocateId`.
+- **Query Parameters:**
+  - `search` (optional string): case-insensitive match on `fullName`, `email`, `phone`, or `barCouncilId`.
+  - `page` (optional integer, default `1`).
+  - `limit` (optional integer, default `20`, max `100`).
+- **Query Logic:** `prisma.advocate.findMany({ where: { approvalStatus: 'REJECTED', ...searchClause }, orderBy: { rejectedAt: 'desc' } })`.
 
-#### Response Sample (`200 OK`):
+#### Sample Response (`200 OK`):
 ```json
 {
   "success": true,
-  "creator": {
-    "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
-    "fullName": "Blog Editor One",
-    "email": "blog.editor@vakeelsetu.com",
-    "isActive": true,
-    "accountType": "CONTENT_CREATOR",
-    "roles": [
-      {
-        "id": "7649542a-d221-4f1b-87b6-19e34e56bc78",
-        "name": "BLOG_EDITOR",
-        "displayName": "Blog Editor",
-        "isActive": true
-      }
-    ],
-    "permissions": [
-      "blogs:read",
-      "blogs:create",
-      "blogs:update",
-      "blogs:delete"
-    ],
-    "createdAt": "2026-10-12T05:40:00.000Z",
-    "updatedAt": "2026-10-12T05:40:00.000Z"
+  "data": [
+    {
+      "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
+      "name": "Adv. Suresh Verma",
+      "fullName": "Adv. Suresh Verma",
+      "email": "suresh.verma@example.com",
+      "phone": "9876543299",
+      "barId": "UP/5432/2018",
+      "barCouncilId": "UP/5432/2018",
+      "profileImage": "https://res.cloudinary.com/.../profile.jpg",
+      "profilePhotoUrl": "https://res.cloudinary.com/.../profile.jpg",
+      "lawType": "Family Law",
+      "bestPracticeArea": "Family Law",
+      "experience": 5,
+      "experienceYears": 5,
+      "city": "Lucknow",
+      "state": "Uttar Pradesh",
+      "pincode": "226001",
+      "approvalStatus": "REJECTED",
+      "rejectionReason": "Bar Council ID does not match certificate",
+      "rejectedAt": "2026-10-12T06:00:00.000Z",
+      "rejectedById": "admin",
+      "submittedForApprovalAt": "2026-10-10T09:00:00.000Z",
+      "accountStatus": "ACTIVE",
+      "callAvailability": false,
+      "createdAt": "2026-10-01T10:00:00.000Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 1,
+    "totalPages": 1
   }
 }
 ```
 
 ---
 
-### 3.4 `PUT /api/admin/content-creators/:id/roles` (Update Staff Roles)
-- **Middleware:** `requireAuth`, `requirePermission('roles:manage')`, `generalLimiter`
-- **Validation:** `updateStaffRolesSchema` (`{ roleIds?: uuid[], roleNames?: string[] }`, `.strict()`, at least one role required).
-- Validates that target staff account exists (else 404 `"Staff account not found."`).
-- Validates that all roles exist and are active (else 400 with `invalidRoles`).
-- Replaces role set inside a `prisma.$transaction`: `deleteMany({ where: { userId: id } })` then `createMany` with `userType: 'CONTENT_CREATOR'`.
+### 3.3 `GET /api/admin/advocates` [CHANGED]
+- **Middleware:** `requireAuth`, `requirePermission('advocates:view')`, `generalLimiter`
+- **Additive Changes:**
+  - Adds optional `approvalStatus` query parameter (`PENDING`, `APPROVED`, `REJECTED`, case-insensitive).
+  - Validation: If provided and not in `['PENDING', 'APPROVED', 'REJECTED']`, returns `400 Bad Request` with message: `"Invalid approvalStatus. Allowed: PENDING, APPROVED, REJECTED"`.
+  - Default behavior: When omitted, filters by `{}` (unfiltered), exactly preserving the existing behavior.
+  - Adds `rejectedAt: adv.rejectedAt || null` to each advocate object in the response.
 
-#### Request Sample:
-```json
-PUT /api/admin/content-creators/e81d7398-319b-4322-bfa1-d419a71b8e19/roles
-Authorization: Bearer <ADMIN_TOKEN>
-Content-Type: application/json
-
-{
-  "roleNames": ["BLOG_EDITOR", "LEAD_USER"]
-}
-```
-
-#### Response Sample (`200 OK`):
+#### Sample Response (`200 OK` with `?approvalStatus=REJECTED`):
 ```json
 {
   "success": true,
-  "message": "Staff roles updated successfully",
-  "creator": {
-    "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
-    "fullName": "Blog Editor One",
-    "email": "blog.editor@vakeelsetu.com",
-    "isActive": true,
-    "accountType": "CONTENT_CREATOR",
-    "roles": [
-      {
-        "id": "7649542a-d221-4f1b-87b6-19e34e56bc78",
-        "name": "BLOG_EDITOR",
-        "displayName": "Blog Editor",
-        "isActive": true
-      },
-      {
-        "id": "7990f52a-719b-490f-a463-b851b22268c8",
-        "name": "LEAD_USER",
-        "displayName": "Lead User",
-        "isActive": true
-      }
-    ],
-    "permissions": [
-      "blogs:read",
-      "blogs:create",
-      "blogs:update",
-      "blogs:delete",
-      "users:view",
-      "advocates:view",
-      "feedback:view",
-      "consultancy:view"
-    ],
-    "createdAt": "2026-10-12T05:40:00.000Z",
-    "updatedAt": "2026-10-12T05:42:00.000Z"
-  }
+  "advocates": [
+    {
+      "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
+      "name": "Adv. Suresh Verma",
+      "fullName": "Adv. Suresh Verma",
+      "email": "suresh.verma@example.com",
+      "phone": "9876543299",
+      "status": "ACTIVE",
+      "accountStatus": "ACTIVE",
+      "approvalStatus": "REJECTED",
+      "callAvailability": false,
+      "rejectionReason": "Bar Council ID does not match certificate",
+      "submittedForApprovalAt": "2026-10-10T09:00:00.000Z",
+      "approvedAt": null,
+      "rejectedAt": "2026-10-12T06:00:00.000Z",
+      "likeCount": 0,
+      "lawType": "Family Law",
+      "barCouncilId": "UP/5432/2018",
+      "state": "Uttar Pradesh",
+      "city": "Lucknow",
+      "pincode": "226001",
+      "isOnline": false,
+      "lastSeenAt": null,
+      "createdAt": "2026-10-01T10:00:00.000Z"
+    }
+  ]
 }
 ```
 
 ---
 
-### 3.5 `POST /api/admin/users/:userId/roles` (Backward-Compatible Assignment Block)
-- If `userId` exists in `prisma.contentCreator`, role is assigned with `userType: 'CONTENT_CREATOR'`.
-- If `userId` exists in `prisma.user` or `prisma.advocate`:
-  - Returns `400 Bad Request`: `{"success": false, "message": "Roles can only be assigned to Admin Panel (staff) accounts. Clients and advocates cannot have roles."}`
-- If `userId` does not exist anywhere:
-  - Returns `404 Not Found`: `{"success": false, "message": "Target staff account not found."}`
+### 3.4 `GET /api/admin/advocates/:advocateId` [VERIFIED]
+- Confirmed that this endpoint already queries the full `Advocate` record and returns `rejectionReason`, `rejectedAt`, `submittedForApprovalAt`, and `approvedAt`.
+- We will refactor the response mapping to reuse the common `formatAdvocateReviewData(advocate)` helper, ensuring identical output.
 
 ---
 
-## 4. Data-Cleanup Plan
+## 4. Permission Changes
 
-### 4.1 Root Cause & Target Rows
-Currently, polymorphic `UserRole` rows exist where `userId` belongs to `User` rather than `ContentCreator`.
-Our live database inspection revealed 2 such rows:
-- `userId: "91205007-7870-496d-977d-4f594761380e"`, `userType: "USER"`, `roleId: "LEAD_USER"`
-- `userId: "0346edaf-033c-422b-acff-500b4b914ca3"`, `userType: "USER"`, `roleId: "CONTENT_CREATOR"`
-
-### 4.2 Cleanup Script: `scripts/cleanup-non-staff-roles.js`
-- Located in root `scripts/` directory (outside `src/`).
-- Logic:
-  1. Initialize `PrismaClient`.
-  2. Query all rows from `prisma.userRole` including `role: { select: { id: true, name: true } }`.
-  3. Collect all unique `userId`s and query `prisma.contentCreator.findMany({ where: { id: { in: userIds } } })`.
-  4. Collect `userId`s that do NOT match any `contentCreator`.
-  5. Cross-reference non-staff `userId`s against `prisma.user` and `prisma.advocate` to label account kind (`USER`, `ADVOCATE`, or `NONE`).
-  6. Format and display a clear CLI table containing: `userRoleId`, `userId`, `accountKind`, `roleName`.
-  7. **Dry Run (Default):** If `--apply` flag is NOT passed, prints:
-     `"DRY RUN COMPLETE: Found X non-staff user role(s). No rows were deleted. Run with '--apply' to delete."`
-  8. **Apply (`--apply`):** Executes `prisma.userRole.deleteMany({ where: { id: { in: nonStaffRoleIds } } })` and prints:
-     `"SUCCESS: Deleted X non-staff user role record(s)."`
-- Added to `package.json`:
-  ```json
-  "cleanup:non-staff-roles": "node scripts/cleanup-non-staff-roles.js"
+- In `prisma/seedRbac.js`, append to `DEFAULT_PERMISSIONS`:
+  ```javascript
+  {
+    code: 'advocates:edit',
+    name: 'Edit Advocate Profiles',
+    module: 'ADVOCATES',
+    description: 'Permission to edit advocate profile data (pending, rejected or approved) from the admin panel'
+  }
   ```
-- Workflow: Run `npm run cleanup:non-staff-roles` $\rightarrow$ inspect table $\rightarrow$ run `npm run cleanup:non-staff-roles -- --apply`.
+- Do **NOT** add to `CONTENT_CREATOR_PERMISSIONS` or `LEAD_USER_PERMISSIONS`.
+- The main Admin account bypasses permission checks and automatically possesses this capability.
+- Seeding via `node prisma/seedRbac.js` is idempotent (`upsert` by `code`).
 
 ---
 
 ## 5. Potential Risks & Mitigations
 
-1. **Risk: Privilege Escalation During Staff Creation**
-   - *Scenario:* A staff user with `content_creators:create` creates another staff account and assigns them high-privilege roles like `ROLES_MANAGER` or `LEAD_USER` without having role-management authority.
-   - *Mitigation:* Explicit check: if `roleIds` or `roleNames` are provided in the payload, the caller MUST either be the environment admin (`req.user.type === 'admin'`) or hold the `roles:manage` permission. Otherwise, return `403 Forbidden`.
-
-2. **Risk: Reserved Role Name Collisions**
-   - *Scenario:* Creating custom roles named `USER`, `ADVOCATE`, or `ADMIN` creates semantic ambiguity with base account types.
-   - *Mitigation:* Added `.refine()` in `createRoleSchema` and `updateRoleSchema` rejecting `ADMIN`, `USER`, and `ADVOCATE` with message `"This role name is reserved."`. Verified that existing database roles only include `CONTENT_CREATOR` and `LEAD_USER`.
-
-3. **Risk: Unintended Breaking of Legacy Client Tokens Prior to Cleanup**
-   - *Scenario:* A client with an existing role in `userRole` tries to use client endpoints before the admin runs the cleanup script.
-   - *Mitigation:* Fixed immediately at runtime in `getCurrentUserProfile` and `requireRole`: clients are strictly forced to `role: 'USER', roles: ['USER'], permissions: []` regardless of any leftover rows in `userRole`.
-
-4. **Risk: N+1 Performance Issue on Staff Listing**
-   - *Scenario:* Fetching roles individually for each staff account in `GET /api/admin/content-creators`.
-   - *Mitigation:* Two-query approach with `userRole.findMany({ where: { userId: { in: creatorIds } } })` and grouping by `userId` in memory before mapping to response.
-
----
-
-## 6. Open Questions / Confirmations
-
-- **Default Role on Empty Request:** When a request creates a staff account without specifying `roleIds` or `roleNames`, it will automatically assign the active seeded `CONTENT_CREATOR` role. This preserves complete backward compatibility for callers expecting the account to be a default content creator.
-- **Order of Routes:** `PUT /content-creators/:id/roles` will be registered in `admin.routes.js` alongside the other `/content-creators` routes.
+1. **Route Shadowing**:
+   - *Risk:* If `GET /advocates/rejected` is placed after `GET /advocates/:advocateId`, Express router treats `"rejected"` as the `:advocateId` parameter.
+   - *Mitigation:* Mount `GET /advocates/rejected` before `GET /advocates/:advocateId` in `src/routes/admin.routes.js`. Verified by route dump inspection.
+2. **Accidental Approval Status Reset**:
+   - *Risk:* Admin edit unintentionally altering `approvalStatus` or clearing `rejectionReason`.
+   - *Mitigation:* `updateData` strictly excludes approval fields (`approvalStatus`, `rejectionReason`, `approvedAt`, `rejectedAt`, `submittedForApprovalAt`).
+3. **Sensitive Field Leaks**:
+   - *Risk:* Returning `passwordHash` or `aadhaarNumber` in edit or detail responses.
+   - *Mitigation:* Common formatter `formatAdvocateReviewData` explicitly destructures `{ passwordHash, aadhaarNumber, ...safeAdvocate }` and excludes them from all response objects.
+4. **Zod Strict Mode Inheritance**:
+   - *Risk:* `.extend()` losing `.strict()` mode.
+   - *Mitigation:* Explicitly apply `.strict()` on `adminAdvocateProfileUpdateSchema` after `.extend()`.
+5. **Decimal & Array Comparison Precision**:
+   - *Risk:* False positives in `changedFields` due to Prisma Decimal instance comparisons or array order.
+   - *Mitigation:* Normalize Decimals with `Number(val)` and arrays with `JSON.stringify()`.
 
 ---
 
-## STOP FOR APPROVAL
-Per Step 0 instructions: **No application code has been edited yet.** 
-Please review this implementation plan (`proceed.md`) and reply with approval to proceed with execution.
+## 6. Answers to Open Questions & Recommendations
+
+1. **Edit History Audit Table**:
+   - *Question:* Without a schema change we only log to console and return `changedFields`. Do we want a permanent audit table (e.g. `AdvocateAdminEdit`)? That needs a migration.
+   - *Answer / Recommendation:* **Keep console logging and `changedFields` in the response for this task (no schema change / migration).** If compliance demands permanent audit logging later, an independent `AdminAuditLog` migration can be introduced without impacting API contracts.
+2. **Rejection History on Resubmission**:
+   - *Question:* When a rejected advocate re-submits, the old `rejectionReason` is cleared and lost. Keep it that way, or store the history (needs a migration)?
+   - *Answer / Recommendation:* **Keep it that way (no schema change).** The current workflow in `submitForApproval` clears `rejectionReason: null` when an advocate re-submits for approval. Preserving rejection history requires an `AdvocateRejectionHistory` relation or JSON field, which would require a database migration.
+3. **Notify the Advocate on Admin Edit**:
+   - *Question:* Should the advocate get an email/SMS when the admin edits their profile?
+   - *Answer / Recommendation:* **Default to NO.** Admin corrections (typos, court categorization, formatting) prior to approval should be seamless and non-intrusive.
+4. **Admin Profile Photo Upload**:
+   - *Question:* Should the admin also be able to replace an advocate's profile photo (new multipart endpoint `POST /api/admin/advocates/:advocateId/photo`)?
+   - *Answer / Recommendation:* **Default to NOT in this task.** Keeps the scope focused and avoids introducing multipart file upload pipelines on admin advocate management.
+5. **Location Coordinates on Pincode/City Change**:
+   - *Question:* If the admin changes `pincode`/`city`, `latitude`/`longitude` stay old. The advocate's own edit behaves the same way. Keep it like that?
+   - *Answer / Recommendation:* **Default to YES.** Maintains exact parity with the advocate's own `updateProfile` without adding external geocoding dependencies.
+6. **Pending List Advocates with `submittedForApprovalAt = null`**:
+   - *Question:* Does `GET /api/admin/advocates/pending` also include advocates who never submitted (`submittedForApprovalAt = null`)?
+   - *Finding / Confirmation:* **YES.** In `src/controllers/admin.controller.js` line 634, `listPendingAdvocates` queries `where: { approvalStatus: 'PENDING' }`. Because advocates default to `approvalStatus: 'PENDING'` upon initial registration with `submittedForApprovalAt: null`, any advocate who has registered but never submitted is currently included in the pending list. As instructed, we will report this finding and **not change** it in this task.
+
+---
+
+## 7. README.md Documentation Cleanup Plan (Task 6)
+
+1. **Section 12.2**: Update text to specify that `POST /api/content-creator/login` was removed and back-office login is now unified under `POST /api/admin/login`.
+2. **Section 13.4 (#2 & #3)**: Update to match current schema (`fullName`, `email`, `password`, `roleNames`, `roleIds`, returning `creator` / `creators` with `roles`, actual error statuses), with a pointer to Section 26.
+3. **Section 13.2**: Remove hard-coded password and document that admin login relies on `ADMIN_USER_EMAIL` and `ADMIN_USER_PASSWORD` environment variables.
+4. **Section 13.4 (#1 Unified Login)**: Align response payload samples with current implementation.
+5. **Section 25.1**: Replace incorrect permission codes with actual codes (`acts:create`, `acts:update`, `act_pdfs:upload`, `act_pdfs:sync`, `act_pdfs:delete`), remove `bearer_acts:*`, and remove `xxx:*` wildcard references since `checkUserPermission` does not support wildcards.
+6. **Section 24**: Note that content routes now live under `/api/admin/*` and point to Section 25.
+7. **Bearer Acts Guide**: Remove references to nonexistent `POST /api/auth/blog/login`.
+8. **Section 26 Step 10**: Fix broken `$` math LaTeX formatting arrow (`\rightarrow`) to clean Unicode `→`.
+9. **Breaking Change Notice**: Restore concise breaking-change notice pointing to Sections 25–27.
+10. **Section 27**: Add complete Postman guide for Admin Edit Advocate Profile & Rejected Profiles with the 18-step verification flow.

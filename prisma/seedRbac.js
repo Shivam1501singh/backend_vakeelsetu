@@ -48,6 +48,7 @@ export const DEFAULT_PERMISSIONS = [
   { code: 'advocates:view', name: 'View Advocates', module: 'ADVOCATES', description: 'Permission to view advocates list and pending approvals' },
   { code: 'advocates:approve', name: 'Approve Advocate Profiles', module: 'ADVOCATES', description: 'Permission to approve pending advocate profiles' },
   { code: 'advocates:reject', name: 'Reject Advocate Profiles', module: 'ADVOCATES', description: 'Permission to reject advocate profiles' },
+  { code: 'advocates:edit', name: 'Edit Advocate Profiles', module: 'ADVOCATES', description: 'Permission to edit advocate profile data (pending, rejected or approved) from the admin panel' },
   { code: 'advocates:update_status', name: 'Update Advocate Status', module: 'ADVOCATES', description: 'Permission to block/activate advocates and toggle call availability' },
   { code: 'advocates:delete', name: 'Manage Advocate Deletion', module: 'ADVOCATES', description: 'Permission to cancel or execute permanent advocate deletions' },
 
