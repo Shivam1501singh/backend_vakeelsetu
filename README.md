@@ -1053,7 +1053,7 @@ This feature provides a public support ticketing system that does NOT require lo
   ```json
   {
     "name": "Shivam Singh",
-    "email": "shivam@example.com",
+    "email": "user@example.com",
     "phoneNumber": "9876543210",
     "concern": "I am unable to update my advocate profile. Whenever I try to save, the system returns a CORS methods block."
   }
@@ -1075,7 +1075,7 @@ This feature provides a public support ticketing system that does NOT require lo
   ```json
   {
     "referenceId": "HELP-8F4K29",
-    "email": "shivam@example.com"
+    "email": "user@example.com"
   }
   ```
 - **Response Example (200 OK):**
@@ -1086,7 +1086,7 @@ This feature provides a public support ticketing system that does NOT require lo
       "id": "help-request-uuid",
       "referenceId": "HELP-8F4K29",
       "name": "Shivam Singh",
-      "email": "shivam@example.com",
+      "email": "user@example.com",
       "concern": "I am unable to update my advocate profile...",
       "response": "Resolved the method block. Please check again.",
       "status": "RESOLVED",
@@ -1160,7 +1160,7 @@ This feature provides a public support ticketing system that does NOT require lo
         "id": "help-request-uuid",
         "referenceId": "HELP-8F4K29",
         "name": "Shivam Singh",
-        "email": "shivam@example.com",
+        "email": "user@example.com",
         "concern": "I am unable to update my advocate profile...",
         "response": null,
         "status": "OPEN",
@@ -2472,18 +2472,17 @@ This section documents the Admin authentication system, Content Creator account 
 
 ### 13.1 Role Model Overview
 
-The system supports four distinct roles:
-1. `USER`: Normal client looking for legal services.
-2. `ADVOCATE`: Legal practitioner providing services.
-3. `CONTENT_CREATOR`: Content manager who writes and maintains public blogs.
-4. `ADMIN`: Administrative account with access to system management.
+The account and role model is structured as follows:
+- **Two base account types for app users:** `USER` (client) and `ADVOCATE`.
+- **Admin Panel accounts:** the main `ADMIN` (env login) and staff accounts.
+- **Staff RBAC roles:** staff accounts get RBAC roles such as `CONTENT_CREATOR`, `LEAD_USER`, or custom roles (see sections 25–26).
 
 ---
 
 ### 13.2 Admin Credentials & Environment Configuration
 
 The primary System Administrator account authenticates via environment variables configured in `.env`:
-* **Email Variable:** `ADMIN_USER_EMAIL` (e.g. `shivam.alka03@gmail.com`)
+* **Email Variable:** `ADMIN_USER_EMAIL` (e.g. `admin@example.com`)
 * **Password Variable:** `ADMIN_USER_PASSWORD`
 * **Role:** `ADMIN` (unrestricted system bypass for all permissions)
 
@@ -2527,9 +2526,8 @@ The primary System Administrator account authenticates via environment variables
     "token": "eyJhbGciOiJIUzI1Ni...",
     "admin": {
       "id": "admin",
-      "email": "admin@vakeelsetu.com",
-      "fullName": "Administrator",
-      "role": "ADMIN",
+      "fullName": "System Administrator",
+      "email": "admin@example.com",
       "accountType": "ADMIN",
       "roles": ["ADMIN"],
       "permissions": ["*"]
@@ -2544,8 +2542,8 @@ The primary System Administrator account authenticates via environment variables
     "token": "eyJhbGciOiJIUzI1Ni...",
     "admin": {
       "id": "creator-uuid",
-      "email": "creator@vakeelsetu.com",
       "fullName": "Staff Writer",
+      "email": "creator@example.com",
       "accountType": "CONTENT_CREATOR",
       "roles": ["CONTENT_CREATOR"],
       "permissions": ["blogs:read", "blogs:create", "blogs:update", "blogs:delete", "acts:read", "acts:create", "acts:update", "acts:delete", "act_pdfs:upload", "act_pdfs:delete", "act_pdfs:sync", "ipc:create", "ipc:update", "bns:create", "bns:update", "guides:create", "guides:update", "guides:delete", "updates:create", "updates:update", "updates:delete", "user_rights:create", "user_rights:update", "user_rights:delete"]
@@ -8070,7 +8068,7 @@ User ──> UserRole ──> Role ──> RolePermission ──> Permission
 
 ### 13. List Users (Admin & Lead User)
 - **Method:** `GET`
-- **URL:** `/api/admin/users?page=1&limit=20&search=shivam&role=LEAD_USER`
+- **URL:** `/api/admin/users?page=1&limit=20&search=user&role=LEAD_USER`
 - **Authentication:** Bearer Token / Cookie (Admin or Lead User with `users:view`)
 - **Required Permission:** `users:view`
 - **Response (200 OK):**
@@ -8866,14 +8864,14 @@ sequenceDiagram
     API-->>Admin: 200 OK (admin_token, accountType: ADMIN, permissions: ['*'])
     Admin->>API: 2. GET /api/admin/permissions
     API-->>Admin: 200 OK (all system permissions list)
-    Admin->>API: 3. POST /api/admin/roles (name: BLOG_EDITOR, perm: blogs:*)
+    Admin->>API: 3. POST /api/admin/roles (name: BLOG_EDITOR, perm: blogs:read, blogs:create, blogs:update, blogs:delete)
     API-->>Admin: 201 Created (role created)
     Admin->>API: 4. POST /api/admin/content-creators (staff account)
     API-->>Admin: 201 Created (staff_id generated)
     Admin->>API: 5. POST /api/admin/users/:staffId/roles (assign BLOG_EDITOR)
     API-->>Admin: 200 OK (role assigned)
     Staff->>API: 6. POST /api/admin/login (staff credentials)
-    API-->>Staff: 200 OK (staff_token, accountType: CONTENT_CREATOR, permissions: blogs:*)
+    API-->>Staff: 200 OK (staff_token, accountType: CONTENT_CREATOR, permissions: blogs:read, blogs:create, blogs:update, blogs:delete)
     Staff->>API: 7. POST /api/admin/blogs (create blog)
     API-->>Staff: 201 Created (authorized by blogs:create)
     Staff->>API: 8. POST /api/admin/ipc (create IPC section)
@@ -8926,9 +8924,8 @@ if (res.token) {
   "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
   "admin": {
     "id": "admin",
-    "email": "admin@vakeelsetu.com",
-    "fullName": "Administrator",
-    "role": "ADMIN",
+    "fullName": "System Administrator",
+    "email": "admin@example.com",
     "accountType": "ADMIN",
     "roles": ["ADMIN"],
     "permissions": ["*"]
@@ -8975,8 +8972,8 @@ pm.test("Permissions array contains content permissions", function () {
 
 ---
 
-#### Step 3: Create Role `BLOG_EDITOR` (`blogs:*`)
-Creates a new custom role with wildcard permissions for blog operations only.
+#### Step 3: Create Role `BLOG_EDITOR` (`blogs:read`, `blogs:create`, `blogs:update`, `blogs:delete`)
+Creates a new custom role with explicit permissions for blog operations only (`blogs:read`, `blogs:create`, `blogs:update`, `blogs:delete`).
 
 - **Method:** `POST`
 - **URL:** `{{base_url}}/api/admin/roles`
@@ -8987,8 +8984,9 @@ Creates a new custom role with wildcard permissions for blog operations only.
 ```json
 {
   "name": "BLOG_EDITOR",
+  "displayName": "Blog Editor",
   "description": "Content editor with blog management permissions only",
-  "permissionNames": ["blogs:*"]
+  "permissionCodes": ["blogs:read", "blogs:create", "blogs:update", "blogs:delete"]
 }
 ```
 - **Tests Script (Postman):**
@@ -9001,14 +8999,47 @@ pm.test("Status code is 201 or 200 (if role already exists)", function () {
 ```json
 {
   "success": true,
-  "message": "Role created successfully",
+  "message": "Role 'BLOG_EDITOR' created successfully.",
   "role": {
-    "id": "role-uuid-1234",
+    "id": "e4b10221-36ad-45e0-9ef9-c70a4a822001",
     "name": "BLOG_EDITOR",
+    "displayName": "Blog Editor",
     "description": "Content editor with blog management permissions only",
+    "isActive": true,
+    "isSystem": false,
+    "permissionsCount": 4,
     "permissions": [
-      { "name": "blogs:*" }
-    ]
+      {
+        "id": "b1111111-0000-0000-0000-000000000001",
+        "code": "blogs:read",
+        "name": "View Blogs",
+        "module": "BLOGS",
+        "description": "Allows viewing blogs and blog lists"
+      },
+      {
+        "id": "b1111111-0000-0000-0000-000000000002",
+        "code": "blogs:create",
+        "name": "Create Blogs",
+        "module": "BLOGS",
+        "description": "Allows creating new blog posts"
+      },
+      {
+        "id": "b1111111-0000-0000-0000-000000000003",
+        "code": "blogs:update",
+        "name": "Edit Blogs",
+        "module": "BLOGS",
+        "description": "Allows updating blog posts"
+      },
+      {
+        "id": "b1111111-0000-0000-0000-000000000004",
+        "code": "blogs:delete",
+        "name": "Delete Blogs",
+        "module": "BLOGS",
+        "description": "Allows deleting blog posts"
+      }
+    ],
+    "createdAt": "2026-10-12T10:00:00.000Z",
+    "updatedAt": "2026-10-12T10:00:00.000Z"
   }
 }
 ```
@@ -9114,7 +9145,7 @@ pm.test("Staff login returns CONTENT_CREATOR accountType and BLOG_EDITOR roles",
   pm.expect(res.success).to.be.true;
   pm.expect(res.admin.accountType).to.eql("CONTENT_CREATOR");
   pm.expect(res.admin.roles).to.include("BLOG_EDITOR");
-  pm.expect(res.admin.permissions).to.include("blogs:*");
+  pm.expect(res.admin.permissions).to.include("blogs:create");
 });
 
 if (res.token) {
@@ -9125,16 +9156,20 @@ if (res.token) {
 ```json
 {
   "success": true,
-  "message": "Content Creator login successful",
+  "message": "Admin login successful",
   "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
   "admin": {
     "id": "cc-uuid-9876",
-    "email": "editor.staff@vakeelsetu.com",
     "fullName": "Editor Staff Member",
-    "role": "CONTENT_CREATOR",
+    "email": "editor.staff@example.com",
     "accountType": "CONTENT_CREATOR",
     "roles": ["BLOG_EDITOR"],
-    "permissions": ["blogs:*"]
+    "permissions": [
+      "blogs:read",
+      "blogs:create",
+      "blogs:update",
+      "blogs:delete"
+    ]
   }
 }
 ```
@@ -9142,7 +9177,7 @@ if (res.token) {
 ---
 
 #### Step 7: Staff Creates Blog via `POST /api/admin/blogs` (Allowed: `201 Created`)
-Because staff has `blogs:*`, creating a blog succeeds.
+Because staff has `blogs:create`, creating a blog succeeds.
 
 - **Method:** `POST`
 - **URL:** `{{base_url}}/api/admin/blogs`
@@ -9188,7 +9223,7 @@ pm.test("Blog created successfully", function () {
 ---
 
 #### Step 8: Staff Attempts to Create IPC Section (Forbidden: `403 Forbidden`)
-Staff only has `blogs:*`, so access to IPC section management is rejected.
+Staff only has blog management permissions (`blogs:read`, `blogs:create`, `blogs:update`, `blogs:delete`), so access to IPC section management is rejected.
 
 - **Method:** `POST`
 - **URL:** `{{base_url}}/api/admin/ipc`
@@ -9375,6 +9410,7 @@ pm.test("Status code is 404 Not Found", function () {
   "roleNames": ["BLOG_EDITOR"]
 }
 ```
+*(Accepts `fullName` or `name` in request body).*
 - **Response (`201 Created`):**
 ```json
 {
@@ -9382,11 +9418,14 @@ pm.test("Status code is 404 Not Found", function () {
   "message": "Staff account created successfully",
   "creator": {
     "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
+    "name": "Blog Editor One",
     "fullName": "Blog Editor One",
     "email": "blog.editor@vakeelsetu.com",
     "isActive": true,
     "accountType": "CONTENT_CREATOR",
-    "roles": [
+    "role": "BLOG_EDITOR",
+    "roles": ["BLOG_EDITOR"],
+    "roleDetails": [
       {
         "id": "7649542a-d221-4f1b-87b6-19e34e56bc78",
         "name": "BLOG_EDITOR",
@@ -9421,11 +9460,14 @@ pm.test("Status code is 404 Not Found", function () {
   "message": "Staff account created successfully",
   "creator": {
     "id": "staff-uuid-2",
+    "name": "Standard Content Staff",
     "fullName": "Standard Content Staff",
     "email": "staff.default@vakeelsetu.com",
     "isActive": true,
     "accountType": "CONTENT_CREATOR",
-    "roles": [
+    "role": "CONTENT_CREATOR",
+    "roles": ["CONTENT_CREATOR"],
+    "roleDetails": [
       {
         "id": "role-uuid-cc",
         "name": "CONTENT_CREATOR",
@@ -9458,15 +9500,18 @@ pm.test("Status code is 404 Not Found", function () {
       "fullName": "Blog Editor One",
       "email": "blog.editor@vakeelsetu.com",
       "isActive": true,
-      "roles": [
+      "createdAt": "2026-10-12T05:40:00.000Z",
+      "name": "Blog Editor One",
+      "role": "BLOG_EDITOR",
+      "roles": ["BLOG_EDITOR"],
+      "roleDetails": [
         {
           "id": "7649542a-d221-4f1b-87b6-19e34e56bc78",
           "name": "BLOG_EDITOR",
           "displayName": "Blog Editor",
           "isActive": true
         }
-      ],
-      "createdAt": "2026-10-12T05:40:00.000Z"
+      ]
     }
   ]
 }
@@ -9480,11 +9525,14 @@ pm.test("Status code is 404 Not Found", function () {
   "success": true,
   "creator": {
     "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
+    "name": "Blog Editor One",
     "fullName": "Blog Editor One",
     "email": "blog.editor@vakeelsetu.com",
     "isActive": true,
     "accountType": "CONTENT_CREATOR",
-    "roles": [
+    "role": "BLOG_EDITOR",
+    "roles": ["BLOG_EDITOR"],
+    "roleDetails": [
       {
         "id": "7649542a-d221-4f1b-87b6-19e34e56bc78",
         "name": "BLOG_EDITOR",
@@ -9519,11 +9567,17 @@ pm.test("Status code is 404 Not Found", function () {
   "message": "Staff roles updated successfully",
   "creator": {
     "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
+    "name": "Blog Editor One",
     "fullName": "Blog Editor One",
     "email": "blog.editor@vakeelsetu.com",
     "isActive": true,
     "accountType": "CONTENT_CREATOR",
+    "role": "BLOG_EDITOR",
     "roles": [
+      "BLOG_EDITOR",
+      "LEAD_USER"
+    ],
+    "roleDetails": [
       {
         "id": "7649542a-d221-4f1b-87b6-19e34e56bc78",
         "name": "BLOG_EDITOR",
@@ -9538,8 +9592,14 @@ pm.test("Status code is 404 Not Found", function () {
       }
     ],
     "permissions": [
-      "blogs:read", "blogs:create", "blogs:update", "blogs:delete",
-      "users:view", "advocates:view", "feedback:view", "consultancy:view"
+      "blogs:read",
+      "blogs:create",
+      "blogs:update",
+      "blogs:delete",
+      "users:view",
+      "advocates:view",
+      "feedback:view",
+      "consultancy:view"
     ],
     "createdAt": "2026-10-12T05:40:00.000Z",
     "updatedAt": "2026-10-12T05:45:00.000Z"
@@ -9657,7 +9717,7 @@ pm.test("Status code is 201 Created", function () {
 });
 const res = pm.response.json();
 pm.test("Staff has BLOG_EDITOR role", function () {
-  pm.expect(res.creator.roles[0].name).to.eql("BLOG_EDITOR");
+  pm.expect(res.creator.roles).to.include("BLOG_EDITOR");
 });
 if (res.creator && res.creator.id) {
   pm.environment.set("staff_id", res.creator.id);
@@ -9687,7 +9747,7 @@ pm.test("Status code is 201 Created", function () {
 });
 const res = pm.response.json();
 pm.test("Staff defaults to CONTENT_CREATOR role", function () {
-  pm.expect(res.creator.roles.some(r => r.name === "CONTENT_CREATOR")).to.be.true;
+  pm.expect(res.creator.roles).to.include("CONTENT_CREATOR");
 });
 ```
 
@@ -9777,9 +9837,8 @@ pm.test("Status code is 200 OK", function () {
 });
 const res = pm.response.json();
 pm.test("Staff now has both roles", function () {
-  const roleNames = res.creator.roles.map(r => r.name);
-  pm.expect(roleNames).to.include("BLOG_EDITOR");
-  pm.expect(roleNames).to.include("LEAD_USER");
+  pm.expect(res.creator.roles).to.include("BLOG_EDITOR");
+  pm.expect(res.creator.roles).to.include("LEAD_USER");
 });
 ```
 
@@ -9814,8 +9873,8 @@ if (res.token) {
 ---
 
 #### Step 10: Staff Permission Enforcement Tests
-- **Sub-test A (Allowed):** `GET {{base_url}}/api/admin/users` with `Bearer {{staff_token}}` $ightarrow$ Returns `200 OK` (because `LEAD_USER` role grants `users:view`).
-- **Sub-test B (Forbidden):** `POST {{base_url}}/api/admin/ipc` with `Bearer {{staff_token}}` $ightarrow$ Returns `403 Forbidden` (`ipc:create` is not in `BLOG_EDITOR` or `LEAD_USER`).
+- **Sub-test A (Allowed):** `GET {{base_url}}/api/admin/users` with `Bearer {{staff_token}}` → Returns `200 OK` (because `LEAD_USER` role grants `users:view`).
+- **Sub-test B (Forbidden):** `POST {{base_url}}/api/admin/ipc` with `Bearer {{staff_token}}` → Returns `403 Forbidden` (`ipc:create` is not in `BLOG_EDITOR` or `LEAD_USER`).
 
 ---
 
@@ -10134,7 +10193,7 @@ This guide covers the administrative workflow for editing advocate profiles and 
 | Variable Name | Description | Example / Populated By |
 |---|---|---|
 | `base_url` | Base URL of the backend API | `http://localhost:5000` |
-| `admin_email` | Primary Admin email | `shivam.alka03@gmail.com` |
+| `admin_email` | Primary Admin email | `admin@example.com` |
 | `admin_password` | Primary Admin password | `1234567` |
 | `admin_token` | JWT returned on admin login | Step 1 script |
 | `pending_advocate_id` | ID of advocate in pending approval queue | Step 2 script |
