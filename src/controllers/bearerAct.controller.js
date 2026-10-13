@@ -3,6 +3,11 @@ import * as validator from '../validators/bearerAct.validator.js';
 import { calculateSectionOrder } from '../utils/sectionOrder.js';
 import { attachPredefinedPdfToAct } from '../services/predefinedPdf.service.js';
 
+const SECTION_ORDER_BY = [
+  { sectionOrder: 'asc' },
+  { createdAt: 'asc' },
+  { id: 'asc' }
+];
 
 /**
  * Single Admin Write Endpoint
@@ -468,10 +473,7 @@ export const getSingleAct = async (req, res, next) => {
       where: { id },
       include: {
         sections: {
-          orderBy: [
-            { chapterNo: 'asc' },
-            { sectionOrder: 'asc' }
-          ]
+          orderBy: SECTION_ORDER_BY
         },
         pdfs: {
           orderBy: { createdAt: 'desc' }
@@ -522,10 +524,7 @@ export const getSectionsByAct = async (req, res, next) => {
         where: { actId: id },
         skip,
         take: limit,
-        orderBy: [
-          { chapterNo: 'asc' },
-          { sectionOrder: 'asc' }
-        ]
+        orderBy: SECTION_ORDER_BY
       }),
       prisma.actSection.count({
         where: { actId: id }
@@ -696,10 +695,7 @@ export const searchGlobalBearerActs = async (req, res, next) => {
         where: sectionWhere,
         skip: currentSkip,
         take,
-        orderBy: [
-          { chapterNo: 'asc' },
-          { sectionOrder: 'asc' }
-        ],
+        orderBy: SECTION_ORDER_BY,
         include: {
           act: {
             include: {
@@ -794,10 +790,7 @@ export const searchActSections = async (req, res, next) => {
         where,
         skip,
         take: limit,
-        orderBy: [
-          { chapterNo: 'asc' },
-          { sectionOrder: 'asc' }
-        ]
+        orderBy: SECTION_ORDER_BY
       }),
       prisma.actSection.count({ where })
     ]);

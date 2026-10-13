@@ -6674,6 +6674,11 @@ Pre-seeded Acts under `Tech, Data & Cyber Laws`:
 ## 4. Public Read APIs
 Public APIs require **no authentication token** and are accessible to anyone.
 
+> **Statutory Section Ordering & Chapter Headings Note:**
+> - Sections are returned in **statutory order** by section/article number (`sectionOrder`), e.g. 1, 2, 2A, 3 … 51, 51A, 52 … 243, 243A … 243ZT, 244.
+> - `chapterNo` and `chapterName` are informational. In major statutes split into Parts (e.g. Constitution of India, IBC, Arbitration & Conciliation Act), chapter numbers restart inside each Part. **Clients must not sort or group by `chapterNo`**. To render chapter headings, start a new heading whenever `chapterName` changes compared to the previous section in the exact order received.
+> - Database section order consistency can be verified/backfilled via `npm run backfill:section-order` (dry run first, or `npm run backfill:section-order -- --apply` to update).
+
 ### 1. Get All Bearer Act Categories
 ```http
 GET /api/bearer-acts?page=1&limit=20
@@ -6844,6 +6849,11 @@ GET /api/sections/:id
 ---
 
 ## 5. Bearer Acts Search API
+
+> **Search Section Ordering Note:**
+> - Matching sections are returned in **statutory order** by section/article number (`sectionOrder`), tie-broken deterministically by `createdAt: 'asc', id: 'asc'`.
+> - `chapterNo` and `chapterName` are informational metadata. Because chapter numbering restarts inside separate Parts (e.g. Constitution, IBC, Arbitration Act), clients must not sort search results by `chapterNo`.
+> - Run `npm run backfill:section-order` to check database order consistency (`-- --apply` to execute updates).
 
 The Bearer Acts module provides **two public search modes** allowing citizens, advocates, and content creators to search legal content across the hierarchy without requiring authentication:
 
