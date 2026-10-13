@@ -48,14 +48,15 @@ export const lookupRequest = async (req, res, next) => {
 
 export const adminListRequests = async (req, res, next) => {
   try {
-    const { page, limit, status, email, referenceId } = req.query;
+    const { page, limit, status, email, referenceId, search } = req.query;
     
     const result = await helpService.listAllHelpRequestsAdmin({
-      page: page ? parseInt(page, 10) : 1,
-      limit: limit ? parseInt(limit, 10) : 20,
+      page,
+      limit,
       status,
       email,
-      referenceId
+      referenceId,
+      search
     });
 
     return res.status(200).json({
@@ -92,9 +93,29 @@ export const submitAdminResponse = async (req, res, next) => {
     const { id } = req.params;
     const validated = helpValidator.adminResponseSchema.parse(req.body);
 
+    // Determine responder details from req.user
+    let responder = null;
+    if (req.user) {
+      const userType = (req.user.type || req.user.role || '').toLowerCase();
+      if (userType === 'admin') {
+        responder = {
+          id: 'admin',
+          type: 'ADMIN',
+          name: req.user.fullName || 'System Administrator'
+        };
+      } else {
+        responder = {
+          id: req.user.id,
+          type: 'CONTENT_CREATOR',
+          name: req.user.fullName || 'Staff'
+        };
+      }
+    }
+
     const helpRequest = await helpService.respondToHelpRequest(id, {
       response: validated.response,
-      status: validated.status
+      status: validated.status,
+      responder
     });
 
     return res.status(200).json({

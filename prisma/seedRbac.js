@@ -65,7 +65,11 @@ export const DEFAULT_PERMISSIONS = [
   { code: 'content_creators:create', name: 'Create Content Creator', module: 'CONTENT_CREATORS', description: 'Permission to create new content creator staff accounts' },
 
   // Roles & RBAC Management
-  { code: 'roles:manage', name: 'Manage Roles and Permissions', module: 'ROLES', description: 'Permission to manage RBAC roles, permissions, and user assignments' }
+  { code: 'roles:manage', name: 'Manage Roles and Permissions', module: 'ROLES', description: 'Permission to manage RBAC roles, permissions, and user assignments' },
+
+  // Help & Support Requests
+  { code: 'help:view', name: 'View Help Requests', module: 'HELP', description: 'Permission to view help/support requests list and details' },
+  { code: 'help:respond', name: 'Respond to Help Requests', module: 'HELP', description: 'Permission to reply to help requests and change their status' }
 ];
 
 export const CONTENT_CREATOR_PERMISSIONS = [
@@ -100,6 +104,11 @@ export const LEAD_USER_PERMISSIONS = [
   'advocates:view',
   'feedback:view',
   'consultancy:view'
+];
+
+export const SUPPORT_EXECUTIVE_PERMISSIONS = [
+  'help:view',
+  'help:respond'
 ];
 
 /**
@@ -224,7 +233,48 @@ export async function seedRbac(prismaClient = null) {
   }
   console.log('  [*] LEAD_USER role permissions verified.');
 
-  // 4. Link seeded ContentCreator account with CONTENT_CREATOR role if exists
+  // 4. Seed SUPPORT_EXECUTIVE Role
+  let supportExecutiveRole = await prisma.role.findUnique({
+    where: { name: 'SUPPORT_EXECUTIVE' }
+  });
+
+  if (!supportExecutiveRole) {
+    supportExecutiveRole = await prisma.role.create({
+      data: {
+        name: 'SUPPORT_EXECUTIVE',
+        displayName: 'Support Executive',
+        description: 'Can view and respond to help/support requests.',
+        isActive: true,
+        isSystem: true
+      }
+    });
+    console.log('  [+] Created role: SUPPORT_EXECUTIVE');
+  } else {
+    console.log('  [*] Role SUPPORT_EXECUTIVE already exists.');
+  }
+
+  // Assign permissions to SUPPORT_EXECUTIVE role idempotently
+  for (const code of SUPPORT_EXECUTIVE_PERMISSIONS) {
+    const permissionId = permissionMap[code];
+    if (permissionId) {
+      await prisma.rolePermission.upsert({
+        where: {
+          roleId_permissionId: {
+            roleId: supportExecutiveRole.id,
+            permissionId
+          }
+        },
+        update: {},
+        create: {
+          roleId: supportExecutiveRole.id,
+          permissionId
+        }
+      });
+    }
+  }
+  console.log('  [*] SUPPORT_EXECUTIVE role permissions verified.');
+
+  // 5. Link seeded ContentCreator account with CONTENT_CREATOR role if exists
   const defaultCreator = await prisma.contentCreator.findFirst({
     where: { email: 'trainee6@techvunex.in' }
   });

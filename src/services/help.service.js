@@ -2,7 +2,7 @@ import prisma from '../lib/prisma.js';
 import crypto from 'crypto';
 
 /**
- * Generates a secure, cryptographically random Help reference ID (e.g., HELP-8F4K29).
+ * Generates a secure, cryptographically random Help reference ID (e.g., VKLS-8F4K29).
  */
 const generateReferenceId = () => {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -49,6 +49,7 @@ export const createHelpRequest = async ({ name, email, phoneNumber, concern }) =
 /**
  * Look up a public help request by reference ID and email.
  * This checks matching email to prevent enumeration blocks.
+ * Strictly excludes responder audit fields to protect internal staff identity.
  */
 export const lookupHelpRequest = async ({ referenceId, email }) => {
   const cleanRef = referenceId.trim();
@@ -64,7 +65,9 @@ export const lookupHelpRequest = async ({ referenceId, email }) => {
     throw err;
   }
 
-  return helpRequest;
+  // Remove responder audit fields from public output
+  const { respondedById, respondedByType, respondedByName, ...publicHelpRequest } = helpRequest;
+  return publicHelpRequest;
 };
 
 /**
@@ -85,32 +88,79 @@ export const getHelpRequestAdmin = async (id) => {
 };
 
 /**
- * Admin: List and filter help requests with pagination.
+ * Admin: List and filter help requests with pagination, status counts, and optional search.
  */
-export const listAllHelpRequestsAdmin = async ({ page = 1, limit = 20, status, email, referenceId }) => {
-  const skip = (page - 1) * limit;
-  const take = parseInt(limit, 10);
+export const listAllHelpRequestsAdmin = async ({ page = 1, limit = 20, status, email, referenceId, search }) => {
+  let parsedPage = parseInt(page, 10);
+  if (isNaN(parsedPage) || parsedPage < 1) {
+    parsedPage = 1;
+  }
+
+  let parsedLimit = parseInt(limit, 10);
+  if (isNaN(parsedLimit) || parsedLimit < 1) {
+    parsedLimit = 20;
+  }
+  if (parsedLimit > 100) {
+    parsedLimit = 100;
+  }
+
+  const skip = (parsedPage - 1) * parsedLimit;
+  const take = parsedLimit;
 
   const where = {};
   if (status) where.status = status;
   if (email) where.email = { contains: email.toLowerCase().trim(), mode: 'insensitive' };
   if (referenceId) where.referenceId = referenceId.trim();
 
-  const [total, helpRequests] = await prisma.$transaction([
+  if (search && typeof search === 'string' && search.trim()) {
+    const s = search.trim();
+    where.OR = [
+      { name: { contains: s, mode: 'insensitive' } },
+      { email: { contains: s, mode: 'insensitive' } },
+      { phoneNumber: { contains: s, mode: 'insensitive' } },
+      { referenceId: { contains: s, mode: 'insensitive' } },
+      { concern: { contains: s, mode: 'insensitive' } }
+    ];
+  }
+
+  const [total, helpRequests, statusGroups] = await prisma.$transaction([
     prisma.helpRequest.count({ where }),
     prisma.helpRequest.findMany({
       where,
       skip,
       take,
       orderBy: { createdAt: 'desc' }
+    }),
+    prisma.helpRequest.groupBy({
+      by: ['status'],
+      _count: {
+        _all: true
+      }
     })
   ]);
 
+  const counts = {
+    OPEN: 0,
+    IN_PROGRESS: 0,
+    RESOLVED: 0,
+    CLOSED: 0,
+    total: 0
+  };
+
+  statusGroups.forEach((group) => {
+    const countVal = group._count._all || 0;
+    if (Object.prototype.hasOwnProperty.call(counts, group.status)) {
+      counts[group.status] = countVal;
+    }
+    counts.total += countVal;
+  });
+
   return {
     helpRequests,
+    counts,
     pagination: {
       total,
-      page: parseInt(page, 10),
+      page: parsedPage,
       limit: take,
       totalPages: Math.ceil(total / take)
     }
@@ -120,7 +170,7 @@ export const listAllHelpRequestsAdmin = async ({ page = 1, limit = 20, status, e
 /**
  * Support/Admin response submission.
  */
-export const respondToHelpRequest = async (id, { response, status }) => {
+export const respondToHelpRequest = async (id, { response, status, responder = null }) => {
   const helpRequest = await prisma.helpRequest.findUnique({
     where: { id }
   });
@@ -131,12 +181,20 @@ export const respondToHelpRequest = async (id, { response, status }) => {
     throw err;
   }
 
+  const updateData = {
+    response: response.trim(),
+    status,
+    respondedAt: new Date()
+  };
+
+  if (responder) {
+    if (responder.id !== undefined) updateData.respondedById = responder.id;
+    if (responder.type !== undefined) updateData.respondedByType = responder.type;
+    if (responder.name !== undefined) updateData.respondedByName = responder.name;
+  }
+
   return await prisma.helpRequest.update({
     where: { id },
-    data: {
-      response: response.trim(),
-      status,
-      respondedAt: new Date()
-    }
+    data: updateData
   });
 };

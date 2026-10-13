@@ -1030,16 +1030,16 @@ The restriction is strictly based on **word count**, not character count. Word c
 
 ## 10. Help & Support API
 
-This feature provides a public support ticketing system that does NOT require login, registration, cookies, or JWT headers. Anyone visiting the site (Visitor, User, Advocate, or Admin) can submit a ticket and look up their status.
+This feature provides a support ticketing system. Visitors can submit tickets and lookup status without authentication. Internal viewing and management in the Admin Panel requires authenticated staff credentials with appropriate RBAC permissions (`help:view` / `help:respond`).
 
 ### API Authorization Matrix
-| Feature / Route | Authentication | Visitor | User | Advocate | Admin |
+| Feature / Route | Authentication | Visitor | User | Advocate | Admin / Staff |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | Submit Help concern (`POST /api/help`) | None | ✓ Allowed | ✓ Allowed | ✓ Allowed | ✓ Allowed |
 | Lookup Help status (`POST /api/help/lookup`) | None | Ref ID + Email | Ref ID + Email | Ref ID + Email | Ref ID + Email |
-| Admin List requests (`GET /api/admin/help`) | `x-admin-secret` | ✗ Forbidden | ✗ Forbidden | ✗ Forbidden | ✓ Allowed |
-| Admin Get request details (`GET /api/admin/help/:id`) | `x-admin-secret` | ✗ Forbidden | ✗ Forbidden | ✗ Forbidden | ✓ Allowed |
-| Admin Respond to request (`PATCH /api/admin/help/:id`) | `x-admin-secret` | ✗ Forbidden | ✗ Forbidden | ✗ Forbidden | ✓ Allowed |
+| Admin List requests (`GET /api/admin/help`) | Bearer Token (`help:view`) | ✗ Forbidden | ✗ Forbidden | ✗ Forbidden | ✓ Allowed |
+| Admin Get request details (`GET /api/admin/help/:id`) | Bearer Token (`help:view`) | ✗ Forbidden | ✗ Forbidden | ✗ Forbidden | ✓ Allowed |
+| Admin Respond to request (`PATCH /api/admin/help/:id`) | Bearer Token (`help:respond`) | ✗ Forbidden | ✗ Forbidden | ✗ Forbidden | ✓ Allowed |
 
 ---
 
@@ -1063,7 +1063,7 @@ This feature provides a public support ticketing system that does NOT require lo
   {
     "success": true,
     "message": "Your help request has been submitted successfully.",
-    "referenceId": "HELP-8F4K29"
+    "referenceId": "VKLS-8F4K29"
   }
   ```
 
@@ -1074,7 +1074,7 @@ This feature provides a public support ticketing system that does NOT require lo
 - **Request Body:**
   ```json
   {
-    "referenceId": "HELP-8F4K29",
+    "referenceId": "VKLS-8F4K29",
     "email": "user@example.com"
   }
   ```
@@ -1084,9 +1084,10 @@ This feature provides a public support ticketing system that does NOT require lo
     "success": true,
     "helpRequest": {
       "id": "help-request-uuid",
-      "referenceId": "HELP-8F4K29",
+      "referenceId": "VKLS-8F4K29",
       "name": "Shivam Singh",
       "email": "user@example.com",
+      "phoneNumber": "9876543210",
       "concern": "I am unable to update my advocate profile...",
       "response": "Resolved the method block. Please check again.",
       "status": "RESOLVED",
@@ -1096,6 +1097,7 @@ This feature provides a public support ticketing system that does NOT require lo
     }
   }
   ```
+  *(Note: Internal responder fields like `respondedById`, `respondedByType`, and `respondedByName` are strictly omitted from public lookup responses to protect staff privacy.)*
 
 #### C. Get Practice Areas List
 - **Method:** `GET`
@@ -1144,13 +1146,14 @@ This feature provides a public support ticketing system that does NOT require lo
 #### A. List and Filter Help Requests (Paginated)
 - **Method:** `GET`
 - **Endpoint:** `/api/admin/help`
-- **Required Header:** `x-admin-secret` matching `process.env.ADMIN_SECRET` (defaults to `super-admin-secret`).
+- **Authentication:** `Bearer <token>` (Admin or Staff with `help:view` permission).
 - **Query Params:**
   - `page`: default 1
-  - `limit`: default 20
+  - `limit`: default 20 (capped at max 100)
   - `status`: OPEN, IN_PROGRESS, RESOLVED, CLOSED (optional filter)
   - `email`: optional text filter
   - `referenceId`: optional exact filter
+  - `search`: optional search across name, email, phoneNumber, referenceId, and concern
 - **Response Example (200 OK):**
   ```json
   {
@@ -1158,17 +1161,28 @@ This feature provides a public support ticketing system that does NOT require lo
     "helpRequests": [
       {
         "id": "help-request-uuid",
-        "referenceId": "HELP-8F4K29",
+        "referenceId": "VKLS-8F4K29",
         "name": "Shivam Singh",
         "email": "user@example.com",
+        "phoneNumber": "9876543210",
         "concern": "I am unable to update my advocate profile...",
         "response": null,
         "status": "OPEN",
+        "respondedById": null,
+        "respondedByType": null,
+        "respondedByName": null,
         "createdAt": "2026-08-17T15:20:00.000Z",
         "updatedAt": "2026-08-17T15:20:00.000Z",
         "respondedAt": null
       }
     ],
+    "counts": {
+      "OPEN": 1,
+      "IN_PROGRESS": 0,
+      "RESOLVED": 0,
+      "CLOSED": 0,
+      "total": 1
+    },
     "pagination": {
       "total": 1,
       "page": 1,
@@ -1181,12 +1195,34 @@ This feature provides a public support ticketing system that does NOT require lo
 #### B. Get Help Request Details
 - **Method:** `GET`
 - **Endpoint:** `/api/admin/help/:id`
-- **Required Header:** `x-admin-secret` matching `process.env.ADMIN_SECRET` (defaults to `super-admin-secret`).
+- **Authentication:** `Bearer <token>` (Admin or Staff with `help:view` permission).
+- **Response Example (200 OK):**
+  ```json
+  {
+    "success": true,
+    "helpRequest": {
+      "id": "help-request-uuid",
+      "referenceId": "VKLS-8F4K29",
+      "name": "Shivam Singh",
+      "email": "user@example.com",
+      "phoneNumber": "9876543210",
+      "concern": "I am unable to update my advocate profile...",
+      "response": "Resolved the method block. Please check again.",
+      "status": "RESOLVED",
+      "respondedById": "admin",
+      "respondedByType": "ADMIN",
+      "respondedByName": "System Administrator",
+      "createdAt": "2026-08-17T15:20:00.000Z",
+      "updatedAt": "2026-08-17T15:30:00.000Z",
+      "respondedAt": "2026-08-17T15:30:00.000Z"
+    }
+  }
+  ```
 
 #### C. Respond to Help Request
 - **Method:** `PATCH`
 - **Endpoint:** `/api/admin/help/:id`
-- **Required Header:** `x-admin-secret` matching `process.env.ADMIN_SECRET` (defaults to `super-admin-secret`).
+- **Authentication:** `Bearer <token>` (Admin or Staff with `help:respond` permission).
 - **Request Body:**
   ```json
   {
@@ -1201,10 +1237,19 @@ This feature provides a public support ticketing system that does NOT require lo
     "message": "Help request response submitted successfully",
     "helpRequest": {
       "id": "help-request-uuid",
-      "referenceId": "HELP-8F4K29",
+      "referenceId": "VKLS-8F4K29",
+      "name": "Shivam Singh",
+      "email": "user@example.com",
+      "phoneNumber": "9876543210",
+      "concern": "I am unable to update my advocate profile...",
       "status": "RESOLVED",
       "response": "Resolved the method block. Please check again.",
-      "respondedAt": "2026-08-17T15:30:00.000Z"
+      "respondedById": "admin",
+      "respondedByType": "ADMIN",
+      "respondedByName": "System Administrator",
+      "respondedAt": "2026-08-17T15:30:00.000Z",
+      "createdAt": "2026-08-17T15:20:00.000Z",
+      "updatedAt": "2026-08-17T15:30:00.000Z"
     }
   }
   ```
@@ -1215,6 +1260,7 @@ This feature provides a public support ticketing system that does NOT require lo
 1. **Public Help Request Schema:**
    - `name`: string, required, trimmed, min 2, max 100 characters.
    - `email`: string, required, trimmed, valid email address format.
+   - `phoneNumber`: string, required, trimmed, min 7, max 20 characters.
    - `concern`: string, required, trimmed, min 10, max 2000 characters.
 2. **Public Lookup Schema:**
    - `referenceId`: string, required, trimmed.
@@ -1239,14 +1285,14 @@ This feature provides a public support ticketing system that does NOT require lo
      "concern": "I am experiencing issues logging in using Google OAuth."
    }
    ```
-4. Click send and verify it returns a secure Reference ID (e.g. `HELP-A3B9X1`).
+4. Click send and verify it returns a secure Reference ID (e.g. `VKLS-A3B9X1`).
 
 #### 2. Public Status Lookup
 1. Make a request `POST {{BASE_URL}}/api/help/lookup`.
 2. Body:
    ```json
    {
-     "referenceId": "HELP-A3B9X1",
+     "referenceId": "VKLS-A3B9X1",
      "email": "test@example.com"
    }
    ```
@@ -1254,15 +1300,21 @@ This feature provides a public support ticketing system that does NOT require lo
 4. Try with a different email (e.g. `wrong@example.com`). Verify it returns `404 Not Found`.
 
 #### 3. Admin Response
-1. Switch to a request `PATCH {{BASE_URL}}/api/admin/help/{{TICKET_DATABASE_UUID}}`. (Copy database UUID from the lookup details response).
+1. Make a request `PATCH {{BASE_URL}}/api/admin/help/{{TICKET_DATABASE_UUID}}`.
 2. Under Headers tab, add:
-   - Key: `x-admin-secret`
-   - Value: `super-admin-secret`
+   - Key: `Authorization`
+   - Value: `Bearer {{admin_token}}`
 3. Request Body:
    ```json
    {
-4. Send and verify it successfully updates the database.
-5. Re-run step 2 (Public Status Lookup) and verify `status` is now `RESOLVED` and `response` contains the admin reply text.
+     "response": "Resolved the issue. Please try again.",
+     "status": "RESOLVED"
+   }
+   ```
+4. Send and verify it returns `200 OK` with responder audit details (`respondedById`, `respondedByType`, `respondedByName`).
+5. Re-run step 2 (Public Status Lookup) and verify `status` is now `RESOLVED` and `response` contains the reply text, while responder internal fields are not exposed.
+
+---
 
 ## Lawyer Directory - Method: `GET`
 - **Endpoint:** `/api/advocates`
@@ -7998,6 +8050,10 @@ User ──> UserRole ──> Role ──> RolePermission ──> Permission
     "FEEDBACK": [
       { "id": "uuid", "code": "feedback:view", "name": "View Feedback" },
       { "id": "uuid", "code": "feedback:delete", "name": "Delete Feedback" }
+    ],
+    "HELP": [
+      { "id": "uuid", "code": "help:view", "name": "View Help Requests" },
+      { "id": "uuid", "code": "help:respond", "name": "Respond to Help Requests" }
     ]
   }
 }
@@ -10500,3 +10556,374 @@ pm.expect(res.data.rejectionReason).to.eql("Bar Council ID does not match certif
 ```javascript
 pm.test("Status code is 403 Forbidden", () => pm.response.to.have.status(403));
 ```
+
+---
+
+## 28. Help Requests in Admin Panel (RBAC) — Postman Guide
+
+### 28.1 Overview
+The Help Requests administration system allows the platform's Main Administrator and designated back-office Staff to manage user inquiries and support concerns:
+- **Main Administrator**: Has full unrestricted access to view, filter, and respond to all help requests (bypasses specific permissions).
+- **Staff Accounts (`ContentCreator`)**: Granted access through granular RBAC permissions:
+  - `help:view`: Allows viewing the help request list (`GET /api/admin/help`) and individual details (`GET /api/admin/help/:id`).
+  - `help:respond`: Allows replying to tickets and updating their status (`PATCH /api/admin/help/:id`).
+- **Pre-Seeded Role (`SUPPORT_EXECUTIVE`)**: An out-of-the-box system role possessing both `help:view` and `help:respond` permissions.
+- **Auditing**: Every staff or admin reply records the responder's ID, type (`ADMIN` or `CONTENT_CREATOR`), and name (`respondedById`, `respondedByType`, `respondedByName`). These internal audit details are strictly stripped from public self-service lookups.
+- **Seeding**: Ensure default permissions and roles are initialized:
+  ```bash
+  node prisma/seedRbac.js
+  ```
+
+---
+
+### 28.2 Endpoint Reference Table
+
+| Method | Endpoint | Auth | Permission | Purpose |
+|---|---|---|---|---|
+| `POST` | `/api/help` | None (Public) | None | Submit a public help concern |
+| `POST` | `/api/help/lookup` | None (Public) | None | Self-service status lookup by `referenceId` + `email` |
+| `GET` | `/api/admin/help` | Bearer Token | `help:view` | List, filter, search help requests, and retrieve status counts |
+| `GET` | `/api/admin/help/:id` | Bearer Token | `help:view` | Get ticket details including responder audit information |
+| `PATCH` | `/api/admin/help/:id` | Bearer Token | `help:respond` | Reply to help request and update status |
+| `POST` | `/api/admin/roles` | Bearer Token | `roles:manage` | Create a custom role (e.g. `HELP_VIEWER`) |
+| `PUT` | `/api/admin/roles/:id` | Bearer Token | `roles:manage` | Update a custom role and its permissions |
+| `POST` | `/api/admin/roles/:id/permissions` | Bearer Token | `roles:manage` | Assign permissions to an existing role |
+| `POST` | `/api/admin/content-creators` | Bearer Token | `content_creators:create` | Create a staff account with roles |
+| `PUT` | `/api/admin/content-creators/:id/roles` | Bearer Token | `roles:manage` | Update roles assigned to a staff account |
+
+---
+
+### 28.3 How to Grant Help Access to Someone (3 Ways)
+
+1. **Assign Seeded `SUPPORT_EXECUTIVE` Role**:
+   Create a new staff member or update an existing account with `roleNames: ["SUPPORT_EXECUTIVE"]`.
+2. **Create a Custom Role**:
+   Create a role (e.g., `HELP_VIEWER` for read-only access with `permissionCodes: ["help:view"]`, or `SUPPORT_LEAD` with `["help:view", "help:respond"]`) via `POST /api/admin/roles`, and assign it to the staff member.
+3. **Add Permissions to an Existing Role**:
+   Grant permissions to any existing role via `POST /api/admin/roles/:id/permissions` with `{ "permissionCodes": ["help:view", "help:respond"] }`.
+
+---
+
+### 28.4 Error Responses Table
+
+| Case | Status | Response Body |
+|---|---|---|
+| No token provided | `401 Unauthorized` | `{"success": false, "message": "Authentication required. Please login."}` |
+| Missing permission | `403 Forbidden` | `{"success": false, "message": "Access forbidden. Insufficient permissions."}` |
+| Help request not found | `404 Not Found` | `{"success": false, "message": "Help request not found."}` |
+| Invalid response/status | `400 Bad Request` | Zod validation error message |
+| Old `x-admin-secret` header alone (no token) | `401 Unauthorized` | `{"success": false, "message": "Authentication required. Please login."}` |
+| User or Advocate token attempting admin help | `403 Forbidden` | `{"success": false, "message": "Access forbidden. Insufficient permissions."}` |
+
+---
+
+### 28.5 Postman Environment Variables
+
+| Variable | Description | Example / Populated At |
+|---|---|---|
+| `base_url` | API base address | `http://localhost:5000` |
+| `admin_token` | Main Administrator JWT token | Populated at Step 2 |
+| `support_token` | Support Executive staff JWT | Populated at Step 7 |
+| `viewer_token` | Read-only Support Viewer JWT | Populated at Step 10 |
+| `content_token` | Content Creator staff JWT (without help permissions) | Pre-existing or created staff account |
+| `user_token` | Normal Client/User JWT | Pre-existing user account |
+| `help_id` | Database UUID of the help ticket | Populated at Step 3 |
+| `reference_id` | Public reference ID (e.g. `VKLS-XXXXXX`) | Populated at Step 1 |
+
+---
+
+### 28.6 Step-by-Step 16-Step Postman Workflow
+
+#### Step 1: Submit Public Help Request
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/help`
+- **Headers:** `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "name": "Arjun Sharma",
+  "email": "arjun.sharma@example.com",
+  "phoneNumber": "9876543210",
+  "concern": "I am experiencing difficulty verifying my Aadhaar identity during registration."
+}
+```
+- **Tests Script:**
+```javascript
+pm.test("Status code is 201 Created", () => pm.response.to.have.status(201));
+const res = pm.response.json();
+pm.expect(res.success).to.be.true;
+pm.expect(res.referenceId).to.match(/^VKLS-[A-Z0-9]{6}$/);
+pm.environment.set("reference_id", res.referenceId);
+```
+
+---
+
+#### Step 2: Main Admin Login
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/login`
+- **Headers:** `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "email": "admin@vakeelsetu.com",
+  "password": "AdminPassword123!"
+}
+```
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.expect(res.success).to.be.true;
+pm.environment.set("admin_token", res.token);
+```
+
+---
+
+#### Step 3: Admin Lists Help Requests & Checks Counts
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/help`
+- **Headers:** `Authorization: Bearer {{admin_token}}`
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.expect(res.success).to.be.true;
+pm.expect(res.counts).to.have.property("total");
+pm.expect(res.counts).to.have.property("OPEN");
+pm.expect(res.helpRequests.length).to.be.above(0);
+
+const target = res.helpRequests.find(r => r.referenceId === pm.environment.get("reference_id"));
+if (target) {
+  pm.environment.set("help_id", target.id);
+} else {
+  pm.environment.set("help_id", res.helpRequests[0].id);
+}
+```
+
+---
+
+#### Step 4: Admin Filters & Searches Help Requests
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/help?status=OPEN&search=Arjun&page=1&limit=10`
+- **Headers:** `Authorization: Bearer {{admin_token}}`
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.expect(res.success).to.be.true;
+pm.expect(res.pagination.limit).to.eql(10);
+```
+
+---
+
+#### Step 5: Admin Gets Ticket Details
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/help/{{help_id}}`
+- **Headers:** `Authorization: Bearer {{admin_token}}`
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.expect(res.success).to.be.true;
+pm.expect(res.helpRequest.id).to.eql(pm.environment.get("help_id"));
+```
+
+---
+
+#### Step 6: Create Staff Account with `SUPPORT_EXECUTIVE` Role
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/content-creators`
+- **Headers:** `Authorization: Bearer {{admin_token}}`, `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "fullName": "Support Exec User",
+  "email": "support.exec@vakeelsetu.com",
+  "password": "Password123!",
+  "roleNames": ["SUPPORT_EXECUTIVE"]
+}
+```
+- **Tests Script:**
+```javascript
+pm.test("Status code is 201 Created or 409 Conflict if exists", () => {
+  pm.expect([201, 409]).to.include(pm.response.code);
+});
+```
+
+---
+
+#### Step 7: Support Staff Login
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/admin/login`
+- **Headers:** `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "email": "support.exec@vakeelsetu.com",
+  "password": "Password123!"
+}
+```
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.expect(res.admin.permissions).to.include("help:view");
+pm.expect(res.admin.permissions).to.include("help:respond");
+pm.environment.set("support_token", res.token);
+```
+
+---
+
+#### Step 8: Support Staff Views Help Requests
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/help`
+- **Headers:** `Authorization: Bearer {{support_token}}`
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.expect(res.success).to.be.true;
+```
+
+---
+
+#### Step 9: Support Staff Responds to Request
+- **Method:** `PATCH`
+- **URL:** `{{base_url}}/api/admin/help/{{help_id}}`
+- **Headers:** `Authorization: Bearer {{support_token}}`, `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "response": "We have verified your query and our team is actively investigating the Aadhaar gateway.",
+  "status": "IN_PROGRESS"
+}
+```
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.expect(res.success).to.be.true;
+pm.expect(res.helpRequest.status).to.eql("IN_PROGRESS");
+pm.expect(res.helpRequest.respondedByType).to.eql("CONTENT_CREATOR");
+pm.expect(res.helpRequest.respondedByName).to.eql("Support Exec User");
+```
+
+---
+
+#### Step 10: Create Read-Only `HELP_VIEWER` Role & Staff Account
+1. **Create Role**: `POST {{base_url}}/api/admin/roles` with `Bearer {{admin_token}}`:
+   ```json
+   {
+     "name": "HELP_VIEWER",
+     "displayName": "Help Viewer",
+     "description": "Read-only access to help requests",
+     "permissionCodes": ["help:view"]
+   }
+   ```
+2. **Create Staff Member**: `POST {{base_url}}/api/admin/content-creators` with `Bearer {{admin_token}}`:
+   ```json
+   {
+     "fullName": "Help Viewer User",
+     "email": "help.viewer@vakeelsetu.com",
+     "password": "Password123!",
+     "roleNames": ["HELP_VIEWER"]
+   }
+   ```
+3. **Login Staff Member**: `POST {{base_url}}/api/admin/login` with email `help.viewer@vakeelsetu.com` → save token as `viewer_token`.
+
+---
+
+#### Step 11: Help Viewer Can View But Cannot Respond
+- **Sub-test A (Allowed View):**
+  - `GET {{base_url}}/api/admin/help` with `Authorization: Bearer {{viewer_token}}` → Returns `200 OK`.
+- **Sub-test B (Forbidden Respond):**
+  - `PATCH {{base_url}}/api/admin/help/{{help_id}}` with `Authorization: Bearer {{viewer_token}}` and body `{ "response": "Attempt", "status": "RESOLVED" }` → Returns `403 Forbidden` (`{"success": false, "message": "Access forbidden. Insufficient permissions."}`).
+
+---
+
+#### Step 12: Content Creator Without Help Permission Blocked
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/help`
+- **Headers:** `Authorization: Bearer {{content_token}}`
+- **Tests Script:**
+```javascript
+pm.test("Status code is 403 Forbidden", () => pm.response.to.have.status(403));
+const res = pm.response.json();
+pm.expect(res.message).to.eql("Access forbidden. Insufficient permissions.");
+```
+
+---
+
+#### Step 13: Admin Resolves Ticket
+- **Method:** `PATCH`
+- **URL:** `{{base_url}}/api/admin/help/{{help_id}}`
+- **Headers:** `Authorization: Bearer {{admin_token}}`, `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "response": "The Aadhaar verification gateway glitch has been completely resolved. You may retry now.",
+  "status": "RESOLVED"
+}
+```
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.expect(res.helpRequest.status).to.eql("RESOLVED");
+pm.expect(res.helpRequest.respondedByType).to.eql("ADMIN");
+pm.expect(res.helpRequest.respondedByName).to.eql("System Administrator");
+```
+
+---
+
+#### Step 14: Public Self-Service Lookup Verifies Status & Omits Responder Details
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/help/lookup`
+- **Headers:** `Content-Type: application/json`
+- **Body:**
+```json
+{
+  "referenceId": "{{reference_id}}",
+  "email": "arjun.sharma@example.com"
+}
+```
+- **Tests Script:**
+```javascript
+pm.test("Status code is 200 OK", () => pm.response.to.have.status(200));
+const res = pm.response.json();
+pm.expect(res.success).to.be.true;
+pm.expect(res.helpRequest.status).to.eql("RESOLVED");
+pm.expect(res.helpRequest.response).to.include("completely resolved");
+
+// Verify internal responder audit fields are NOT exposed publicly
+pm.expect(res.helpRequest).to.not.have.property("respondedById");
+pm.expect(res.helpRequest).to.not.have.property("respondedByType");
+pm.expect(res.helpRequest).to.not.have.property("respondedByName");
+```
+
+---
+
+#### Step 15: Legacy `x-admin-secret` Header Alone Returns 401
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/help`
+- **Headers:** `x-admin-secret: super-admin-secret`
+- **Tests Script:**
+```javascript
+pm.test("Status code is 401 Unauthorized", () => pm.response.to.have.status(401));
+const res = pm.response.json();
+pm.expect(res.message).to.eql("Authentication required. Please login.");
+```
+
+---
+
+#### Step 16: Regular User or Advocate Token Blocked with 403
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/admin/help`
+- **Headers:** `Authorization: Bearer {{user_token}}`
+- **Tests Script:**
+```javascript
+pm.test("Status code is 403 Forbidden", () => pm.response.to.have.status(403));
+const res = pm.response.json();
+pm.expect(res.message).to.eql("Access forbidden. Insufficient permissions.");
+```
+
