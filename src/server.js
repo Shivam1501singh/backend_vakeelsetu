@@ -51,7 +51,7 @@ app.use(cors({
   origin: [
     'http://localhost:5173',
     'https://vakeel-setu-seven.vercel.app',
-    'https://vakelsetu.netlify.app/',
+    'https://vakelsetu.netlify.app',
     process.env.WEB_CLIENT_URL,
     process.env.CLIENT_URL
   ].filter(Boolean),
