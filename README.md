@@ -553,7 +553,8 @@ Initiate OAuth by providing `client=web` or `client=mobile`. If the parameter is
    advocateconnect://auth-callback?error=<error_code>&type=user
    ```
 
----
+-----
+
 
 ### Mobile Deep-Link Specifications
 
