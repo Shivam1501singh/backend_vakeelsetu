@@ -37,6 +37,9 @@ import { getCurrentUser, logout as userLogout } from './controllers/user.auth.co
 import { logout as advocateLogout } from './controllers/advocate.auth.controller.js';
 import { getUserLikedAdvocates } from './controllers/advocateLike.controller.js';
 
+//satya
+import legalAiRoutes from './routes/legalAi.routes.js';
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -103,6 +106,10 @@ app.use('/api/feedback', userFeedbackRouter);
 app.use('/api/admin/feedback', adminFeedbackRouter);
 app.use('/api/advocate', advocateDeletionRoutes);
 app.use('/api/advocate', advocateStatusRoutes);
+
+//satya
+app.use('/api/legal-ai', legalAiRoutes);
+
 
 
 
