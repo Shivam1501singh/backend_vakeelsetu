@@ -7807,9 +7807,232 @@ To upload PDFs using Postman:
 | `404 Not Found` | PDF attachment ID does not exist | `{"success": false, "message": "PDF attachment not found"}` |
 | `404 Not Found` | PDF physical file missing on disk | `{"success": false, "message": "PDF file not found on disk"}` |
 
+---
 
+### 41.1 Direct PDF Acts & Hybrid Bare Acts Architecture (Postman & Frontend Integration Guide)
 
+> [!NOTE]
+> **Architecture Update**: Certain major enactments (such as the **Constitution of India**, **Arbitration & Conciliation Act 1996**, and **Insolvency & Bankruptcy Code 2016**) are distributed in **Direct PDF Mode**. In this mode, textual sections are kept empty (`sections: []`), and official Bare Act PDFs are directly attached (`pdfs: [...]`) for instant high-fidelity reading and download.
 
+#### 1. Configured Direct PDF Acts (Ready for Testing)
+
+| Act Name | Year | Act UUID | Category (Bearer Act) | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **CONSTITUTION OF INDIA** | 1950 | `c19a63d7-f0f4-46b7-8432-266bbfc8c867` | Constitutional Law | `sections: []`, `pdfs: 2` (Full Bare Act + Schedules) |
+| **ARBITRATION AND CONCILIATION ACT, 1996** | 1996 | `2be54269-7ad5-4a6c-bf71-057565598e76` | Arbitration & Alternative Dispute Resolution (ADR) | `sections: []`, `pdfs: 2` (Full Bare Act + Schedules) |
+| **THE INSOLVENCY AND BANKRUPTCY CODE, 2016** | 2016 | `0a6607a7-7698-428c-819b-1a6aed86e99a` | Insolvency, Banking, & Debt Recovery | `sections: []`, `pdfs: 2` (Full Bare Act + Schedules) |
+
+---
+
+#### 2. Postman Quick-Test Collection
+
+##### Test 1: Fetch Act Details (Verify Empty Sections & Attached PDFs)
+- **Method:** `GET`
+- **URL:** `http://localhost:5000/api/acts/c19a63d7-f0f4-46b7-8432-266bbfc8c867`
+- **Headers:** None (Public Endpoint)
+- **Expected Status:** `200 OK`
+- **Expected Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "c19a63d7-f0f4-46b7-8432-266bbfc8c867",
+    "bearerActId": "c1121e0a-34de-4de4-97dc-77544d641761",
+    "heading": "CONSTITUTION OF INDIA",
+    "act": "CONSTITUTION OF INDIA",
+    "year": 1950,
+    "sections": [],
+    "pdfs": [
+      {
+        "id": "28daae8e-92f6-4dd7-9822-848f9d4e8aa3",
+        "actId": "c19a63d7-f0f4-46b7-8432-266bbfc8c867",
+        "displayName": "Constitution of India",
+        "fileName": "constitution_of_india.pdf",
+        "fileSize": 2413611,
+        "mimeType": "application/pdf"
+      },
+      {
+        "id": "e5b7532c-b8b0-4819-a0f9-251de22589b9",
+        "actId": "c19a63d7-f0f4-46b7-8432-266bbfc8c867",
+        "displayName": "Constitution of India Schedules",
+        "fileName": "constitution of India sechdules .pdf",
+        "fileSize": 862982,
+        "mimeType": "application/pdf"
+      }
+    ]
+  }
+}
+```
+
+##### Test 2: Fetch Act PDFs with View & Download URLs
+- **Method:** `GET`
+- **URL:** `http://localhost:5000/api/acts/c19a63d7-f0f4-46b7-8432-266bbfc8c867/pdfs`
+- **Headers:** None (Public Endpoint)
+- **Expected Status:** `200 OK`
+- **Expected Response:**
+```json
+{
+  "success": true,
+  "act": {
+    "id": "c19a63d7-f0f4-46b7-8432-266bbfc8c867",
+    "heading": "CONSTITUTION OF INDIA",
+    "act": "CONSTITUTION OF INDIA",
+    "year": 1950
+  },
+  "data": [
+    {
+      "id": "28daae8e-92f6-4dd7-9822-848f9d4e8aa3",
+      "displayName": "Constitution of India",
+      "fileName": "constitution_of_india.pdf",
+      "fileSize": 2413611,
+      "mimeType": "application/pdf",
+      "viewUrl": "http://localhost:5000/api/acts/pdfs/28daae8e-92f6-4dd7-9822-848f9d4e8aa3/view",
+      "downloadUrl": "http://localhost:5000/api/acts/pdfs/28daae8e-92f6-4dd7-9822-848f9d4e8aa3/download"
+    }
+  ],
+  "count": 2
+}
+```
+
+##### Test 3: Inline PDF Viewing (Stream in Postman / Browser)
+- **Method:** `GET`
+- **URL:** `http://localhost:5000/api/acts/pdfs/28daae8e-92f6-4dd7-9822-848f9d4e8aa3/view`
+- **Expected Status:** `200 OK`
+- **Response Headers:**
+  - `Content-Type: application/pdf`
+  - `Content-Disposition: inline; filename="constitution_of_india.pdf"`
+- **Body:** Binary PDF byte stream. In Postman, clicking "Preview" or opening the URL in a browser renders the PDF document directly.
+
+##### Test 4: Direct Attachment Download
+- **Method:** `GET`
+- **URL:** `http://localhost:5000/api/acts/pdfs/28daae8e-92f6-4dd7-9822-848f9d4e8aa3/download`
+- **Expected Status:** `200 OK`
+- **Response Headers:**
+  - `Content-Disposition: attachment; filename="constitution_of_india.pdf"`
+- **Body:** Triggers automatic browser file save dialog.
+
+##### Test 5: Verify Sections Graceful Empty State
+- **Method:** `GET`
+- **URL:** `http://localhost:5000/api/acts/c19a63d7-f0f4-46b7-8432-266bbfc8c867/sections`
+- **Expected Status:** `200 OK`
+- **Expected Response:**
+```json
+{
+  "success": true,
+  "data": [],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 0,
+    "totalPages": 1
+  }
+}
+```
+
+---
+
+#### 3. Frontend Developer Implementation Guide
+
+The frontend client must handle 3 display modes dynamically based on the returned payload:
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│                     Act Detail Route Logic                      │
+├────────────────────────────────┬────────────────────────────────┤
+│ Condition                      │ UI Presentation                │
+├────────────────────────────────┼────────────────────────────────┤
+│ sections === 0 && pdfs > 0     │ Direct Embedded PDF Viewer     │
+│ sections > 0 && pdfs > 0       │ Hybrid Mode: Sections + PDF CTA│
+│ sections > 0 && pdfs === 0     │ Section-by-Section Text View   │
+└────────────────────────────────┴────────────────────────────────┘
+```
+
+##### React / Next.js Component Example:
+```jsx
+import React, { useState } from 'react';
+
+export default function ActViewer({ act }) {
+  const hasSections = act.sections && act.sections.length > 0;
+  const hasPdfs = act.pdfs && act.pdfs.length > 0;
+  const [selectedPdfIndex, setSelectedPdfIndex] = useState(0);
+
+  // 1. Direct PDF-Only Act (e.g., Constitution of India)
+  if (!hasSections && hasPdfs) {
+    const activePdf = act.pdfs[selectedPdfIndex];
+    return (
+      <div className="pdf-act-container">
+        <div className="pdf-header flex items-center justify-between p-4 bg-gray-50 border-b">
+          <div>
+            <h1 className="text-xl font-bold">{act.heading}</h1>
+            <p className="text-sm text-gray-500">Official Bare Act Document</p>
+          </div>
+          <div className="actions flex gap-2">
+            {act.pdfs.length > 1 && (
+              <select
+                value={selectedPdfIndex}
+                onChange={(e) => setSelectedPdfIndex(Number(e.target.value))}
+                className="px-3 py-1.5 border rounded-md"
+              >
+                {act.pdfs.map((p, idx) => (
+                  <option key={p.id} value={idx}>{p.displayName}</option>
+                ))}
+              </select>
+            )}
+            <a
+              href={`${process.env.NEXT_PUBLIC_API_URL}/api/acts/pdfs/${activePdf.id}/download`}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
+              download
+            >
+              Download PDF
+            </a>
+          </div>
+        </div>
+
+        {/* Embedded PDF Viewer */}
+        <div className="pdf-viewer-frame h-[80vh] w-full">
+          <iframe
+            src={`${process.env.NEXT_PUBLIC_API_URL}/api/acts/pdfs/${activePdf.id}/view`}
+            title={activePdf.displayName}
+            className="w-full h-full border-0"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Hybrid Act or Standard Sections View
+  return (
+    <div className="standard-act-container">
+      {hasPdfs && (
+        <div className="official-pdf-banner bg-amber-50 border border-amber-200 p-3 rounded mb-4 flex justify-between items-center">
+          <span>Official Bare Act PDF available for download</span>
+          <a
+            href={`${process.env.NEXT_PUBLIC_API_URL}/api/acts/pdfs/${act.pdfs[0].id}/download`}
+            className="text-sm text-blue-600 underline font-semibold"
+          >
+            Download {act.pdfs[0].displayName}
+          </a>
+        </div>
+      )}
+
+      {/* Render sections list */}
+      <div className="sections-list">
+        {act.sections.map((section) => (
+          <div key={section.id} className="section-item p-3 border-b">
+            <h3 className="font-semibold">{section.section} - {section.title}</h3>
+            <p className="text-gray-700 mt-1">{section.description}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+##### Flutter / React Native App Logic:
+- If `act.sections.isEmpty && act.pdfs.isNotEmpty`:
+  - Directly push the `PdfViewScreen(url: '$baseUrl/api/acts/pdfs/${act.pdfs.first.id}/view')`.
+  - Do NOT push the empty `SectionListScreen`.
 
 ---
 
