@@ -7821,6 +7821,7 @@ To upload PDFs using Postman:
 | **CONSTITUTION OF INDIA** | 1950 | `c19a63d7-f0f4-46b7-8432-266bbfc8c867` | Constitutional Law | `sections: []`, `pdfs: 2` (Full Bare Act + Schedules) |
 | **ARBITRATION AND CONCILIATION ACT, 1996** | 1996 | `2be54269-7ad5-4a6c-bf71-057565598e76` | Arbitration & Alternative Dispute Resolution (ADR) | `sections: []`, `pdfs: 2` (Full Bare Act + Schedules) |
 | **THE INSOLVENCY AND BANKRUPTCY CODE, 2016** | 2016 | `0a6607a7-7698-428c-819b-1a6aed86e99a` | Insolvency, Banking, & Debt Recovery | `sections: []`, `pdfs: 2` (Full Bare Act + Schedules) |
+| **THE INDIAN PENAL CODE** | 1860 | `b071a92c-1868-48f5-9e5c-025dd75cfb82` | Criminal | `sections: []`, `pdfs: 1` (Full Bare Act) |
 
 ---
 
