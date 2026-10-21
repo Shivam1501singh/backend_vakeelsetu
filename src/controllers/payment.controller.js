@@ -251,7 +251,12 @@ export const getCheckoutStatus = async (req, res, next) => {
 
     const payment = await prisma.payment.findUnique({
       where: { id: checkoutId },
-      include: { consultancyRequest: true }
+      include: {
+        consultancyRequest: true,
+        attempts: {
+          orderBy: { createdAt: 'desc' }
+        }
+      }
     });
 
     if (!payment || payment.userId !== req.user.id) {
@@ -309,6 +314,9 @@ export const getUserPayments = async (req, res, next) => {
               status: true,
               completedAt: true
             }
+          },
+          attempts: {
+            orderBy: { createdAt: 'desc' }
           }
         }
       })

@@ -81,9 +81,14 @@ const mapRazorpayAttemptStatus = (rzpStatus) => {
  */
 export const formatPayment = (payment) => {
   if (!payment) return null;
+  const capturedAttempt = Array.isArray(payment.attempts)
+    ? payment.attempts.find(a => a.status === 'CAPTURED' || a.status === 'DUPLICATE_REFUNDED')
+    : null;
+
   return {
     ...payment,
-    amountRupees: payment.amount ? payment.amount / 100 : 0
+    amountRupees: payment.amount ? payment.amount / 100 : 0,
+    razorpayPaymentId: capturedAttempt?.razorpayPaymentId || payment.attempts?.[0]?.razorpayPaymentId || null
   };
 };
 
