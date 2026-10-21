@@ -8,12 +8,23 @@ const formatConsultancyRequest = (item) => {
   if (!item) return null;
   return {
     ...item,
-    price: Number(item.price)
+    price: Number(item.price),
+    payment: item.payment
+      ? {
+          id: item.payment.id,
+          status: item.payment.status,
+          amount: item.payment.amount,
+          amountRupees: item.payment.amount ? item.payment.amount / 100 : 0,
+          paidAt: item.payment.paidAt,
+          refundEligibleAt: item.payment.refundEligibleAt,
+          refundedAt: item.payment.refundedAt
+        }
+      : null
   };
 };
 
 /**
- * User: Create a new consultancy request
+ * User: Create a new consultancy request (legacy free flow when payments disabled)
  */
 export const createConsultancyRequest = async ({ userId, callType, duration, phoneNumber, email }) => {
   const calculatedPrice = getConsultancyPrice(callType, duration);
@@ -28,7 +39,8 @@ export const createConsultancyRequest = async ({ userId, callType, duration, pho
       email: email.trim().toLowerCase(),
       status: 'PENDING',
       completedAt: null
-    }
+    },
+    include: { payment: true }
   });
 
   return formatConsultancyRequest(request);
@@ -51,7 +63,8 @@ export const getUserConsultancyHistory = async ({ userId, page = 1, limit = 10 }
       where,
       skip,
       take,
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      include: { payment: true }
     })
   ]);
 
@@ -71,7 +84,8 @@ export const getUserConsultancyHistory = async ({ userId, page = 1, limit = 10 }
  */
 export const getUserConsultancyRequestById = async ({ userId, id }) => {
   const request = await prisma.consultancyRequest.findUnique({
-    where: { id }
+    where: { id },
+    include: { payment: true }
   });
 
   if (!request || request.userId !== userId) {
@@ -108,6 +122,7 @@ export const listAdminConsultancyRequests = async ({ page = 1, limit = 10, statu
         { id: 'asc' }
       ],
       include: {
+        payment: true,
         user: {
           select: {
             id: true,
@@ -138,6 +153,7 @@ export const markConsultancyRequestCompleted = async (id) => {
   const existing = await prisma.consultancyRequest.findUnique({
     where: { id },
     include: {
+      payment: true,
       user: {
         select: {
           id: true,
@@ -155,6 +171,13 @@ export const markConsultancyRequestCompleted = async (id) => {
     throw err;
   }
 
+  // Block completion if payment is refunded or refund is pending
+  if (existing.payment && (existing.payment.status === 'REFUNDED' || existing.payment.status === 'REFUND_PENDING')) {
+    const err = new Error('Cannot complete a consultancy request that has been refunded or has a refund pending.');
+    err.statusCode = 400;
+    throw err;
+  }
+
   // Idempotent completion if already completed
   if (existing.status === 'COMPLETED') {
     return formatConsultancyRequest(existing);
@@ -167,6 +190,7 @@ export const markConsultancyRequestCompleted = async (id) => {
       completedAt: new Date()
     },
     include: {
+      payment: true,
       user: {
         select: {
           id: true,

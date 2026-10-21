@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VakeelSetu — Razorpay Test Checkout Client</title>
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --success: #10b981;
+      --danger: #ef4444;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      padding: 2rem 1rem;
+      display: flex;
+      justify-content: center;
+    }
+    .container {
+      width: 100%;
+      max-width: 680px;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: 0 10px 25px -5px rgba(0,0,0,0.3);
+    }
+    h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem; color: #60a5fa; }
+    p.subtitle { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.5rem; }
+    .form-group { margin-bottom: 1rem; }
+    label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem; color: var(--text-muted); }
+    input, select {
+      width: 100%;
+      padding: 0.65rem 0.85rem;
+      background: #0b1120;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus, select:focus { border-color: var(--primary); }
+    .row { display: flex; gap: 1rem; }
+    .row > div { flex: 1; }
+    button {
+      width: 100%;
+      padding: 0.85rem;
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: background 0.2s;
+      margin-top: 0.5rem;
+    }
+    button:hover { background: var(--primary-hover); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status-box {
+      margin-top: 1rem;
+      padding: 1rem;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 0.85rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+      background: #020617;
+      border: 1px solid var(--border);
+      display: none;
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-bottom: 0.5rem;
+    }
+    .badge-success { background: #064e3b; color: #34d399; }
+    .badge-error { background: #7f1d1d; color: #f87171; }
+    .badge-info { background: #1e3a8a; color: #93c5fd; }
+    .docs-section {
+      background: #090e1a;
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+    .docs-section h3 { color: #cbd5e1; font-size: 0.95rem; margin-bottom: 0.5rem; }
+    .docs-section code { background: #1e293b; color: #38bdf8; padding: 0.1rem 0.3rem; border-radius: 4px; }
+    .docs-section ul { padding-left: 1.25rem; margin-top: 0.5rem; }
+    .docs-section li { margin-bottom: 0.35rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>Razorpay Test Checkout</h1>
+      <p class="subtitle">Dev-only test page for simulating Consultancy booking, Razorpay popup, and server verification.</p>
+
+      <div class="form-group">
+        <label for="apiUrl">Backend API Base URL</label>
+        <input type="text" id="apiUrl" value="http://localhost:5000" placeholder="http://localhost:5000">
+      </div>
+
+      <div class="form-group">
+        <label for="token">User JWT Bearer Token (Log in via Postman / Auth API)</label>
+        <input type="text" id="token" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
+      </div>
+
+      <div class="row">
+        <div class="form-group">
+          <label for="callType">Consultancy Call Type</label>
+          <select id="callType" onchange="updatePriceDisplay()">
+            <option value="CALL">Normal Call (CALL)</option>
+            <option value="VIDEO_CALL" selected>Video Call (VIDEO_CALL)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="duration">Duration (Minutes)</label>
+          <select id="duration" onchange="updatePriceDisplay()">
+            <option value="15" selected>15 Minutes</option>
+            <option value="30">30 Minutes</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="form-group">
+          <label for="phone">Phone Number</label>
+          <input type="text" id="phone" value="9876543210" placeholder="10-digit mobile">
+        </div>
+        <div class="form-group">
+          <label for="email">Email Address</label>
+          <input type="email" id="email" value="testuser@example.com" placeholder="user@example.com">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Expected Price</label>
+        <div id="priceDisplay" style="font-size: 1.1rem; font-weight: 700; color: #34d399;">₹499 (49900 paise)</div>
+      </div>
+
+      <button id="payBtn" onclick="startCheckout()">Proceed to Pay with Razorpay</button>
+
+      <div id="statusBox" class="status-box"></div>
+    </div>
+
+    <div class="docs-section">
+      <h3>Razorpay Test Mode Helper & Simulation Guide</h3>
+      <ul>
+        <li><strong>Success Card:</strong> Number: <code>4012 0000 0000 0002</code>, Expiry: <code>12/28</code>, CVV: <code>123</code>, OTP: any 4-6 digits (e.g. <code>1234</code>).</li>
+        <li><strong>Failure Card:</strong> In Razorpay popup, click <em>Cards</em> and select <em>Failure</em> or enter test card and click <em>Fail</em> on the bank mock page.</li>
+        <li><strong>Success UPI:</strong> <code>success@razorpay</code> (auto approves).</li>
+        <li><strong>Failure UPI:</strong> <code>failure@razorpay</code> (auto declines).</li>
+        <li><strong>NetBanking:</strong> Pick any bank (SBI/HDFC), click <em>Success</em> or <em>Failure</em> on the mock screen.</li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    const prices = {
+      CALL: { 15: 199, 30: 499 },
+      VIDEO_CALL: { 15: 499, 30: 899 }
+    };
+
+    function updatePriceDisplay() {
+      const type = document.getElementById('callType').value;
+      const duration = document.getElementById('duration').value;
+      const rupees = prices[type]?.[duration] || 0;
+      document.getElementById('priceDisplay').textContent = `₹${rupees} (${rupees * 100} paise)`;
+    }
+
+    function showStatus(text, badgeType = 'info') {
+      const box = document.getElementById('statusBox');
+      box.style.display = 'block';
+      let badgeHtml = '';
+      if (badgeType === 'success') badgeHtml = '<span class="badge badge-success">Success</span><br>';
+      else if (badgeType === 'error') badgeHtml = '<span class="badge badge-error">Error</span><br>';
+      else badgeHtml = '<span class="badge badge-info">Processing</span><br>';
+
+      box.innerHTML = badgeHtml + text;
+    }
+
+    async function startCheckout() {
+      const baseUrl = document.getElementById('apiUrl').value.replace(/\/$/, '');
+      const token = document.getElementById('token').value.trim();
+      const callType = document.getElementById('callType').value;
+      const duration = parseInt(document.getElementById('duration').value, 10);
+      const phoneNumber = document.getElementById('phone').value.trim();
+      const email = document.getElementById('email').value.trim();
+
+      if (!token) {
+        showStatus('Please provide your Bearer JWT Token above to authorize the checkout request.', 'error');
+        return;
+      }
+
+      showStatus('Calling POST /api/user/consultancy/checkout...', 'info');
+      const payBtn = document.getElementById('payBtn');
+      payBtn.disabled = true;
+
+      try {
+        const checkoutRes = await fetch(`${baseUrl}/api/user/consultancy/checkout`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ callType, duration, phoneNumber, email })
+        });
+
+        const checkoutData = await checkoutRes.json();
+
+        if (!checkoutRes.ok) {
+          payBtn.disabled = false;
+          showStatus(`Checkout failed (${checkoutRes.status}):\n` + JSON.stringify(checkoutData, null, 2), 'error');
+          return;
+        }
+
+        if (checkoutData.code === 'ALREADY_PAID') {
+          payBtn.disabled = false;
+          showStatus(`Already Paid! Consultancy Request ID: ${checkoutData.consultancyRequest?.id}\n` + JSON.stringify(checkoutData, null, 2), 'success');
+          return;
+        }
+
+        const checkout = checkoutData.checkout;
+        showStatus(`Razorpay Order created: ${checkout.razorpayOrderId}\nOpening Razorpay checkout popup...`, 'info');
+
+        const options = {
+          key: checkout.keyId,
+          amount: checkout.amount,
+          currency: checkout.currency,
+          name: 'VakeelSetu Legal Consultancy',
+          description: `${checkout.package.callType} (${checkout.package.duration} mins)`,
+          order_id: checkout.razorpayOrderId,
+          prefill: checkout.prefill,
+          theme: { color: '#3b82f6' },
+          handler: async function (response) {
+            showStatus(`Payment captured by Razorpay!\nCalling POST /api/user/consultancy/checkout/verify with:\n` + JSON.stringify(response, null, 2), 'info');
+
+            try {
+              const verifyRes = await fetch(`${baseUrl}/api/user/consultancy/checkout/verify`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                  razorpay_order_id: response.razorpay_order_id,
+                  razorpay_payment_id: response.razorpay_payment_id,
+                  razorpay_signature: response.razorpay_signature
+                })
+              });
+
+              const verifyData = await verifyRes.json();
+              if (verifyRes.ok) {
+                showStatus(`✅ PAYMENT VERIFIED & CONSULTANCY CREATED!\n\n` + JSON.stringify(verifyData, null, 2), 'success');
+              } else {
+                showStatus(`❌ Verification returned status ${verifyRes.status}:\n\n` + JSON.stringify(verifyData, null, 2), 'error');
+              }
+            } catch (vErr) {
+              showStatus(`Verification network error: ${vErr.message}`, 'error');
+            } finally {
+              payBtn.disabled = false;
+            }
+          },
+          modal: {
+            ondismiss: function () {
+              payBtn.disabled = false;
+              showStatus('Checkout dismissed or cancelled by user.', 'error');
+            }
+          }
+        };
+
+        const rzp = new Razorpay(options);
+        rzp.on('payment.failed', function (failResponse) {
+          payBtn.disabled = false;
+          showStatus(`Payment failed event:\n` + JSON.stringify(failResponse.error, null, 2), 'error');
+        });
+        rzp.open();
+      } catch (err) {
+        payBtn.disabled = false;
+        showStatus(`Network error: ${err.message}`, 'error');
+      }
+    }
+  </script>
+</body>
+</html>

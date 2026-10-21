@@ -7602,7 +7602,6 @@ To upload PDFs using Postman:
    - Click **Send**.
    - You will receive a `201 Created` response with the uploaded PDF details (including `displayName`) and direct URLs for viewing and downloading.
 
----
 
 ### Request & Response Examples
 
@@ -11151,4 +11150,188 @@ pm.test("Status code is 403 Forbidden", () => pm.response.to.have.status(403));
 const res = pm.response.json();
 pm.expect(res.message).to.eql("Access forbidden. Insufficient permissions.");
 ```
+
+---
+
+## 29. Consultancy Payments (Razorpay) — Postman & Test Guide
+
+### 1. Overview & Architecture
+VakeelSetu implements a **Pay First, Request Created Second** architecture for all legal consultancy bookings.
+A `ConsultancyRequest` record is created in the database **only after** payment capture is confirmed by Razorpay.
+
+#### Flow Diagram:
+```
+[User App / Web] ──────── 1. POST /checkout ────────► [Backend API]
+      │                                                     │ Creates Razorpay Order
+      │                                                     ▼
+      ◄───────── 2. Returns checkoutId & order_id ─────────
+      │
+      ▼ Opens Razorpay Modal
+[Razorpay Checkout] ─── User Pays via UPI/Card ───► [Razorpay Core]
+      │                                                     │
+      ├─── 3. Popup callback: POST /checkout/verify ───────►│ 4. Webhook:
+      │         (with order_id, payment_id, sig)            │    payment.captured
+      │                                                     ▼
+      ▼                                             [syncPaymentFromRazorpay]
+[User receives 200 PAID & Consultancy created] ◄──── (Row lock: SELECT FOR UPDATE)
+```
+
+#### Core Business Rules:
+1. **Packages & Pricing:** Fixed rates decided strictly by server from `src/config/consultancyPricing.js`:
+   - `CALL`: 15 mins = ₹199 (19900 paise), 30 mins = ₹499 (49900 paise)
+   - `VIDEO_CALL`: 15 mins = ₹499 (49900 paise), 30 mins = ₹899 (89900 paise)
+2. **Account:** Direct settlement to company Razorpay account. Test mode enabled for development.
+3. **Refund Rule:** If consultancy call is **not COMPLETED within 7 working days** (Mon–Sat, excluding configured company holidays), payment becomes **refund-eligible**.
+4. **Idempotency:** State synchronizer `syncPaymentFromRazorpay` runs safely across user verify requests, webhooks, and background cron jobs. Duplicate captured attempts on the same checkout order are **automatically refunded** in full and marked `DUPLICATE_REFUNDED`.
+
+---
+
+### 2. Environment Variables & Razorpay Setup
+
+#### Environment Configuration:
+| Variable | Default | Description |
+|---|---|---|
+| `RAZORPAY_KEY_ID` | — | Razorpay Public Key ID (e.g. `rzp_test_...`) |
+| `RAZORPAY_KEY_SECRET` | — | Razorpay Secret Key (never returned or logged) |
+| `RAZORPAY_WEBHOOK_SECRET` | — | Webhook secret for HMAC SHA-256 signature validation |
+| `PAYMENTS_ENABLED` | `false` | `true` enforces checkout; `false` keeps old free flow |
+| `PAYMENT_CHECKOUT_TTL_MINUTES`| `30` | Minutes before an uncompleted checkout order expires |
+| `REFUND_WORKING_DAYS` | `7` | Working days SLA before payment is eligible for refund |
+| `COMPANY_WORKING_WEEKDAYS` | `1,2,3,4,5,6` | Working days (Mon–Sat = 1..6, Sun = 0) |
+| `COMPANY_HOLIDAYS` | `""` | Comma-separated `YYYY-MM-DD` public holidays |
+| `AUTO_REFUND_ENABLED` | `false` | When `true`, cron automatically executes eligible refunds |
+| `CRON_SECRET` | — | Bearer token authenticating Vercel / external cron calls |
+| `PAYMENT_TIMEZONE` | `Asia/Kolkata`| Timezone for day boundary calculation (IST) |
+
+#### Razorpay Dashboard Setup (Test Mode):
+1. Navigate to **Settings -> API Keys** -> Generate Test Key (`RAZORPAY_KEY_ID` & `RAZORPAY_KEY_SECRET`).
+2. Navigate to **Settings -> Configuration** -> Enable **Auto Capture**.
+3. Navigate to **Settings -> Webhooks** -> Add New Webhook:
+   - **Webhook URL:** `https://<YOUR_BACKEND_DOMAIN>/api/payments/razorpay/webhook`
+   - **Secret:** Enter your `RAZORPAY_WEBHOOK_SECRET`
+   - **Events to enable:**
+     - `payment.authorized`
+     - `payment.captured`
+     - `payment.failed`
+     - `order.paid`
+     - `refund.processed`
+     - `refund.failed`
+
+---
+
+### 3. Endpoints Matrix
+
+| Method | Endpoint | Auth | Permission | Purpose |
+|---|---|---|---|---|
+| `POST` | `/api/user/consultancy/checkout` | Bearer Token | `USER` role | Create or reuse checkout order |
+| `POST` | `/api/user/consultancy/checkout/verify` | Bearer Token | `USER` role | Verify HMAC signature & sync payment |
+| `GET` | `/api/user/consultancy/checkout/:checkoutId/status` | Bearer Token | `USER` role | Poll checkout payment status |
+| `GET` | `/api/user/payments` | Bearer Token | `USER` role | List user's payment history |
+| `POST` | `/api/payments/razorpay/webhook` | None (Public) | Cryptographic HMAC | Ingest asynchronous Razorpay webhook events |
+| `GET` | `/api/admin/payments` | Bearer Token | `payments:view` | List payments with filters & counts |
+| `GET` | `/api/admin/payments/:id` | Bearer Token | `payments:view` | Full payment detail with audit history |
+| `POST` | `/api/admin/payments/:id/refund` | Bearer Token | `payments:refund` | Refund eligible payment (or force by Main Admin) |
+| `GET` | `/api/internal/cron/payments-reconcile` | Bearer Cron Secret | — | Reconcile stalled payments & expire stale checkouts |
+| `GET` | `/api/internal/cron/refund-eligibility` | Bearer Cron Secret | — | Check SLA breaches & trigger auto-refunds if enabled |
+
+---
+
+### 4. Status Lifecycle & Attempt Statuses
+
+#### Payment Statuses:
+- `CREATED`: Razorpay order initialized; no payment made yet.
+- `PROCESSING`: Payment authorized or awaiting confirmation from bank.
+- `PAID`: Payment captured and verified; consultancy request created.
+- `FAILED`: Payment attempt failed. User can retry on same order.
+- `EXPIRED`: 30-minute checkout TTL elapsed with no payment.
+- `REFUND_PENDING`: Refund initiated with Razorpay; awaiting confirmation.
+- `REFUNDED`: Full refund confirmed; consultancy request marked `REFUNDED`.
+
+#### Payment Attempt Statuses:
+- `CREATED`: Attempt initialized.
+- `AUTHORIZED`: Bank authorized payment; awaiting capture.
+- `CAPTURED`: Funds captured successfully.
+- `FAILED`: Payment attempt declined by bank/user.
+- `REFUNDED`: Attempt refunded.
+- `DUPLICATE_REFUNDED`: Extra concurrent/duplicate captured payment automatically refunded.
+
+---
+
+### 5. Payment Stuck in Processing & Double Payment Prevention
+
+- **Order Reuse:** When a user clicks "Book Consultancy", backend checks for an existing active order for that package in `CREATED`/`PROCESSING`/`FAILED` state with `expiresAt > now()`.
+  - If previous checkout became `PAID`: returns `200` with `code: "ALREADY_PAID"`.
+  - If previous checkout is `PROCESSING`: returns `409` with `code: "PAYMENT_PROCESSING"`.
+  - If previous checkout is `CREATED`/`FAILED`: returns the same `razorpayOrderId` so the user retries on the existing order without creating duplicate orders.
+- **Duplicate Captured Payments:** If a user pays twice on the same order (e.g. concurrent tabs), the second captured attempt is automatically refunded in full via Razorpay refund API and tagged `DUPLICATE_REFUNDED`.
+- **Cron Reconciler:** Runs every 15 minutes to synchronize any pending payments where webhooks might have been delayed.
+
+---
+
+### 6. Testing Guide
+
+#### A. Postman Workflow:
+1. **User Login:** `POST /api/auth/user/login` -> copy `token`.
+2. **Checkout:** `POST /api/user/consultancy/checkout`
+   ```json
+   {
+     "callType": "VIDEO_CALL",
+     "duration": 15,
+     "phoneNumber": "9876543210",
+     "email": "user@example.com"
+   }
+   ```
+   Save `checkout.checkoutId` and `checkout.razorpayOrderId`.
+3. **Verify Guard on Old Route:** `POST /api/user/consultancy` with same body returns:
+   ```json
+   {
+     "success": false,
+     "code": "PAYMENT_REQUIRED",
+     "message": "Please complete payment to book a consultancy. Use POST /api/user/consultancy/checkout."
+   }
+   ```
+4. **Admin View:** `GET /api/admin/payments?status=PAID` (with admin token) returns payment list with status counts.
+5. **Cron Test:**
+   - Without header: `GET /api/internal/cron/payments-reconcile` -> returns `401 Unauthorized`.
+   - With header `Authorization: Bearer <CRON_SECRET>` -> returns `200 OK`.
+
+#### B. Browser Test Page (`scripts/razorpay-test-checkout.html`):
+1. Open `scripts/razorpay-test-checkout.html` directly in your web browser.
+2. Enter backend URL (e.g. `http://localhost:5000`) and paste user JWT token.
+3. Click **Proceed to Pay with Razorpay** -> opens official Razorpay Checkout popup in Test Mode.
+4. Test Cards:
+   - **Success Card:** `4012 0000 0000 0002`, Expiry: `12/28`, CVV: `123`, OTP: `1234`.
+   - **Failure Card:** In Razorpay popup, select test card and click "Fail" on mock bank screen.
+   - **Success UPI:** `success@razorpay`.
+   - **Failure UPI:** `failure@razorpay`.
+5. On completion, the test page invokes `/verify` and renders the confirmed payment and consultancy request.
+
+---
+
+### 7. API Error Table
+
+| Case | Status | Code | Message |
+|---|---|---|---|
+| Payment required on old endpoint | 400 | `PAYMENT_REQUIRED` | Please complete payment to book a consultancy. Use POST /api/user/consultancy/checkout. |
+| Previous payment still processing | 409 | `PAYMENT_PROCESSING` | Your previous payment is still being processed by the bank. Please wait — do not pay again. |
+| Already paid | 200 | `ALREADY_PAID` | Payment for this package was already completed. |
+| Bad HMAC signature | 400 | `INVALID_SIGNATURE` | Payment signature verification failed. |
+| Not the owner / Not found | 404 | — | Payment order not found. |
+| Refund before deadline (staff) | 400 | — | Payment is not yet eligible for refund (7 working days SLA has not passed). |
+| Refund already done / pending | 409 | — | Payment has already been refunded or has a refund pending. |
+| Payments not configured | 503 | — | Payments are not configured. |
+| Insufficient permission | 403 | — | Access forbidden. Insufficient permissions. |
+| Cron without secret | 401 | — | Unauthorized: Invalid cron secret |
+
+---
+
+### 8. Production Go-Live Checklist
+
+- [ ] Razorpay KYC verification complete on business dashboard.
+- [ ] Swap environment variables from test keys (`rzp_test_...`) to live keys (`rzp_live_...`).
+- [ ] Configure live webhook endpoint in Razorpay Dashboard (`https://<backend-domain>/api/payments/razorpay/webhook`) with newly generated live secret.
+- [ ] Ensure `PAYMENTS_ENABLED=true` in production environment.
+- [ ] Run migration and seed on production database before deploying new frontend code.
+- [ ] Deploy backend and frontend simultaneously.
+
 

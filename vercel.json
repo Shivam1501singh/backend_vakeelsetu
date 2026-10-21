@@ -5,6 +5,16 @@
       "includeFiles": "uploads/**"
     }
   },
+  "crons": [
+    {
+      "path": "/api/internal/cron/payments-reconcile",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/internal/cron/refund-eligibility",
+      "schedule": "0 2 * * *"
+    }
+  ],
   "rewrites": [
     {
       "source": "/(.*)",

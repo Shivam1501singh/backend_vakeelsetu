@@ -121,6 +121,7 @@ model User {
   likedAdvocates  AdvocateLike[]
   consultancyRequests ConsultancyRequest[]
   feedbacks       Feedback[]
+  payments        Payment[]
 }
 
 model Feedback {
@@ -597,6 +598,7 @@ enum ConsultancyCallType {
 enum ConsultancyStatus {
   PENDING
   COMPLETED
+  REFUNDED
 }
 
 model ConsultancyRequest {
@@ -613,9 +615,98 @@ model ConsultancyRequest {
   updatedAt   DateTime            @updatedAt
 
   user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payment     Payment?
 
   @@index([userId])
   @@index([status])
+  @@index([createdAt])
+}
+
+enum PaymentStatus {
+  CREATED
+  PROCESSING
+  PAID
+  FAILED
+  EXPIRED
+  REFUND_PENDING
+  REFUNDED
+}
+
+enum PaymentAttemptStatus {
+  CREATED
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+  DUPLICATE_REFUNDED
+}
+
+model Payment {
+  id                   String              @id @default(uuid())
+  userId               String
+  callType             ConsultancyCallType
+  duration             Int
+  phoneNumber          String
+  email                String
+  amount               Int                 // in paise (e.g. 49900 = ₹499.00)
+  currency             String              @default("INR")
+  status               PaymentStatus       @default(CREATED)
+  razorpayOrderId      String              @unique
+  consultancyRequestId String?             @unique
+  paidAt               DateTime?
+  expiresAt            DateTime
+  refundEligibleAt     DateTime?
+  refundId             String?
+  refundedAt           DateTime?
+  refundReason         String?
+  refundedById         String?
+  refundedByType       String?
+  failureReason        String?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  user                 User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  consultancyRequest   ConsultancyRequest? @relation(fields: [consultancyRequestId], references: [id], onDelete: SetNull)
+  attempts             PaymentAttempt[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([refundEligibleAt])
+}
+
+model PaymentAttempt {
+  id                String               @id @default(uuid())
+  paymentId         String
+  razorpayPaymentId String               @unique
+  status            PaymentAttemptStatus
+  amount            Int                  // in paise
+  method            String?
+  errorCode         String?
+  errorDescription  String?
+  capturedAt        DateTime?
+  refundId          String?
+  raw               Json?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  payment           Payment              @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model PaymentWebhookEvent {
+  id          String    @id @default(uuid())
+  eventId     String    @unique
+  event       String
+  payload     Json
+  processedAt DateTime?
+  error       String?
+  createdAt   DateTime  @default(now())
+
+  @@index([eventId])
   @@index([createdAt])
 }
 

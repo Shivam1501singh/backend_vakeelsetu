@@ -28,6 +28,13 @@ import advocateStatusRoutes from './routes/advocate.status.routes.js';
 import { userConsultancyRouter, adminConsultancyRouter } from './routes/consultancy.routes.js';
 import { userFeedbackRouter, adminFeedbackRouter } from './routes/feedback.routes.js';
 import { startAccountDeletionJob } from './services/accountDeletionJob.service.js';
+import {
+  userCheckoutRouter,
+  userPaymentsRouter,
+  adminPaymentRouter,
+  cronPaymentRouter,
+  webhookRouter
+} from './routes/payment.routes.js';
 
 
 import { requireAuth, requireRole } from './middleware/auth.middleware.js';
@@ -61,6 +68,13 @@ app.use(cors({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH']
 }));
+
+// Razorpay Webhook (MUST be registered before express.json() to preserve raw body for HMAC verification)
+app.use(
+  '/api/payments/razorpay/webhook',
+  express.raw({ type: 'application/json' }),
+  webhookRouter
+);
 
 // Parsers
 app.use(express.json());
@@ -100,7 +114,11 @@ app.use('/', advocateResetRoutes);
 app.use('/', bearerActRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/user/consultancy', userConsultancyRouter);
+app.use('/api/user/consultancy/checkout', userCheckoutRouter);
+app.use('/api/user/payments', userPaymentsRouter);
 app.use('/api/admin/consultancy', adminConsultancyRouter);
+app.use('/api/admin/payments', adminPaymentRouter);
+app.use('/api/internal/cron', cronPaymentRouter);
 app.use('/api/user/feedback', userFeedbackRouter);
 app.use('/api/feedback', userFeedbackRouter);
 app.use('/api/admin/feedback', adminFeedbackRouter);

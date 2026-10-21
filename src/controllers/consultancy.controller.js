@@ -1,4 +1,5 @@
 import * as consultancyService from '../services/consultancy.service.js';
+import { isPaymentsEnabled } from '../config/razorpay.js';
 import {
   createConsultancyRequestSchema,
   adminUpdateConsultancyStatusSchema,
@@ -12,6 +13,14 @@ import {
  */
 export const createUserRequest = async (req, res, next) => {
   try {
+    if (isPaymentsEnabled()) {
+      return res.status(400).json({
+        success: false,
+        code: 'PAYMENT_REQUIRED',
+        message: 'Please complete payment to book a consultancy. Use POST /api/user/consultancy/checkout.'
+      });
+    }
+
     const validated = createConsultancyRequestSchema.parse(req.body);
 
     const data = await consultancyService.createConsultancyRequest({
