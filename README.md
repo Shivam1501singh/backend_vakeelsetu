@@ -11334,5 +11334,3 @@ A `ConsultancyRequest` record is created in the database **only after** payment 
 - [ ] Run migration and seed on production database before deploying new frontend code.
 - [ ] Deploy backend and frontend simultaneously.
 
-
------
