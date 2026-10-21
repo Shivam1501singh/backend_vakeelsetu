@@ -11264,7 +11264,22 @@ A `ConsultancyRequest` record is created in the database **only after** payment 
   - If previous checkout is `PROCESSING`: returns `409` with `code: "PAYMENT_PROCESSING"`.
   - If previous checkout is `CREATED`/`FAILED`: returns the same `razorpayOrderId` so the user retries on the existing order without creating duplicate orders.
 - **Duplicate Captured Payments:** If a user pays twice on the same order (e.g. concurrent tabs), the second captured attempt is automatically refunded in full via Razorpay refund API and tagged `DUPLICATE_REFUNDED`.
-- **Cron Reconciler:** Runs every 15 minutes to synchronize any pending payments where webhooks might have been delayed.
+
+#### Background Reconciler & Cron Schedule Architecture:
+- **Vercel Hobby Plan Constraint:** Vercel Hobby accounts strictly limit cron jobs to **once per day** (with ±59 minutes execution window). Sub-daily expressions (e.g. `*/15 * * * *`) fail deployments with *"Hobby accounts are limited to daily cron jobs"*.
+- **Vercel Daily Crons (`vercel.json`):**
+  - **Payments Reconcile:** `30 20 * * *` (20:30 UTC ≈ 02:00 IST) — Daily fallback cleanup of stale orders.
+  - **Refund Eligibility:** `0 21 * * *` (21:00 UTC ≈ 02:30 IST) — Daily SLA breach check.
+- **Frequent 15-Min Reconcile via GitHub Actions (`.github/workflows/payments-reconcile.yml`):**
+  - Runs every ~15 minutes (`*/15 * * * *`) free of cost outside Vercel.
+  - *Note:* GitHub Actions scheduled triggers may have minor queuing delays, but the cron is strictly a **safety net / backup**: real-time payment confirmation is already handled instantaneously by Razorpay Webhooks, the `/verify` callback API, and frontend status polling.
+  - *Pro Plan Note:* If upgrading to Vercel Pro, the 15-minute schedule can be moved directly back into `vercel.json` (`*/15 * * * *`), and the GitHub Actions workflow can be deleted.
+
+#### Reconciler Setup Steps:
+1. **Vercel Secret:** Go to **Vercel Dashboard → Project → Settings → Environment Variables** → Add `CRON_SECRET` for Production and Preview.
+2. **GitHub Secret:** Go to **GitHub Repository → Settings → Secrets and variables → Actions** → Add repository secret `CRON_SECRET` with the exact same value.
+3. **Backend URL Variable (Optional):** In **GitHub Settings → Secrets and variables → Actions → Variables**, optionally add `BACKEND_URL` (e.g. `https://your-custom-domain.com`). If not set, it defaults to `https://backend-vakeelsetu.vercel.app`.
+4. **Trigger First Run:** Go to **Actions → Payments Reconcile Cron → Run workflow (workflow_dispatch)** to test connectivity and confirm HTTP 200 response.
 
 ---
 
@@ -11292,8 +11307,16 @@ A `ConsultancyRequest` record is created in the database **only after** payment 
    ```
 4. **Admin View:** `GET /api/admin/payments?status=PAID` (with admin token) returns payment list with status counts.
 5. **Cron Test:**
-   - Without header: `GET /api/internal/cron/payments-reconcile` -> returns `401 Unauthorized`.
-   - With header `Authorization: Bearer <CRON_SECRET>` -> returns `200 OK`.
+   - **With Secret:**
+     ```bash
+     curl -i -H "Authorization: Bearer <CRON_SECRET>" https://<BACKEND_URL>/api/internal/cron/payments-reconcile
+     ```
+     Returns `200 OK` with JSON `{ "success": true, "reconciledCount": 0, "expiredCount": 0, "errors": [] }`.
+   - **Without Secret:**
+     ```bash
+     curl -i https://<BACKEND_URL>/api/internal/cron/payments-reconcile
+     ```
+     Returns `401 Unauthorized` with `{ "success": false, "message": "Unauthorized: Invalid cron secret" }`.
 
 #### B. Browser Test Page (`scripts/razorpay-test-checkout.html`):
 1. Open `scripts/razorpay-test-checkout.html` directly in your web browser.
