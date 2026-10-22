@@ -35,6 +35,7 @@ import {
   cronPaymentRouter,
   webhookRouter
 } from './routes/payment.routes.js';
+import myBookingsRouter from './routes/myBookings.routes.js';
 
 
 import { requireAuth, requireRole } from './middleware/auth.middleware.js';
@@ -116,6 +117,7 @@ app.use('/api/user', userRoutes);
 app.use('/api/user/consultancy', userConsultancyRouter);
 app.use('/api/user/consultancy/checkout', userCheckoutRouter);
 app.use('/api/user/payments', userPaymentsRouter);
+app.use('/api/user/bookings', myBookingsRouter);
 app.use('/api/admin/consultancy', adminConsultancyRouter);
 app.use('/api/admin/payments', adminPaymentRouter);
 app.use('/api/internal/cron', cronPaymentRouter);

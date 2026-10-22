@@ -11357,3 +11357,267 @@ A `ConsultancyRequest` record is created in the database **only after** payment 
 - [ ] Run migration and seed on production database before deploying new frontend code.
 - [ ] Deploy backend and frontend simultaneously.
 
+---
+
+## 30. My Bookings (User) — Postman Guide
+
+### 1. Overview
+The **"My Bookings"** feature provides a unified, client-facing portal where a logged-in **user (client)** can view and inspect every legal consultancy session they have booked, ordered newest first.
+
+- **What Appears in My Bookings:**
+  - All finalized legal consultancy bookings (`ConsultancyRequest`) created by the user, including upcoming/confirmed appointments, past completed consultations, and refunded consultations.
+  - Active checkout sessions where payment is currently being processed by the bank/gateway (`PAYMENT_PROCESSING`), even before the underlying consultancy record is finalized. This gives users immediate visibility and prevents unintentional duplicate payments.
+- **Difference from "My Payments" (`GET /api/user/payments`):**
+  - **My Payments** is an accounting/transactional ledger showing all checkout attempts, raw paise values, gateway attempt logs, and failed/expired checkout sessions.
+  - **My Bookings** is a service-oriented schedule focused on the consultation experience: formatted titles (e.g. `Video Call Consultation • 30 min`), clear user-friendly status labels, contact snapshots, action flags (`canViewReceipt`, `refundEligibleNow`), and a chronological lifecycle timeline.
+
+---
+
+### 2. Endpoints & Query Parameters
+
+All endpoints require authentication (`auth_token` cookie or `Authorization: Bearer <user_token>`) and the `USER` role.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/user/bookings` | List authenticated user's bookings with pagination, date filtering, and global status tab counts |
+| `GET` | `/api/user/bookings/:id` | Retrieve single booking detail with chronological event timeline (lookup by consultancy ID or processing payment ID) |
+
+#### Query Parameters for `GET /api/user/bookings`
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `status` | string | `ALL` | Filter by status group: `UPCOMING`, `PROCESSING`, `COMPLETED`, `REFUNDED`, or `ALL` |
+| `from` | ISO Date / `YYYY-MM-DD` | optional | Lower bound filter on booking creation date (`createdAt >= from`) |
+| `to` | ISO Date / `YYYY-MM-DD` | optional | Upper bound filter on booking creation date (`createdAt <= to`) |
+| `page` | integer | `1` | Page number (must be $\ge 1$) |
+| `limit` | integer | `10` | Page size (min: `1`, max: `50`) |
+
+*Note: The returned `counts` object ignores the `status` filter so status navigation tabs in UI clients always display accurate counts across all categories.*
+
+---
+
+### 3. The Booking Object Specification
+
+Each item in `bookings` follows this standardized schema:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string (UUID) | Unique identifier (Consultancy Request ID, or Payment ID for processing items) |
+| `title` | string | Human-readable package title, e.g. `"Video Call Consultation • 30 min"` |
+| `status` | string | Granular lifecycle status (`CONFIRMED`, `REQUESTED`, `PAYMENT_PROCESSING`, `COMPLETED`, `REFUND_IN_PROGRESS`, `REFUNDED`) |
+| `statusGroup` | string | High-level status tab: `UPCOMING`, `PROCESSING`, `COMPLETED`, `REFUNDED` |
+| `statusLabel` | string | User-friendly explanatory message displayed in client UI |
+| `callType` | string | `CALL` or `VIDEO_CALL` |
+| `durationMinutes` | number | Consultation duration in minutes (`15` or `30`) |
+| `price` | number | Package price in INR rupees |
+| `currency` | string | Always `"INR"` |
+| `contact` | object | Snapshot `{ phoneNumber, email }` submitted for the consultation |
+| `payment` | object \| null | Payment details (`null` for legacy free bookings): `{ status, amount, paidAt, razorpayOrderId, razorpayPaymentId, refundEligibleAt, refundedAt }` |
+| `completedAt` | string \| null | ISO timestamp when marked completed by administration |
+| `createdAt` | string | ISO timestamp of booking creation |
+| `updatedAt` | string | ISO timestamp of last update |
+| `actions` | object | Permitted client actions: `{ canViewReceipt: boolean, refundEligibleNow: boolean }` |
+
+---
+
+### 4. Status Mapping Table
+
+| Source State | `status` | `statusGroup` | `statusLabel` |
+|---|---|---|---|
+| Payment `PROCESSING` (or `CREATED` with $\ge 1$ attempt, no consultancy) | `PAYMENT_PROCESSING` | `PROCESSING` | Payment processing – don't pay again |
+| Consultancy `PENDING` + Payment `PAID` | `CONFIRMED` | `UPCOMING` | Confirmed – our team will call you |
+| Consultancy `PENDING` (Legacy, no payment) | `REQUESTED` | `UPCOMING` | Request received |
+| Payment `REFUND_PENDING` (Consultancy not completed) | `REFUND_IN_PROGRESS` | `REFUNDED` | Refund in progress |
+| Consultancy `REFUNDED` or Payment `REFUNDED` | `REFUNDED` | `REFUNDED` | Refunded |
+| Consultancy `COMPLETED` | `COMPLETED` | `COMPLETED` | Completed |
+
+---
+
+### 5. Request & Response Samples
+
+#### A. List All Bookings (`GET /api/user/bookings`)
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "bookings": [
+    {
+      "id": "c7a8b9c0-1111-2222-3333-444455556666",
+      "title": "Video Call Consultation • 30 min",
+      "status": "CONFIRMED",
+      "statusGroup": "UPCOMING",
+      "statusLabel": "Confirmed – our team will call you",
+      "callType": "VIDEO_CALL",
+      "durationMinutes": 30,
+      "price": 899,
+      "currency": "INR",
+      "contact": {
+        "phoneNumber": "9876543210",
+        "email": "user@example.com"
+      },
+      "payment": {
+        "status": "PAID",
+        "amount": 899,
+        "paidAt": "2026-10-22T08:10:00.000Z",
+        "razorpayOrderId": "order_XXXX12345",
+        "razorpayPaymentId": "pay_XXXX12345",
+        "refundEligibleAt": "2026-10-31T18:29:59.000Z",
+        "refundedAt": null
+      },
+      "completedAt": null,
+      "createdAt": "2026-10-22T08:10:05.000Z",
+      "updatedAt": "2026-10-22T08:10:05.000Z",
+      "actions": {
+        "canViewReceipt": true,
+        "refundEligibleNow": false
+      }
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 10,
+    "total": 1,
+    "totalPages": 1,
+    "hasNextPage": false
+  },
+  "counts": {
+    "ALL": 1,
+    "UPCOMING": 1,
+    "PROCESSING": 0,
+    "COMPLETED": 0,
+    "REFUNDED": 0
+  }
+}
+```
+
+#### B. Filter by Status Group (`GET /api/user/bookings?status=UPCOMING`)
+Filters `bookings` to only items with `statusGroup === 'UPCOMING'`. Tab counts in `counts` remain global across all groups.
+
+#### C. `PAYMENT_PROCESSING` Item Example
+```json
+{
+  "id": "8c5b341c-17b8-4e82-87e2-c5d9cb632c9e",
+  "title": "Call Consultation • 15 min",
+  "status": "PAYMENT_PROCESSING",
+  "statusGroup": "PROCESSING",
+  "statusLabel": "Payment processing – don't pay again",
+  "callType": "CALL",
+  "durationMinutes": 15,
+  "price": 199,
+  "currency": "INR",
+  "contact": {
+    "phoneNumber": "9876543210",
+    "email": "user@example.com"
+  },
+  "payment": {
+    "status": "PROCESSING",
+    "amount": 199,
+    "paidAt": null,
+    "razorpayOrderId": "order_PROC98765",
+    "razorpayPaymentId": "pay_ATTEMPT001",
+    "refundEligibleAt": null,
+    "refundedAt": null
+  },
+  "completedAt": null,
+  "createdAt": "2026-10-22T09:00:00.000Z",
+  "updatedAt": "2026-10-22T09:01:00.000Z",
+  "actions": {
+    "canViewReceipt": false,
+    "refundEligibleNow": false
+  }
+}
+```
+
+#### D. Detail View with Timeline (`GET /api/user/bookings/:id`)
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "booking": {
+    "id": "c7a8b9c0-1111-2222-3333-444455556666",
+    "title": "Video Call Consultation • 30 min",
+    "status": "CONFIRMED",
+    "statusGroup": "UPCOMING",
+    "statusLabel": "Confirmed – our team will call you",
+    "callType": "VIDEO_CALL",
+    "durationMinutes": 30,
+    "price": 899,
+    "currency": "INR",
+    "contact": {
+      "phoneNumber": "9876543210",
+      "email": "user@example.com"
+    },
+    "payment": {
+      "status": "PAID",
+      "amount": 899,
+      "paidAt": "2026-10-22T08:10:00.000Z",
+      "razorpayOrderId": "order_XXXX12345",
+      "razorpayPaymentId": "pay_XXXX12345",
+      "refundEligibleAt": "2026-10-31T18:29:59.000Z",
+      "refundedAt": null
+    },
+    "completedAt": null,
+    "createdAt": "2026-10-22T08:10:05.000Z",
+    "updatedAt": "2026-10-22T08:10:05.000Z",
+    "actions": {
+      "canViewReceipt": true,
+      "refundEligibleNow": false
+    },
+    "timeline": [
+      {
+        "at": "2026-10-22T08:10:00.000Z",
+        "event": "PAYMENT_PAID"
+      },
+      {
+        "at": "2026-10-22T08:10:05.000Z",
+        "event": "BOOKING_CONFIRMED"
+      }
+    ]
+  }
+}
+```
+
+---
+
+### 6. Error Reference Table
+
+| Case | Status | Message | Description |
+|---|---|---|---|
+| No token | `401 Unauthorized` | `Authentication required. Please login.` | Missing or expired authentication token. |
+| Advocate / staff token | `403 Forbidden` | `Access forbidden. Insufficient permissions.` | Caller does not possess the `USER` role. |
+| Invalid query parameter | `400 Bad Request` | Zod validation error message (e.g. `Limit cannot exceed 50.`) | Parameter fails Zod validation schema. |
+| Booking not found / not owned | `404 Not Found` | `Booking not found.` | Booking does not exist or belongs to another user (uniform 404 prevents ID sniffing). |
+
+---
+
+### 7. Step-by-Step Postman Verification Flow
+
+1. **User Login:**
+   - Execute `POST /api/auth/user/login` (or verify OTP).
+   - Save the returned JWT token to Postman environment variable `{{user_token}}`.
+2. **Book and Pay a Consultancy:**
+   - Follow the Checkout & Payment flow in **Section 29** (`POST /api/user/consultancy/checkout` and `/verify`).
+3. **List All Bookings:**
+   - `GET /api/user/bookings` with `Authorization: Bearer {{user_token}}`.
+   - Verify `success: true`, inspect `counts` summary and `bookings` array.
+   - Save the first booking `id` into `{{booking_id}}`.
+4. **Filter by Upcoming Status:**
+   - `GET /api/user/bookings?status=UPCOMING`.
+   - Verify all returned items have `statusGroup === 'UPCOMING'`.
+5. **Filter by Completed Status:**
+   - `GET /api/user/bookings?status=COMPLETED`.
+   - After administration marks the booking completed (`PATCH /api/admin/consultancy/:id/status`), verify it appears under `COMPLETED`.
+6. **Verify Pagination:**
+   - `GET /api/user/bookings?page=1&limit=1`.
+   - Verify `pagination: { page: 1, limit: 1, total, totalPages, hasNextPage }`.
+   - Advance to `?page=2&limit=1` to inspect next item without duplicate entries.
+7. **Get Booking Detail & Timeline:**
+   - `GET /api/user/bookings/{{booking_id}}`.
+   - Verify `booking` contains full details plus chronological `timeline` array containing lifecycle events.
+8. **Security Check (Cross-User ID Isolation):**
+   - Attempt `GET /api/user/bookings/{{other_user_booking_id}}`.
+   - Verify `404 Not Found` with `{ "success": false, "message": "Booking not found." }`.
+9. **Role Permission Check:**
+   - Pass an advocate token to `GET /api/user/bookings`.
+   - Verify `403 Forbidden` with `{ "success": false, "message": "Access forbidden. Insufficient permissions." }`.
+
