@@ -11448,6 +11448,7 @@ Each item in `bookings` follows this standardized schema:
 | `id` | string (UUID) | Unique internal identifier (Consultancy Request ID, or Payment ID for processing items) |
 | `bookingId` | string \| null | Human-readable booking reference formatted as `VSB-<YYYY><MonthLetter><6 random chars>`, e.g. `"VSB-2026J5TW7HN"`. Is `null` for `PAYMENT_PROCESSING` items |
 | `title` | string | Human-readable package title, e.g. `"Video Call Consultation • 30 min"` |
+| `callStatus` | string | Call status flag: `"PENDING"` (call scheduled / awaiting completion) or `"COMPLETED"` (call finished) |
 | `status` | string | Granular lifecycle status (`CONFIRMED`, `REQUESTED`, `PAYMENT_PROCESSING`, `COMPLETED`, `REFUND_IN_PROGRESS`, `REFUNDED`) |
 | `statusGroup` | string | High-level status tab: `UPCOMING`, `PROCESSING`, `COMPLETED`, `REFUNDED` |
 | `statusLabel` | string | User-friendly explanatory message displayed in client UI |
@@ -11522,6 +11523,7 @@ Booking IDs can be customized via environment variables without requiring code c
       "id": "c7a8b9c0-1111-2222-3333-444455556666",
       "bookingId": "VSB-2026J5TW7HN",
       "title": "Video Call Consultation • 30 min",
+      "callStatus": "PENDING",
       "status": "CONFIRMED",
       "statusGroup": "UPCOMING",
       "statusLabel": "Confirmed – our team will call you",
@@ -11577,6 +11579,7 @@ Filters `bookings` to only items with `statusGroup === 'UPCOMING'`. Tab counts i
   "id": "8c5b341c-17b8-4e82-87e2-c5d9cb632c9e",
   "bookingId": null,
   "title": "Call Consultation • 15 min",
+  "callStatus": "PENDING",
   "status": "PAYMENT_PROCESSING",
   "statusGroup": "PROCESSING",
   "statusLabel": "Payment processing – don't pay again",
@@ -11616,6 +11619,7 @@ Filters `bookings` to only items with `statusGroup === 'UPCOMING'`. Tab counts i
     "id": "c7a8b9c0-1111-2222-3333-444455556666",
     "bookingId": "VSB-2026J5TW7HN",
     "title": "Video Call Consultation • 30 min",
+    "callStatus": "PENDING",
     "status": "CONFIRMED",
     "statusGroup": "UPCOMING",
     "statusLabel": "Confirmed – our team will call you",

@@ -53,11 +53,13 @@ const formatConsultancyBooking = (item) => {
   const title = item.callType === 'CALL'
     ? `Call Consultation • ${durationMinutes} min`
     : `Video Call Consultation • ${durationMinutes} min`;
+  const callStatus = (item.status === 'COMPLETED' || item.completedAt) ? 'COMPLETED' : 'PENDING';
 
   return {
     id: item.id,
     bookingId: item.bookingId || null,
     title,
+    callStatus,
     status,
     statusGroup,
     statusLabel,
@@ -110,6 +112,7 @@ const formatProcessingPaymentBooking = (payment) => {
     id: payment.id,
     bookingId: null,
     title,
+    callStatus: 'PENDING',
     status: 'PAYMENT_PROCESSING',
     statusGroup: 'PROCESSING',
     statusLabel: "Payment processing – don't pay again",
