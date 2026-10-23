@@ -1044,6 +1044,39 @@ This feature provides a support ticketing system. Visitors can submit tickets an
 
 ---
 
+### Configurable Reference ID Format
+Help Request reference IDs can be customized via environment variables without requiring code changes:
+
+- **Environment Variable:** `HELP_REFERENCE_FORMAT` (Default: `"VKLS-{RAND6}"`)
+- **Timezone:** `ID_TIMEZONE` (Default: `"Asia/Kolkata"`)
+- **Charset:** `ID_RANDOM_CHARSET` (Default: `"ABCDEFGHJKLMNPQRSTUVWXYZ23456789"`, unambiguous 32-character set without `0/O/1/I`)
+
+#### Supported Tokens
+| Token | Description | Example (Oct 23, 2026 IST) |
+|---|---|---|
+| `{YYYY}` | 4-digit year in `ID_TIMEZONE` | `2026` |
+| `{YY}` | 2-digit year in `ID_TIMEZONE` | `26` |
+| `{MM}` | 2-digit month (01–12) in `ID_TIMEZONE` | `10` |
+| `{DD}` | 2-digit day (01–31) in `ID_TIMEZONE` | `23` |
+| `{MONTH_LETTER}` | Single-letter month code (A=Jan … L=Dec) in `ID_TIMEZONE` | `J` (for October) |
+| `{RANDn}` | `n` cryptographically random chars from charset ($4 \le n \le 12$) | `{RAND6}` $\rightarrow$ `8F4K29` |
+
+#### Format Examples
+1. **Default:** `"VKLS-{RAND6}"` $\rightarrow$ `VKLS-8F4K29`
+2. **Dated Year-Month:** `"HLP-{YY}{MM}-{RAND5}"` $\rightarrow$ `HLP-2610-P7X9K`
+3. **Full Audit Prefix:** `"VKLS-HELP-{YYYY}-{RAND6}"` $\rightarrow$ `VKLS-HELP-2026-X7M9KW`
+
+#### Validation Rules & Safe Fallback
+- **Allowed Tokens:** Only `{YYYY}`, `{YY}`, `{MM}`, `{DD}`, `{MONTH_LETTER}`, and `{RANDn}` ($4 \le n \le 12$).
+- **Mandatory Random Token:** Must contain at least one `{RANDn}` token with $n \ge 4$.
+- **Allowed Literals:** Literal text between tokens can only contain uppercase `A–Z`, `0–9`, and `-`.
+- **Max Length:** Maximum expanded string length must be $\le 40$ characters.
+- **Fail-Safe Startup:** If an invalid template is provided in `.env`, the server logs a clear warning and automatically falls back to `"VKLS-{RAND6}"` without crashing.
+- **Backward Compatibility:** Changing the format affects **only new IDs**; old IDs remain valid and searchable via exact string matching.
+- **Vercel / Cloud Deployment:** On Vercel, update Environment Variables in the project settings and redeploy.
+
+---
+
 ### Public Endpoints Reference
 
 #### A. Submit Public Help Request
@@ -11183,6 +11216,13 @@ A `ConsultancyRequest` record is created in the database **only after** payment 
 2. **Account:** Direct settlement to company Razorpay account. Test mode enabled for development.
 3. **Refund Rule:** If consultancy call is **not COMPLETED within 7 working days** (Mon–Sat, excluding configured company holidays), payment becomes **refund-eligible**.
 4. **Idempotency:** State synchronizer `syncPaymentFromRazorpay` runs safely across user verify requests, webhooks, and background cron jobs. Duplicate captured attempts on the same checkout order are **automatically refunded** in full and marked `DUPLICATE_REFUNDED`.
+5. **Human-Readable Booking ID (`bookingId`):** When payment is captured and `ConsultancyRequest` is created inside the transaction, a unique human-readable booking reference is generated:
+   - **Format:** `VSB-<YYYY><MonthLetter><6 random chars>`
+   - **Timezone:** Year and month derived from creation time in `Asia/Kolkata` (IST), not UTC.
+   - **MonthLetter:** `A=Jan, B=Feb, C=Mar, D=Apr, E=May, F=Jun, G=Jul, H=Aug, I=Sep, J=Oct, K=Nov, L=Dec`.
+   - **Random Part:** 6 characters selected from unambiguous 32-character set `"ABCDEFGHJKLMNPQRSTUVWXYZ23456789"` (excluding confusing characters `0`, `O`, `1`, `I`) using `crypto.randomInt`.
+   - **Collision Handling:** On a unique-constraint collision (`P2002`), system automatically regenerates and retries up to 5 times inside the transaction.
+   - **Example:** `VSB-2026J5TW7HN` (October 2026).
 
 ---
 
@@ -11202,6 +11242,9 @@ A `ConsultancyRequest` record is created in the database **only after** payment 
 | `AUTO_REFUND_ENABLED` | `false` | When `true`, cron automatically executes eligible refunds |
 | `CRON_SECRET` | — | Bearer token authenticating Vercel / external cron calls |
 | `PAYMENT_TIMEZONE` | `Asia/Kolkata`| Timezone for day boundary calculation (IST) |
+| `BOOKING_ID_FORMAT` | `"VSB-{YYYY}{MONTH_LETTER}{RAND6}"` | Configurable template for generated booking IDs |
+| `ID_TIMEZONE` | `Asia/Kolkata` | Timezone for ID date tokens (`{YYYY}`, `{YY}`, `{MM}`, `{DD}`, `{MONTH_LETTER}`) |
+| `ID_RANDOM_CHARSET` | `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` | 32-character set with ambiguous characters (`0/O/1/I`) omitted |
 
 #### Razorpay Dashboard Setup (Test Mode):
 1. Navigate to **Settings -> API Keys** -> Generate Test Key (`RAZORPAY_KEY_ID` & `RAZORPAY_KEY_SECRET`).
@@ -11402,7 +11445,8 @@ Each item in `bookings` follows this standardized schema:
 
 | Field | Type | Description |
 |---|---|---|
-| `id` | string (UUID) | Unique identifier (Consultancy Request ID, or Payment ID for processing items) |
+| `id` | string (UUID) | Unique internal identifier (Consultancy Request ID, or Payment ID for processing items) |
+| `bookingId` | string \| null | Human-readable booking reference formatted as `VSB-<YYYY><MonthLetter><6 random chars>`, e.g. `"VSB-2026J5TW7HN"`. Is `null` for `PAYMENT_PROCESSING` items |
 | `title` | string | Human-readable package title, e.g. `"Video Call Consultation • 30 min"` |
 | `status` | string | Granular lifecycle status (`CONFIRMED`, `REQUESTED`, `PAYMENT_PROCESSING`, `COMPLETED`, `REFUND_IN_PROGRESS`, `REFUNDED`) |
 | `statusGroup` | string | High-level status tab: `UPCOMING`, `PROCESSING`, `COMPLETED`, `REFUNDED` |
@@ -11417,6 +11461,39 @@ Each item in `bookings` follows this standardized schema:
 | `createdAt` | string | ISO timestamp of booking creation |
 | `updatedAt` | string | ISO timestamp of last update |
 | `actions` | object | Permitted client actions: `{ canViewReceipt: boolean, refundEligibleNow: boolean }` |
+
+---
+
+### 3.1 Configurable Booking ID Format
+Booking IDs can be customized via environment variables without requiring code changes:
+
+- **Environment Variable:** `BOOKING_ID_FORMAT` (Default: `"VSB-{YYYY}{MONTH_LETTER}{RAND6}"`)
+- **Timezone:** `ID_TIMEZONE` (Default: `"Asia/Kolkata"`)
+- **Charset:** `ID_RANDOM_CHARSET` (Default: `"ABCDEFGHJKLMNPQRSTUVWXYZ23456789"`, unambiguous 32-character set without `0/O/1/I`)
+
+#### Supported Tokens
+| Token | Description | Example (Oct 23, 2026 IST) |
+|---|---|---|
+| `{YYYY}` | 4-digit year in `ID_TIMEZONE` | `2026` |
+| `{YY}` | 2-digit year in `ID_TIMEZONE` | `26` |
+| `{MM}` | 2-digit month (01–12) in `ID_TIMEZONE` | `10` |
+| `{DD}` | 2-digit day (01–31) in `ID_TIMEZONE` | `23` |
+| `{MONTH_LETTER}` | Single-letter month code (A=Jan … L=Dec) in `ID_TIMEZONE` | `J` (for October) |
+| `{RANDn}` | `n` cryptographically random chars from charset ($4 \le n \le 12$) | `{RAND6}` $\rightarrow$ `5TW7HN` |
+
+#### Format Examples
+1. **Default Format:** `"VSB-{YYYY}{MONTH_LETTER}{RAND6}"` $\rightarrow$ `VSB-2026J5TW7HN`
+2. **Dated Year-Month:** `"VKLS-BKC-{YYYY}-{RAND6}"` $\rightarrow$ `VKLS-BKC-2026-8F4K29`
+3. **Compact Date:** `"BK-{YY}{MM}{DD}-{RAND5}"` $\rightarrow$ `BK-261023-M8N9K`
+
+#### Validation Rules & Safe Fallback
+- **Allowed Tokens:** Only `{YYYY}`, `{YY}`, `{MM}`, `{DD}`, `{MONTH_LETTER}`, and `{RANDn}` ($4 \le n \le 12$).
+- **Mandatory Random Token:** Must contain at least one `{RANDn}` token with $n \ge 4$.
+- **Allowed Literals:** Literal text between tokens can only contain uppercase `A–Z`, `0–9`, and `-`.
+- **Max Length:** Maximum expanded string length must be $\le 40$ characters.
+- **Fail-Safe Startup:** If an invalid template is provided in `.env`, the server logs a clear warning and automatically falls back to `"VSB-{YYYY}{MONTH_LETTER}{RAND6}"` without crashing.
+- **Backward Compatibility:** Changing the format affects **only new IDs**; old IDs remain valid and searchable via exact string matching.
+- **Vercel / Cloud Deployment:** On Vercel, update Environment Variables in the project settings and redeploy.
 
 ---
 
@@ -11443,6 +11520,7 @@ Each item in `bookings` follows this standardized schema:
   "bookings": [
     {
       "id": "c7a8b9c0-1111-2222-3333-444455556666",
+      "bookingId": "VSB-2026J5TW7HN",
       "title": "Video Call Consultation • 30 min",
       "status": "CONFIRMED",
       "statusGroup": "UPCOMING",
@@ -11497,6 +11575,7 @@ Filters `bookings` to only items with `statusGroup === 'UPCOMING'`. Tab counts i
 ```json
 {
   "id": "8c5b341c-17b8-4e82-87e2-c5d9cb632c9e",
+  "bookingId": null,
   "title": "Call Consultation • 15 min",
   "status": "PAYMENT_PROCESSING",
   "statusGroup": "PROCESSING",
@@ -11535,6 +11614,7 @@ Filters `bookings` to only items with `statusGroup === 'UPCOMING'`. Tab counts i
   "success": true,
   "booking": {
     "id": "c7a8b9c0-1111-2222-3333-444455556666",
+    "bookingId": "VSB-2026J5TW7HN",
     "title": "Video Call Consultation • 30 min",
     "status": "CONFIRMED",
     "statusGroup": "UPCOMING",
@@ -11620,4 +11700,82 @@ Filters `bookings` to only items with `statusGroup === 'UPCOMING'`. Tab counts i
 9. **Role Permission Check:**
    - Pass an advocate token to `GET /api/user/bookings`.
    - Verify `403 Forbidden` with `{ "success": false, "message": "Access forbidden. Insufficient permissions." }`.
+
+---
+
+### 8. Backfill Legacy Booking IDs
+
+To generate and assign formatted `bookingId` values to existing legacy consultancy records that were created prior to this feature:
+
+```bash
+# Dry Run (Inspect proposed IDs without making changes to the database):
+node scripts/backfill-booking-ids.js
+
+# Apply Updates (Writes generated booking IDs to database):
+node scripts/backfill-booking-ids.js --apply
+```
+
+- Each assigned `bookingId` is derived from the record's own `createdAt` timestamp in **`Asia/Kolkata` (IST)** timezone (maintaining chronological year/month letter consistency).
+- Collision avoidance is built in with in-memory validation and retry logic.
+
+---
+
+### 9. Production Deployment Order (Booking ID Migration)
+
+When releasing this feature to the production environment, execute the steps in this strict order:
+
+1. **Run Database Migration:**
+   ```bash
+   npx prisma migrate deploy
+   ```
+   *(Applies the pending additive migration `add_consultancy_booking_id` to add `bookingId String? @unique` without data loss or downtime).*
+
+2. **Deploy Application Code:**
+   Deploy the updated backend code to production servers / serverless platforms.
+
+3. **Backfill Existing Records:**
+   ```bash
+   node scripts/backfill-booking-ids.js --apply
+   ```
+   *(Populates `bookingId` for all historical consultancy records based on their original `createdAt` in IST).*
+
+---
+
+## 31. Database Migrations Policy & Workflow
+
+> [!CAUTION]
+> **Important Migration Rules:**
+> - **`prisma migrate dev` does NOT work in this repository** because historical migrations cannot be replayed cleanly on a shadow database (`Error: P3006` on `20260925160000_add_ipc_bns_section_order`).
+> - **NEVER use `prisma migrate reset` or `prisma db push`** in any environment.
+
+### Creating New Migrations
+New migrations must be generated by computing the precise SQL diff directly against `schema.prisma` without shadow DB dependency:
+```bash
+# 1. Generate SQL diff script into a timestamped migration folder
+mkdir -p prisma/migrations/<YYYYMMDDHHMMSS>_<migration_name>
+npx prisma migrate diff \
+  --from-schema-datasource prisma/schema.prisma \
+  --to-schema-datamodel prisma/schema.prisma \
+  --script > prisma/migrations/<YYYYMMDDHHMMSS>_<migration_name>/migration.sql
+
+# 2. Review the generated SQL thoroughly (ensure no unexpected DROP / ALTER statements)
+
+# 3. Apply the migration cleanly
+npx prisma migrate deploy
+
+# 4. Confirm database status
+npx prisma migrate status
+```
+
+### Resolving Failed Migrations (e.g. Production / New Environments)
+On any database environment where past migration `20261007145000_add_rbac_system` shows as failed in `_prisma_migrations`:
+1. First verify with `npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --script` to confirm all objects already exist.
+2. Mark the migration as applied before running `migrate deploy`:
+   ```bash
+   npx prisma migrate resolve --applied 20261007145000_add_rbac_system
+   ```
+3. Then execute `npx prisma migrate deploy`.
+
+
+
 

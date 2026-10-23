@@ -603,6 +603,7 @@ enum ConsultancyStatus {
 
 model ConsultancyRequest {
   id          String              @id @default(uuid())
+  bookingId   String?             @unique
   userId      String
   callType    ConsultancyCallType
   duration    Int

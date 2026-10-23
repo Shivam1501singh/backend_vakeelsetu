@@ -1,17 +1,5 @@
 import prisma from '../lib/prisma.js';
-import crypto from 'crypto';
-
-/**
- * Generates a secure, cryptographically random Help reference ID (e.g., VKLS-8F4K29).
- */
-const generateReferenceId = () => {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let ref = 'VKLS-';
-  for (let i = 0; i < 6; i++) {
-    ref += chars.charAt(crypto.randomInt(0, chars.length));
-  }
-  return ref;
-};
+import { generateHelpReferenceId } from '../utils/idFormat.js';
 
 /**
  * Creates a public help concern request.
@@ -21,17 +9,27 @@ export const createHelpRequest = async ({ name, email, phoneNumber, concern }) =
   let referenceId;
   let exists = true;
   let attempts = 0;
+  const maxAttempts = 10;
 
-  // Collision safety loop
-  while (exists && attempts < 10) {
-    referenceId = generateReferenceId();
+  // Collision safety loop (up to 10 attempts)
+  while (exists && attempts < maxAttempts) {
+    attempts++;
+    referenceId = generateHelpReferenceId();
     const existing = await prisma.helpRequest.findUnique({
-      where: { referenceId }
+      where: { referenceId },
+      select: { id: true }
     });
     if (!existing) {
       exists = false;
     }
-    attempts++;
+  }
+
+  if (exists) {
+    const errorMsg = `Failed to generate a unique help reference ID after ${maxAttempts} collision attempts.`;
+    console.error(`[Help Service Error] ${errorMsg}`);
+    const err = new Error('Unable to create help request at this time. Please try again.');
+    err.statusCode = 500;
+    throw err;
   }
 
   const data = {

@@ -1,5 +1,6 @@
 import prisma from '../lib/prisma.js';
 import { getConsultancyPrice } from '../config/consultancyPricing.js';
+import { createConsultancyWithUniqueBookingId } from '../utils/bookingId.util.js';
 
 /**
  * Format consultancy request object for API response
@@ -8,6 +9,7 @@ const formatConsultancyRequest = (item) => {
   if (!item) return null;
   return {
     ...item,
+    bookingId: item.bookingId || null,
     price: Number(item.price),
     payment: item.payment
       ? {
@@ -28,22 +30,48 @@ const formatConsultancyRequest = (item) => {
  */
 export const createConsultancyRequest = async ({ userId, callType, duration, phoneNumber, email }) => {
   const calculatedPrice = getConsultancyPrice(callType, duration);
+  let attempts = 0;
+  const maxRetries = 3;
+  let request;
 
-  const request = await prisma.consultancyRequest.create({
-    data: {
-      userId,
-      callType,
-      duration,
-      price: calculatedPrice,
-      phoneNumber: phoneNumber.trim(),
-      email: email.trim().toLowerCase(),
-      status: 'PENDING',
-      completedAt: null
-    },
+  while (attempts < maxRetries) {
+    attempts++;
+    try {
+      request = await createConsultancyWithUniqueBookingId(
+        prisma,
+        {
+          userId,
+          callType,
+          duration,
+          price: calculatedPrice,
+          phoneNumber: phoneNumber.trim(),
+          email: email.trim().toLowerCase(),
+          status: 'PENDING',
+          completedAt: null
+        },
+        new Date()
+      );
+      break;
+    } catch (err) {
+      const isBookingCollision =
+        err?.code === 'P2002' &&
+        (Array.isArray(err?.meta?.target)
+          ? err.meta.target.includes('bookingId')
+          : String(err?.meta?.target || '').includes('bookingId'));
+
+      if (isBookingCollision && attempts < maxRetries) {
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  const reloaded = await prisma.consultancyRequest.findUnique({
+    where: { id: request.id },
     include: { payment: true }
   });
 
-  return formatConsultancyRequest(request);
+  return formatConsultancyRequest(reloaded || request);
 };
 
 /**
@@ -100,7 +128,7 @@ export const getUserConsultancyRequestById = async ({ userId, id }) => {
 /**
  * Admin: List consultancy requests with optional status filtering and FIFO ordering (createdAt ASC, id ASC)
  */
-export const listAdminConsultancyRequests = async ({ page = 1, limit = 10, status }) => {
+export const listAdminConsultancyRequests = async ({ page = 1, limit = 10, status, bookingId, search }) => {
   const parsedPage = Math.max(1, parseInt(page, 10) || 1);
   const parsedLimit = Math.max(1, Math.min(100, parseInt(limit, 10) || 10));
   const skip = (parsedPage - 1) * parsedLimit;
@@ -109,6 +137,20 @@ export const listAdminConsultancyRequests = async ({ page = 1, limit = 10, statu
   const where = {};
   if (status) {
     where.status = status;
+  }
+
+  if (bookingId) {
+    where.bookingId = { contains: bookingId.trim(), mode: 'insensitive' };
+  }
+
+  if (search) {
+    const s = search.trim();
+    where.OR = [
+      { bookingId: { contains: s, mode: 'insensitive' } },
+      { phoneNumber: { contains: s } },
+      { email: { contains: s, mode: 'insensitive' } },
+      { user: { fullName: { contains: s, mode: 'insensitive' } } }
+    ];
   }
 
   const [total, items] = await prisma.$transaction([

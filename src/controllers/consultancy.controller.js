@@ -98,7 +98,9 @@ export const adminListRequests = async (req, res, next) => {
     const result = await consultancyService.listAdminConsultancyRequests({
       page: query.page,
       limit: query.limit,
-      status: query.status
+      status: query.status,
+      bookingId: query.bookingId,
+      search: query.search
     });
 
     return res.status(200).json({

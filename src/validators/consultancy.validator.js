@@ -25,6 +25,8 @@ export const adminConsultancyQuerySchema = z.object({
   status: z.enum(['PENDING', 'COMPLETED'], {
     errorMap: () => ({ message: "Status filter must be either 'PENDING' or 'COMPLETED'." })
   }).optional(),
+  bookingId: z.string().trim().optional(),
+  search: z.string().trim().optional(),
   page: z.string().regex(/^\d+$/).transform(Number).optional(),
   limit: z.string().regex(/^\d+$/).transform(Number).optional()
 });

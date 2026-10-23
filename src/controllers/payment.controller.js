@@ -372,7 +372,8 @@ export const adminListPayments = async (req, res, next) => {
         { phoneNumber: { contains: search } },
         { email: { contains: search, mode: 'insensitive' } },
         { user: { fullName: { contains: search, mode: 'insensitive' } } },
-        { attempts: { some: { razorpayPaymentId: { contains: search } } } }
+        { attempts: { some: { razorpayPaymentId: { contains: search } } } },
+        { consultancyRequest: { bookingId: { contains: search, mode: 'insensitive' } } }
       ];
     }
 
@@ -401,6 +402,7 @@ export const adminListPayments = async (req, res, next) => {
           consultancyRequest: {
             select: {
               id: true,
+              bookingId: true,
               status: true,
               completedAt: true
             }

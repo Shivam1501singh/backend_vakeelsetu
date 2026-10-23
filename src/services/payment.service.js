@@ -3,6 +3,7 @@ import prisma from '../lib/prisma.js';
 import { getRazorpayClient, isRazorpayConfigured } from '../config/razorpay.js';
 import { getConsultancyPrice } from '../config/consultancyPricing.js';
 import { addWorkingDays } from '../utils/workingDays.js';
+import { createConsultancyWithUniqueBookingId } from '../utils/bookingId.util.js';
 import { logApiError } from './errorLogger.service.js';
 
 /**
@@ -184,8 +185,13 @@ export const syncPaymentFromRazorpay = async ({ paymentId, razorpayOrderId }) =>
   }
 
   // 4. Decide state inside a transactional row lock
-  await prisma.$transaction(
-    async (tx) => {
+  let txAttempts = 0;
+  const maxTxRetries = 3;
+
+  while (txAttempts < maxTxRetries) {
+    try {
+      await prisma.$transaction(
+        async (tx) => {
       // Row lock on Payment
       const lockedRows = await tx.$queryRaw`
         SELECT * FROM "Payment"
@@ -237,10 +243,12 @@ export const syncPaymentFromRazorpay = async ({ paymentId, razorpayOrderId }) =>
             return;
           }
 
-          // Valid captured payment: Create ConsultancyRequest and mark PAID
+          // Valid captured payment: Create ConsultancyRequest with unique bookingId and mark PAID
           const priceDecimal = Number(currentPayment.amount) / 100;
-          const consultancy = await tx.consultancyRequest.create({
-            data: {
+          const paidAtDate = firstCaptured.capturedAt || now;
+          const consultancy = await createConsultancyWithUniqueBookingId(
+            tx,
+            {
               userId: currentPayment.userId,
               callType: currentPayment.callType,
               duration: currentPayment.duration,
@@ -249,10 +257,9 @@ export const syncPaymentFromRazorpay = async ({ paymentId, razorpayOrderId }) =>
               email: currentPayment.email,
               status: 'PENDING',
               completedAt: null
-            }
-          });
-
-          const paidAtDate = firstCaptured.capturedAt || now;
+            },
+            paidAtDate
+          );
           const refundWorkingDays = parseInt(process.env.REFUND_WORKING_DAYS || '7', 10);
           const refundEligibleAt = addWorkingDays(paidAtDate, refundWorkingDays);
 
@@ -360,6 +367,22 @@ export const syncPaymentFromRazorpay = async ({ paymentId, razorpayOrderId }) =>
     },
     { timeout: 15000 }
   );
+      break;
+    } catch (txErr) {
+      txAttempts++;
+      const isBookingCollision =
+        txErr?.code === 'P2002' &&
+        (Array.isArray(txErr?.meta?.target)
+          ? txErr.meta.target.includes('bookingId')
+          : String(txErr?.meta?.target || '').includes('bookingId'));
+
+      if (isBookingCollision && txAttempts < maxTxRetries) {
+        console.warn(`[Razorpay Sync] bookingId collision on attempt ${txAttempts}, retrying transaction...`);
+        continue;
+      }
+      throw txErr;
+    }
+  }
 
   // 5. Return fresh Payment with relations
   return await prisma.payment.findUnique({

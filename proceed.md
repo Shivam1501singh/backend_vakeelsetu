@@ -1,363 +1,109 @@
-# Plan: "My Bookings" for Users (Consultancy Only)
+# Implementation Plan: Configurable Help Reference IDs & Booking IDs
 
 ## 1. Current Behaviour Analysis
-- **Consultancy Feature:**
-  - `ConsultancyRequest` exists in Prisma with fields:
-    - `id` (UUID), `userId`, `callType` (`CALL | VIDEO_CALL`), `duration` (`15 | 30`), `price` (`Decimal(10,2)`), `phoneNumber`, `email`, `status` (`PENDING | COMPLETED | REFUNDED`), `completedAt`, `createdAt`, `updatedAt`.
-    - Indexed on: `[userId]`, `[status]`, `[createdAt]`.
-  - Existing endpoints:
-    - `POST /api/user/consultancy` (blocked with `PAYMENT_REQUIRED` when `PAYMENTS_ENABLED=true`).
-    - `GET /api/user/consultancy` (returns raw user requests with optional pagination).
-    - `GET /api/user/consultancy/:id` (returns single user request).
-    - `GET /api/admin/consultancy` & `PATCH /api/admin/consultancy/:id/status` (admin management).
-- **Payment Feature Status:**
-  - **CONFIRMED MERGED:** The Razorpay payment feature is already present and active in the repository:
-    - Models `Payment`, `PaymentAttempt`, `PaymentWebhookEvent` exist in `prisma/schema.prisma`.
-    - `Payment` has fields: `id`, `userId`, `callType`, `duration`, `phoneNumber`, `email`, `amount` (in paise), `currency` (`INR`), `status` (`CREATED | PROCESSING | PAID | FAILED | EXPIRED | REFUND_PENDING | REFUNDED`), `razorpayOrderId`, `consultancyRequestId` (unique relation to `ConsultancyRequest`), `paidAt`, `expiresAt`, `refundEligibleAt`, `refundId`, `refundedAt`, `refundReason`, `refundedById`, `refundedByType`, `failureReason`, `createdAt`, `updatedAt`.
-    - Indexed on: `[userId]`, `[status]`, `[createdAt]`, `[refundEligibleAt]`.
-    - `PaymentAttempt` records individual gateway transactions per order.
-    - Endpoints `POST /api/user/consultancy/checkout`, `POST /api/user/consultancy/checkout/verify`, `GET /api/user/consultancy/checkout/:checkoutId/status`, and `GET /api/user/payments` are live.
-  - Payment-to-Consultancy relationship:
-    - A `ConsultancyRequest` is created exclusively upon successful payment capture (`status === 'PAID'`).
-    - A `Payment` in `PROCESSING` (or `CREATED` with attempts) does not have a `ConsultancyRequest` linked yet (`consultancyRequestId` is `null`).
-    - Legacy requests created before payment integration have `payment: null`.
+
+### 1.1 Help Request Reference IDs (`src/services/help.service.js`)
+- **Current Generator:** `generateReferenceId()` is hard-coded at lines 7–14:
+  - Generates `VKLS-` prefix followed by 6 characters chosen with `crypto.randomInt` from `ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789`.
+  - Example: `VKLS-8F4K29`.
+- **Collision Handling:** Lines 26–35 in `createHelpRequest`:
+  - Loops up to 10 attempts checking `prisma.helpRequest.findUnique({ where: { referenceId } })`.
+  - If 10 collisions occur, it falls through without throwing a controlled 500 error.
+- **Limitation:** Hard-coded prefix and format; cannot be changed without modifying code and redeploying.
+
+### 1.2 Booking IDs (`src/utils/bookingId.util.js`)
+- **Current Status:** The custom booking ID feature is merged and migrated (`prisma/migrations/20261023153000_add_consultancy_booking_id` applied).
+- **Current Generator:** `generateBookingId(date)` is hard-coded to `VSB-<YYYY><MonthLetter><6 random chars>`.
+- **Collision Handling:**
+  - `createConsultancyWithUniqueBookingId` performs pre-checks with `prisma.consultancyRequest.findUnique`.
+  - Outer retry loops wrap the transaction in `src/services/payment.service.js` and `src/services/consultancy.service.js`.
+  - `scripts/backfill-booking-ids.js` uses `generateBookingId(record.createdAt)` with in-memory set collision checks.
+
+### 1.3 Database Schema Check
+- `HelpRequest.referenceId`: Type `String` (`@unique`). In PostgreSQL via Prisma, maps to `TEXT` (no length restriction < 40).
+- `ConsultancyRequest.bookingId`: Type `String?` (`@unique`). In PostgreSQL via Prisma, maps to `TEXT` (no length restriction < 40).
 
 ---
 
-## 2. Response Design Adapted to Real Fields
+## 2. Target Design & Environment Variables
 
-### 2.1 Single Booking Item Shape
-```json
-{
-  "id": "e2a4df81-9b16-419b-82ef-d2f1f51cb322",
-  "title": "Video Call Consultation • 30 min",
-  "status": "CONFIRMED",
-  "statusGroup": "UPCOMING",
-  "statusLabel": "Confirmed – our team will call you",
-  "callType": "VIDEO_CALL",
-  "durationMinutes": 30,
-  "price": 899,
-  "currency": "INR",
-  "contact": {
-    "phoneNumber": "9876543210",
-    "email": "user@example.com"
-  },
-  "payment": {
-    "status": "PAID",
-    "amount": 899,
-    "paidAt": "2026-10-22T08:10:00.000Z",
-    "razorpayOrderId": "order_XXXX",
-    "razorpayPaymentId": "pay_XXXX",
-    "refundEligibleAt": "2026-10-31T18:29:59.000Z",
-    "refundedAt": null
-  },
-  "completedAt": null,
-  "createdAt": "2026-10-22T08:10:05.000Z",
-  "updatedAt": "2026-10-22T08:10:05.000Z",
-  "actions": {
-    "canViewReceipt": true,
-    "refundEligibleNow": false
-  }
-}
-```
+| Variable | Default Value | Description |
+|---|---|---|
+| `HELP_REFERENCE_FORMAT` | `"VKLS-{RAND6}"` | Template for help request public reference IDs |
+| `BOOKING_ID_FORMAT` | `"VSB-{YYYY}{MONTH_LETTER}{RAND6}"` | Template for user consultancy booking IDs |
+| `ID_TIMEZONE` | `"Asia/Kolkata"` | Timezone for `{YYYY}`, `{YY}`, `{MM}`, `{DD}`, `{MONTH_LETTER}` |
+| `ID_RANDOM_CHARSET` | `"ABCDEFGHJKLMNPQRSTUVWXYZ23456789"` | 32-character set with ambiguous characters (`0/O/1/I`) omitted |
 
-### 2.2 Field Adaptations & Rules
-- **`title`**:
-  - `CALL`: `"Call Consultation • ${durationMinutes} min"`
-  - `VIDEO_CALL`: `"Video Call Consultation • ${durationMinutes} min"`
-- **`price` & `payment.amount`**:
-  - Number in INR rupees (`Number(item.price)` for Decimal; `payment.amount / 100` for paise).
-- **`payment`**:
-  - `null` for legacy bookings without a payment record.
-  - For paid/processing bookings, includes `razorpayOrderId` and `razorpayPaymentId` (extracted from captured attempt or most recent attempt).
-- **`actions`**:
-  - `canViewReceipt`: `true` if `payment` exists and its status is `PAID`, `REFUND_PENDING`, or `REFUNDED`; otherwise `false`.
-  - `refundEligibleNow`: `true` if `payment.status === 'PAID'` AND `consultancy.status !== 'COMPLETED'` AND `now >= payment.refundEligibleAt` AND neither refunded nor refund-pending; otherwise `false`.
-- **Status Mapping**:
-  | Source State | `status` | `statusGroup` | `statusLabel` |
-  |---|---|---|---|
-  | Payment `PROCESSING` (or `CREATED` with $\ge 1$ attempt, no consultancy) | `PAYMENT_PROCESSING` | `PROCESSING` | Payment processing – don't pay again |
-  | Consultancy `PENDING` + Payment `PAID` | `CONFIRMED` | `UPCOMING` | Confirmed – our team will call you |
-  | Consultancy `PENDING` (Legacy, no payment) | `REQUESTED` | `UPCOMING` | Request received |
-  | Payment `REFUND_PENDING` (Consultancy not completed) | `REFUND_IN_PROGRESS` | `REFUNDED` | Refund in progress |
-  | Consultancy `REFUNDED` or Payment `REFUNDED` | `REFUNDED` | `REFUNDED` | Refunded |
-  | Consultancy `COMPLETED` | `COMPLETED` | `COMPLETED` | Completed |
+### 2.1 Supported Template Tokens
+- `{YYYY}`: 4-digit year in `ID_TIMEZONE` (e.g. `2026`)
+- `{YY}`: 2-digit year in `ID_TIMEZONE` (e.g. `26`)
+- `{MM}`: 2-digit month (`01`–`12`) in `ID_TIMEZONE` (e.g. `10`)
+- `{DD}`: 2-digit day (`01`–`31`) in `ID_TIMEZONE` (e.g. `23`)
+- `{MONTH_LETTER}`: Single-letter month code in `ID_TIMEZONE` (`A`=Jan, `B`=Feb … `L`=Dec)
+- `{RANDn}`: `n` random characters from `ID_RANDOM_CHARSET`, where $4 \le n \le 12$, generated using `crypto.randomInt`.
 
-### 2.3 Detail Response with Timeline
-`GET /api/user/bookings/:id` returns `{ success: true, booking: { ...booking, timeline } }`.
-The `timeline` is an array of `{ at: ISOString, event: string }` sorted chronologically (`at` ASC):
-- `PAYMENT_PAID`: `payment.paidAt`
-- `BOOKING_CONFIRMED`: `consultancy.createdAt`
-- `COMPLETED`: `consultancy.completedAt`
-- `REFUND_INITIATED`: `payment.updatedAt` when `payment.status === 'REFUND_PENDING'`
-- `REFUNDED`: `payment.refundedAt || payment.updatedAt` when `payment.status === 'REFUNDED'` or `consultancy.status === 'REFUNDED'`
+### 2.2 Template Validation Rules (`validateTemplate`)
+1. **Allowed Tokens:** Only `{YYYY}`, `{YY}`, `{MM}`, `{DD}`, `{MONTH_LETTER}`, and `{RANDn}` ($4 \le n \le 12$).
+2. **Mandatory Randomness:** Must contain at least one `{RANDn}` token where $n \ge 4$.
+3. **Allowed Literal Characters:** Literal text between tokens must only contain uppercase letters (`A`–`Z`), digits (`0`–`9`), and hyphens (`-`).
+4. **Maximum Length:** Maximum possible expanded string length must be $\le 40$ characters.
+5. **Fail-Safe Startup:** If an environment template fails validation, log a clear warning explaining the violation and fall back to the safe default template. The server will **never** crash on invalid configuration.
 
 ---
 
 ## 3. Files to Create and Modify
 
-1. **`src/validators/myBookings.validator.js`** (NEW):
-   - `userBookingsQuerySchema`:
-     - `status`: `z.enum(['UPCOMING', 'PROCESSING', 'COMPLETED', 'REFUNDED', 'ALL']).optional().default('ALL')`
-     - `from`: `z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional()`
-     - `to`: `z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional()`
-     - `page`: `z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1)).optional().default('1')`
-     - `limit`: `z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1).max(50)).optional().default('10')`
-
-2. **`src/services/myBookings.service.js`** (NEW):
-   - `listUserBookings(userId, { status, from, to, page, limit })`:
-     - Loads consultancy requests for `userId` with payment and attempts via Prisma (`where: { userId }`).
-     - Loads `PAYMENT_PROCESSING` payments for `userId` (`consultancyRequestId: null`, status `PROCESSING` or `CREATED` with $\ge 1$ attempt).
-     - Merges both streams in-memory (as allowed in the prompt since processing payments per user are few/negligible).
-     - Filters by `statusGroup` (`ALL` includes everything; otherwise exact match on `statusGroup`).
-     - Filters by `from` / `to` timestamps on `createdAt`.
-     - Orders by `createdAt desc`, tie-breaker `id asc`.
-     - Computes tab counts across all items for the user (`counts: { ALL, UPCOMING, PROCESSING, COMPLETED, REFUNDED }`).
-     - Paginates and returns `{ bookings, pagination, counts }`.
-   - `getUserBooking(userId, id)`:
-     - Tries finding a `ConsultancyRequest` matching `id` and `userId`.
-     - If not found, checks `Payment` matching `id` and `userId` that meets the `PAYMENT_PROCESSING` criteria.
-     - If neither found, throws 404 `"Booking not found."`.
-     - Formats booking and appends chronological `timeline`.
-   - `getUserBookingCounts(userId)`:
-     - Computes and returns `{ ALL, UPCOMING, PROCESSING, COMPLETED, REFUNDED }` for the user.
-
-3. **`src/controllers/myBookings.controller.js`** (NEW):
-   - `listUserBookings(req, res, next)`
-   - `getUserBooking(req, res, next)`
-
-4. **`src/routes/myBookings.routes.js`** (NEW):
-   - Mounts `GET /` and `GET /:id` protected with:
-     - `requireAuth`
-     - `requireRole('USER')`
-     - `generalLimiter`
-
-5. **`src/server.js`** (MODIFY):
-   - Mount router at `/api/user/bookings`:
-     ```javascript
-     import myBookingsRouter from './routes/myBookings.routes.js';
-     ...
-     app.use('/api/user/bookings', myBookingsRouter);
-     ```
-
-6. **`README.md`** (MODIFY):
-   - Add **"## 30. My Bookings (User) — Postman Guide"** with all requested documentation: overview, endpoint table, booking object spec, status mapping, request/response samples, error table, and postman step-by-step verification flow.
+| File | Status | Description |
+| :--- | :---: | :--- |
+| `src/utils/idFormat.js` | **NEW** | Core template parser, validator, `formatId`, `validateTemplate`, `generateHelpReferenceId`, `generateBookingId` |
+| `src/services/help.service.js` | **EDIT** | Replace `generateReferenceId` with `generateHelpReferenceId()`; throw 500 error if 10 collision retries are exhausted |
+| `src/utils/bookingId.util.js` | **EDIT** | Delegate `generateBookingId(date)` to `idFormat.js` while preserving existing transaction pre-check & retry helpers |
+| `scripts/backfill-booking-ids.js` | **EDIT** | Ensure backfill uses `generateBookingId(row.createdAt)` from `src/utils/idFormat.js` |
+| `src/server.js` | **EDIT** | Call startup validation check to warn if env templates are invalid |
+| `.env.example` | **NEW** | Document the 4 environment variables with defaults |
+| `README.md` | **EDIT** | Update Sections 10, 29, 30 with token tables, examples, fallback rules, and Vercel redeployment instructions |
 
 ---
 
-## 4. Request / Response Samples
+## 4. Examples of Formats
 
-### 4.1 `GET /api/user/bookings` (Default / ALL)
-**Request:**
-```http
-GET /api/user/bookings?page=1&limit=10
-Authorization: Bearer <USER_JWT>
-```
-**Response (200 OK):**
-```json
-{
-  "success": true,
-  "bookings": [
-    {
-      "id": "c7a8b9c0-1111-2222-3333-444455556666",
-      "title": "Video Call Consultation • 30 min",
-      "status": "CONFIRMED",
-      "statusGroup": "UPCOMING",
-      "statusLabel": "Confirmed – our team will call you",
-      "callType": "VIDEO_CALL",
-      "durationMinutes": 30,
-      "price": 899,
-      "currency": "INR",
-      "contact": {
-        "phoneNumber": "9876543210",
-        "email": "user@example.com"
-      },
-      "payment": {
-        "status": "PAID",
-        "amount": 899,
-        "paidAt": "2026-10-22T08:10:00.000Z",
-        "razorpayOrderId": "order_OXXXXX123456",
-        "razorpayPaymentId": "pay_PXXXXX123456",
-        "refundEligibleAt": "2026-10-31T18:29:59.000Z",
-        "refundedAt": null
-      },
-      "completedAt": null,
-      "createdAt": "2026-10-22T08:10:05.000Z",
-      "updatedAt": "2026-10-22T08:10:05.000Z",
-      "actions": {
-        "canViewReceipt": true,
-        "refundEligibleNow": false
-      }
-    },
-    {
-      "id": "b6a7b8c9-0000-1111-2222-333344445555",
-      "title": "Call Consultation • 15 min",
-      "status": "COMPLETED",
-      "statusGroup": "COMPLETED",
-      "statusLabel": "Completed",
-      "callType": "CALL",
-      "durationMinutes": 15,
-      "price": 199,
-      "currency": "INR",
-      "contact": {
-        "phoneNumber": "9876543210",
-        "email": "user@example.com"
-      },
-      "payment": {
-        "status": "PAID",
-        "amount": 199,
-        "paidAt": "2026-10-15T09:00:00.000Z",
-        "razorpayOrderId": "order_OXXXXX999999",
-        "razorpayPaymentId": "pay_PXXXXX999999",
-        "refundEligibleAt": "2026-10-24T18:29:59.000Z",
-        "refundedAt": null
-      },
-      "completedAt": "2026-10-15T10:30:00.000Z",
-      "createdAt": "2026-10-15T09:00:05.000Z",
-      "updatedAt": "2026-10-15T10:30:00.000Z",
-      "actions": {
-        "canViewReceipt": true,
-        "refundEligibleNow": false
-      }
-    }
-  ],
-  "pagination": {
-    "page": 1,
-    "limit": 10,
-    "total": 2,
-    "totalPages": 1,
-    "hasNextPage": false
-  },
-  "counts": {
-    "ALL": 2,
-    "UPCOMING": 1,
-    "PROCESSING": 0,
-    "COMPLETED": 1,
-    "REFUNDED": 0
-  }
-}
-```
+1. **Default Booking Format:**
+   `BOOKING_ID_FORMAT="VSB-{YYYY}{MONTH_LETTER}{RAND6}"`
+   Output for October 2026: `VSB-2026J5TW7HN` (14 chars)
 
-### 4.2 `PAYMENT_PROCESSING` Item Sample (in List or Detail)
-```json
-{
-  "id": "pay_uuid_12345678-aaaa-bbbb-cccc-ddddeeeeffff",
-  "title": "Video Call Consultation • 30 min",
-  "status": "PAYMENT_PROCESSING",
-  "statusGroup": "PROCESSING",
-  "statusLabel": "Payment processing – don't pay again",
-  "callType": "VIDEO_CALL",
-  "durationMinutes": 30,
-  "price": 899,
-  "currency": "INR",
-  "contact": {
-    "phoneNumber": "9876543210",
-    "email": "user@example.com"
-  },
-  "payment": {
-    "status": "PROCESSING",
-    "amount": 899,
-    "paidAt": null,
-    "razorpayOrderId": "order_OXXXXXprocessing",
-    "razorpayPaymentId": "pay_PXXXXXattempt1",
-    "refundEligibleAt": null,
-    "refundedAt": null
-  },
-  "completedAt": null,
-  "createdAt": "2026-10-22T09:00:00.000Z",
-  "updatedAt": "2026-10-22T09:01:00.000Z",
-  "actions": {
-    "canViewReceipt": false,
-    "refundEligibleNow": false
-  }
-}
-```
+2. **Dated Year-Month Format:**
+   `BOOKING_ID_FORMAT="VKLS-BKC-{YYYY}-{RAND6}"`
+   Output for 2026: `VKLS-BKC-2026-8F4K29` (19 chars)
 
-### 4.3 `GET /api/user/bookings/:id` (Detail with Timeline)
-**Request:**
-```http
-GET /api/user/bookings/c7a8b9c0-1111-2222-3333-444455556666
-Authorization: Bearer <USER_JWT>
-```
-**Response (200 OK):**
-```json
-{
-  "success": true,
-  "booking": {
-    "id": "c7a8b9c0-1111-2222-3333-444455556666",
-    "title": "Video Call Consultation • 30 min",
-    "status": "CONFIRMED",
-    "statusGroup": "UPCOMING",
-    "statusLabel": "Confirmed – our team will call you",
-    "callType": "VIDEO_CALL",
-    "durationMinutes": 30,
-    "price": 899,
-    "currency": "INR",
-    "contact": {
-      "phoneNumber": "9876543210",
-      "email": "user@example.com"
-    },
-    "payment": {
-      "status": "PAID",
-      "amount": 899,
-      "paidAt": "2026-10-22T08:10:00.000Z",
-      "razorpayOrderId": "order_OXXXXX123456",
-      "razorpayPaymentId": "pay_PXXXXX123456",
-      "refundEligibleAt": "2026-10-31T18:29:59.000Z",
-      "refundedAt": null
-    },
-    "completedAt": null,
-    "createdAt": "2026-10-22T08:10:05.000Z",
-    "updatedAt": "2026-10-22T08:10:05.000Z",
-    "actions": {
-      "canViewReceipt": true,
-      "refundEligibleNow": false
-    },
-    "timeline": [
-      {
-        "at": "2026-10-22T08:10:00.000Z",
-        "event": "PAYMENT_PAID"
-      },
-      {
-        "at": "2026-10-22T08:10:05.000Z",
-        "event": "BOOKING_CONFIRMED"
-      }
-    ]
-  }
-}
-```
+3. **Compact Help Format:**
+   `HELP_REFERENCE_FORMAT="HLP-{YY}{MM}-{RAND5}"`
+   Output for October 2026: `HLP-2610-P7X9K` (14 chars)
+
+4. **Timezone Boundary Example:**
+   `2026-01-31T19:00:00Z` in UTC is `2026-02-01 00:30:00` in `Asia/Kolkata`.
+   Format `{YYYY}{MONTH_LETTER}` correctly produces `2026B` (`B` = February).
 
 ---
 
 ## 5. Potential Risks & Mitigations
 
-1. **Information Leakage across Users:**
-   - *Risk:* User probing booking IDs might see whether an ID exists belonging to someone else.
-   - *Mitigation:* Always enforce `userId` filtering directly in the Prisma query. Return uniform 404 `"Booking not found."` regardless of whether the ID belongs to another user or does not exist at all.
-2. **N+1 Query Overhead:**
-   - *Risk:* Loading payments or payment attempts in a loop could slow down responses.
-   - *Mitigation:* Load `payment: { include: { attempts: true } }` directly inside the primary `prisma.consultancyRequest.findMany` call in a single SQL join/batched query.
-3. **Database Performance & Indexes:**
-   - *Verification:* Verified `schema.prisma`. Both `ConsultancyRequest` and `Payment` already contain indexed `userId` columns (`@@index([userId])`), providing optimal filter speeds.
-4. **Impact on Existing Routes:**
-   - *Risk:* Colliding with `GET /api/user/consultancy` or other `/api/user/*` routes.
-   - *Mitigation:* `myBookings.routes.js` is mounted at `/api/user/bookings`, leaving `/api/user/consultancy` completely untouched and unaffected.
+1. **Risk:** Malformed or empty template in production environment variables crashes the application.
+   - **Mitigation:** Safe parser with `validateTemplate()`. If invalid or empty, it logs a warning and automatically falls back to `DEFAULT_BOOKING_FORMAT` or `DEFAULT_HELP_FORMAT`.
+2. **Risk:** Collision rate increases if a short random token is used.
+   - **Mitigation:** Strict validation requires $n \ge 4$ (at least $32^4 = 1,048,576$ combinations per time window). Collision loops with pre-checks protect both help requests and bookings. If 10 collisions occur in help requests, an explicit 500 error with descriptive log is thrown.
+3. **Risk:** Breaking existing historical IDs when the template is changed.
+   - **Mitigation:** All database lookups (`findUnique({ where: { referenceId } })` and `where: { bookingId }`) use exact string matching. Changing templates in `.env` only affects newly generated IDs; historical records remain 100% accessible.
+4. **Risk:** Database column truncation if template generates a long string.
+   - **Mitigation:** Max length validation rule strictly limits total output length to $\le 40$ characters. Both `HelpRequest.referenceId` and `ConsultancyRequest.bookingId` are PostgreSQL `TEXT` columns with no restrictive length limit.
 
 ---
 
-## 6. Answers to OPEN QUESTIONS
+## 6. Verification Plan
 
-### Question 1: Processing payments — include `PAYMENT_PROCESSING` items in My Bookings?
-- **Recommendation:** **YES (Include them, default behavior).**
-- **Rationale:**
-  - When a user authorizes payment via Netbanking or UPI, the gateway can take several minutes to settle and emit the webhook. During this window, the payment status is `PROCESSING`, but no `ConsultancyRequest` row exists yet.
-  - If "My Bookings" only showed `ConsultancyRequest` rows, the user would see an empty screen or assume their booking failed, leading them to pay a second time.
-  - Including `PAYMENT_PROCESSING` with `statusLabel: "Payment processing – don't pay again"` provides immediate feedback, prevents accidental double payments, and seamlessly transitions to `CONFIRMED` once the webhook or verify call fires.
-  - Checkouts in `CREATED` with 0 attempts, `FAILED`, or `EXPIRED` status remain strictly in "My Payments" to avoid cluttering active bookings.
-
-### Question 2: Cancel booking — should the user get a "Cancel booking" action later?
-- **Recommendation:** **NOT in this task (Future scope only).**
-- **Rationale:**
-  - Under current platform business logic, consultations involve fixed scheduling SLAs and administrative review. Refunds are subject to the 7 working-day SLA and can only be executed by administrators (`POST /api/admin/payments/:id/refund`).
-  - Allowing user-initiated cancellations requires establishing refund policies, cancellation fees, advocate notifications, and automatic Razorpay reverse-transfers.
-  - `actions.refundEligibleNow` provides informational visibility without exposing an unsupported self-service refund/cancellation endpoint.
+1. Syntax verification using `node --check` on all modified files.
+2. Standalone test script verifying:
+   - Valid templates expand properly with correct tokens.
+   - Invalid templates trigger fallback warnings (`{RAND2}`, missing random token, invalid characters).
+   - Timezone accuracy test (`2026-01-31T19:00:00Z` yields month letter `B` for Feb 1 in IST).
+3. API test on `POST /api/help` verifying generation of default reference ID and lookup of existing reference ID.
+4. `git diff --stat` inspection to verify only intended files are touched.

@@ -56,6 +56,7 @@ const formatConsultancyBooking = (item) => {
 
   return {
     id: item.id,
+    bookingId: item.bookingId || null,
     title,
     status,
     statusGroup,
@@ -107,6 +108,7 @@ const formatProcessingPaymentBooking = (payment) => {
 
   return {
     id: payment.id,
+    bookingId: null,
     title,
     status: 'PAYMENT_PROCESSING',
     statusGroup: 'PROCESSING',
