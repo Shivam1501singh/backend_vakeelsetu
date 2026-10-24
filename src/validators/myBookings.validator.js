@@ -4,6 +4,9 @@ export const userBookingsQuerySchema = z.object({
   status: z.enum(['UPCOMING', 'PROCESSING', 'COMPLETED', 'REFUNDED', 'ALL'], {
     errorMap: () => ({ message: "Status must be one of 'UPCOMING', 'PROCESSING', 'COMPLETED', 'REFUNDED', or 'ALL'." })
   }).optional().default('ALL'),
+  type: z.enum(['ALL', 'CONSULTANCY', 'ADVOCATE'], {
+    errorMap: () => ({ message: "Type must be one of 'CONSULTANCY', 'ADVOCATE', or 'ALL'." })
+  }).optional().default('ALL'),
   from: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional(),
   to: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional(),
   page: z.string().regex(/^\d+$/, { message: 'Page must be a positive integer.' })

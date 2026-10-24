@@ -100,6 +100,16 @@ export const handleRazorpayWebhook = async (req, res) => {
                 data: { status: 'REFUNDED' }
               });
             }
+
+            if (payment.advocateBookingId) {
+              await prisma.advocateBooking.update({
+                where: { id: payment.advocateBookingId },
+                data: {
+                  status: 'REFUNDED',
+                  refundedAt: new Date()
+                }
+              });
+            }
           }
         }
 

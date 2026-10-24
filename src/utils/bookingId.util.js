@@ -1,6 +1,6 @@
-import { generateBookingId } from './idFormat.js';
+import { generateBookingId, generateAdvocateBookingId } from './idFormat.js';
 
-export { generateBookingId };
+export { generateBookingId, generateAdvocateBookingId };
 
 /**
  * Attempts to create a ConsultancyRequest safely by generating a bookingId
@@ -43,4 +43,37 @@ export const createConsultancyWithUniqueBookingId = async (
       bookingId
     }
   });
+};
+
+/**
+ * Generates a unique AdvocateBooking bookingId with pre-checks.
+ *
+ * @param {object} prismaClientOrTx - Prisma client or transaction instance
+ * @param {Date|string|number} [date=new Date()] - Date to derive year/month letter in IST
+ * @param {number} [maxPrecheckRetries=5] - Maximum precheck generation attempts
+ * @returns {Promise<string>} The unique bookingId
+ */
+export const generateUniqueAdvocateBookingId = async (
+  prismaClientOrTx,
+  date = new Date(),
+  maxPrecheckRetries = 5
+) => {
+  let attempts = 0;
+  let bookingId;
+
+  while (attempts < maxPrecheckRetries) {
+    attempts++;
+    bookingId = generateAdvocateBookingId(date);
+
+    const existing = await prismaClientOrTx.advocateBooking.findUnique({
+      where: { bookingId },
+      select: { id: true }
+    });
+
+    if (!existing) {
+      return bookingId;
+    }
+  }
+
+  return bookingId;
 };

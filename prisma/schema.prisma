@@ -120,6 +120,7 @@ model User {
   savedLawyers    SavedLawyer[]
   likedAdvocates  AdvocateLike[]
   consultancyRequests ConsultancyRequest[]
+  advocateBookings    AdvocateBooking[]
   feedbacks       Feedback[]
   payments        Payment[]
 }
@@ -272,6 +273,7 @@ model Advocate {
   teamMatesPrimary     AdvocateTeamMate[]    @relation("TeamMatesPrimary")
   teamMatesSecondary   AdvocateTeamMate[]    @relation("TeamMatesSecondary")
   passwordResets       AdvocatePasswordReset[]
+  bookings             AdvocateBooking[]
 }
 
 model AdvocatePasswordReset {
@@ -623,6 +625,69 @@ model ConsultancyRequest {
   @@index([createdAt])
 }
 
+enum AdvocateBookingMode {
+  VOICE_CALL
+  VIDEO_CALL
+  IN_PERSON
+}
+
+enum AdvocateBookingStatus {
+  HOLD
+  CONFIRMED
+  COMPLETED
+  EXPIRED
+  REFUND_PENDING
+  REFUNDED
+}
+
+enum PaymentPurpose {
+  CONSULTANCY
+  ADVOCATE_BOOKING
+}
+
+model AdvocateBooking {
+  id                 String                @id @default(uuid())
+  bookingId          String?               @unique
+  userId             String
+  advocateId         String
+  mode               AdvocateBookingMode
+  startAt            DateTime
+  endAt              DateTime
+  durationMinutes    Int
+  subject            String
+
+  ratePerMinutePaise Int?
+  feePaise           Int
+  gstPercent         Int
+  gstPaise           Int
+  platformFeePaise   Int
+  totalPaise         Int
+  currency           String                @default("INR")
+
+  userName           String
+  userPhone          String
+  userEmail          String
+  advocateName       String
+
+  status             AdvocateBookingStatus @default(HOLD)
+  holdExpiresAt      DateTime
+  confirmedAt        DateTime?
+  completedAt        DateTime?
+  refundedAt         DateTime?
+  refundReason       String?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  user               User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  advocate           Advocate              @relation(fields: [advocateId], references: [id], onDelete: Restrict)
+  payment            Payment?
+
+  @@index([advocateId, startAt])
+  @@index([userId, createdAt])
+  @@index([status])
+  @@index([startAt])
+}
+
 enum PaymentStatus {
   CREATED
   PROCESSING
@@ -644,9 +709,10 @@ enum PaymentAttemptStatus {
 
 model Payment {
   id                   String              @id @default(uuid())
+  purpose              PaymentPurpose      @default(CONSULTANCY)
   userId               String
-  callType             ConsultancyCallType
-  duration             Int
+  callType             ConsultancyCallType?
+  duration             Int?
   phoneNumber          String
   email                String
   amount               Int                 // in paise (e.g. 49900 = ₹499.00)
@@ -654,6 +720,7 @@ model Payment {
   status               PaymentStatus       @default(CREATED)
   razorpayOrderId      String              @unique
   consultancyRequestId String?             @unique
+  advocateBookingId    String?             @unique
   paidAt               DateTime?
   expiresAt            DateTime
   refundEligibleAt     DateTime?
@@ -668,12 +735,14 @@ model Payment {
 
   user                 User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   consultancyRequest   ConsultancyRequest? @relation(fields: [consultancyRequestId], references: [id], onDelete: SetNull)
+  advocateBooking      AdvocateBooking?    @relation(fields: [advocateBookingId], references: [id], onDelete: SetNull)
   attempts             PaymentAttempt[]
 
   @@index([userId])
   @@index([status])
   @@index([createdAt])
   @@index([refundEligibleAt])
+  @@index([purpose])
 }
 
 model PaymentAttempt {

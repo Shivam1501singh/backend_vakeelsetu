@@ -2,6 +2,7 @@ import crypto from 'crypto';
 
 export const DEFAULT_HELP_REFERENCE_FORMAT = 'VKLS-{RAND6}';
 export const DEFAULT_BOOKING_ID_FORMAT = 'VSB-{YYYY}{MONTH_LETTER}{RAND6}';
+export const DEFAULT_ADVOCATE_BOOKING_ID_FORMAT = 'VLB-{YYYY}{MONTH_LETTER}{RAND6}';
 export const DEFAULT_ID_TIMEZONE = 'Asia/Kolkata';
 export const DEFAULT_ID_RANDOM_CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 32 chars, no 0/O/1/I
 
@@ -220,6 +221,36 @@ export const generateBookingId = (date = new Date()) => {
 };
 
 /**
+ * Resolves active Advocate Booking ID format from process.env or falls back to default.
+ * @returns {string}
+ */
+export const getAdvocateBookingIdFormat = () => {
+  const envVal = process.env.ADVOCATE_BOOKING_ID_FORMAT;
+  if (!envVal || !envVal.trim()) {
+    return DEFAULT_ADVOCATE_BOOKING_ID_FORMAT;
+  }
+  const validation = validateTemplate(envVal.trim());
+  if (!validation.isValid) {
+    console.warn(
+      `[Config Warning] Invalid ADVOCATE_BOOKING_ID_FORMAT "${envVal}": ${validation.error}. Falling back to default "${DEFAULT_ADVOCATE_BOOKING_ID_FORMAT}".`
+    );
+    return DEFAULT_ADVOCATE_BOOKING_ID_FORMAT;
+  }
+  return envVal.trim();
+};
+
+/**
+ * Generates an Advocate Booking ID using the configured template.
+ *
+ * @param {Date|string|number} [date=new Date()]
+ * @returns {string}
+ */
+export const generateAdvocateBookingId = (date = new Date()) => {
+  const template = getAdvocateBookingIdFormat();
+  return formatId(template, { date });
+};
+
+/**
  * Validates environment templates on startup and logs any warnings.
  * Never throws or crashes the server.
  */
@@ -240,6 +271,16 @@ export const validateEnvTemplates = () => {
     if (!res.isValid) {
       console.warn(
         `[Config Warning] Invalid BOOKING_ID_FORMAT "${bookingFormat}": ${res.error}. Will use default "${DEFAULT_BOOKING_ID_FORMAT}".`
+      );
+    }
+  }
+
+  const advocateBookingFormat = process.env.ADVOCATE_BOOKING_ID_FORMAT;
+  if (advocateBookingFormat && advocateBookingFormat.trim()) {
+    const res = validateTemplate(advocateBookingFormat.trim());
+    if (!res.isValid) {
+      console.warn(
+        `[Config Warning] Invalid ADVOCATE_BOOKING_ID_FORMAT "${advocateBookingFormat}": ${res.error}. Will use default "${DEFAULT_ADVOCATE_BOOKING_ID_FORMAT}".`
       );
     }
   }

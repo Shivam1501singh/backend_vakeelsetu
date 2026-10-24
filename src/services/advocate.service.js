@@ -1,6 +1,7 @@
 import prisma from '../lib/prisma.js';
 import { getTeamMates } from './advocateTeam.service.js';
 import { computeEffectiveOnlineStatus } from '../utils/advocateStatus.js';
+import { isAdvocateBookable, getBookableModes } from './advocateBooking/pricing.js';
 
 // Hardcoded mapping of coordinates for the common Indian pincodes used in the seed data/locations
 const PINCODE_COORDINATES = {
@@ -434,6 +435,8 @@ export const getAdvocateDetailsPublic = async (id, currentUserId) => {
     totalReviews: advocate.totalReviews,
     status: advocate.status,
     approvalStatus: advocate.approvalStatus,
+    bookable: isAdvocateBookable(advocate),
+    bookingModes: isAdvocateBookable(advocate) ? getBookableModes(advocate).map((m) => m.mode) : [],
     callAvailability: advocate.callAvailability ?? false,
     isOnline: computeEffectiveOnlineStatus(advocate.isOnline, advocate.lastSeenAt),
     lastSeenAt: advocate.lastSeenAt,

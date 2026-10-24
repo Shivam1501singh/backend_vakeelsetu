@@ -53,14 +53,33 @@ export const reconcilePaymentsCron = async (req, res) => {
     }
 
     // Expire orders with no attempts past expiresAt
-    const expiredResult = await prisma.payment.updateMany({
+    const expiredPayments = await prisma.payment.findMany({
       where: {
         status: 'CREATED',
         expiresAt: { lte: now },
         attempts: { none: {} }
       },
-      data: { status: 'EXPIRED' }
+      select: { id: true, advocateBookingId: true }
     });
+
+    let expiredCount = 0;
+    if (expiredPayments.length > 0) {
+      const expiredPaymentIds = expiredPayments.map(p => p.id);
+      const advocateBookingIds = expiredPayments.map(p => p.advocateBookingId).filter(Boolean);
+
+      const res = await prisma.payment.updateMany({
+        where: { id: { in: expiredPaymentIds } },
+        data: { status: 'EXPIRED' }
+      });
+      expiredCount = res.count;
+
+      if (advocateBookingIds.length > 0) {
+        await prisma.advocateBooking.updateMany({
+          where: { id: { in: advocateBookingIds } },
+          data: { status: 'EXPIRED' }
+        });
+      }
+    }
 
     return res.status(200).json({
       success: true,

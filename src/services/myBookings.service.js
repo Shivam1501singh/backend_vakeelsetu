@@ -8,11 +8,10 @@ const formatConsultancyBooking = (item) => {
 
   const payment = item.payment;
   const capturedAttempt = Array.isArray(payment?.attempts)
-    ? payment.attempts.find(a => a.status === 'CAPTURED' || a.status === 'DUPLICATE_REFUNDED')
+    ? payment.attempts.find((a) => a.status === 'CAPTURED' || a.status === 'DUPLICATE_REFUNDED')
     : null;
   const razorpayPaymentId = capturedAttempt?.razorpayPaymentId || payment?.attempts?.[0]?.razorpayPaymentId || null;
 
-  // Determine status, statusGroup, and statusLabel according to specification
   let status = 'CONFIRMED';
   let statusGroup = 'UPCOMING';
   let statusLabel = 'Confirmed – our team will call you';
@@ -50,13 +49,15 @@ const formatConsultancyBooking = (item) => {
   const canViewReceipt = Boolean(payment && ['PAID', 'REFUND_PENDING', 'REFUNDED'].includes(payment.status));
 
   const durationMinutes = item.duration;
-  const title = item.callType === 'CALL'
-    ? `Call Consultation • ${durationMinutes} min`
-    : `Video Call Consultation • ${durationMinutes} min`;
-  const callStatus = (item.status === 'COMPLETED' || item.completedAt) ? 'COMPLETED' : 'PENDING';
+  const title =
+    item.callType === 'CALL'
+      ? `Call Consultation • ${durationMinutes} min`
+      : `Video Call Consultation • ${durationMinutes} min`;
+  const callStatus = item.status === 'COMPLETED' || item.completedAt ? 'COMPLETED' : 'PENDING';
 
   return {
     id: item.id,
+    bookingType: 'CONSULTANCY',
     bookingId: item.bookingId || null,
     title,
     callStatus,
@@ -99,24 +100,26 @@ const formatProcessingPaymentBooking = (payment) => {
   if (!payment) return null;
 
   const capturedAttempt = Array.isArray(payment.attempts)
-    ? payment.attempts.find(a => a.status === 'CAPTURED' || a.status === 'DUPLICATE_REFUNDED')
+    ? payment.attempts.find((a) => a.status === 'CAPTURED' || a.status === 'DUPLICATE_REFUNDED')
     : null;
   const razorpayPaymentId = capturedAttempt?.razorpayPaymentId || payment.attempts?.[0]?.razorpayPaymentId || null;
 
-  const durationMinutes = payment.duration;
-  const title = payment.callType === 'CALL'
-    ? `Call Consultation • ${durationMinutes} min`
-    : `Video Call Consultation • ${durationMinutes} min`;
+  const durationMinutes = payment.duration || 15;
+  const title =
+    payment.callType === 'CALL'
+      ? `Call Consultation • ${durationMinutes} min`
+      : `Video Call Consultation • ${durationMinutes} min`;
 
   return {
     id: payment.id,
+    bookingType: 'CONSULTANCY',
     bookingId: null,
     title,
     callStatus: 'PENDING',
     status: 'PAYMENT_PROCESSING',
     statusGroup: 'PROCESSING',
     statusLabel: "Payment processing – don't pay again",
-    callType: payment.callType,
+    callType: payment.callType || 'CALL',
     durationMinutes,
     price: payment.amount ? payment.amount / 100 : 0,
     currency: payment.currency || 'INR',
@@ -138,6 +141,115 @@ const formatProcessingPaymentBooking = (payment) => {
     updatedAt: payment.updatedAt,
     actions: {
       canViewReceipt: false,
+      refundEligibleNow: false
+    }
+  };
+};
+
+/**
+ * Format an AdvocateBooking into the standard user booking shape
+ */
+const formatAdvocateBooking = (item) => {
+  if (!item) return null;
+
+  const payment = item.payment;
+  const capturedAttempt = Array.isArray(payment?.attempts)
+    ? payment.attempts.find((a) => a.status === 'CAPTURED' || a.status === 'DUPLICATE_REFUNDED')
+    : null;
+  const razorpayPaymentId = capturedAttempt?.razorpayPaymentId || payment?.attempts?.[0]?.razorpayPaymentId || null;
+
+  let status = 'CONFIRMED';
+  let statusGroup = 'UPCOMING';
+  let statusLabel = 'Confirmed – the advocate will contact you';
+  let callStatus = 'PENDING';
+
+  if (item.status === 'COMPLETED') {
+    status = 'COMPLETED';
+    statusGroup = 'COMPLETED';
+    statusLabel = 'Completed';
+    callStatus = 'COMPLETED';
+  } else if (item.status === 'REFUNDED' || payment?.status === 'REFUNDED') {
+    status = 'REFUNDED';
+    statusGroup = 'REFUNDED';
+    statusLabel = 'Refunded';
+    callStatus = 'CANCELLED';
+  } else if (item.status === 'REFUND_PENDING' || payment?.status === 'REFUND_PENDING') {
+    status = 'REFUND_IN_PROGRESS';
+    statusGroup = 'REFUNDED';
+    statusLabel = 'Refund in progress';
+    callStatus = 'CANCELLED';
+  } else if (item.status === 'HOLD' && payment?.status === 'PROCESSING') {
+    status = 'PAYMENT_PROCESSING';
+    statusGroup = 'PROCESSING';
+    statusLabel = "Payment processing – don't pay again";
+    callStatus = 'PENDING';
+  } else if (item.status === 'CONFIRMED') {
+    status = 'CONFIRMED';
+    statusGroup = 'UPCOMING';
+    statusLabel = 'Confirmed – the advocate will contact you';
+    callStatus = 'PENDING';
+  }
+
+  const modeLabel =
+    item.mode === 'VOICE_CALL'
+      ? 'Voice Call'
+      : item.mode === 'VIDEO_CALL'
+      ? 'Video Call'
+      : 'In-Person Meeting';
+
+  const title = `${modeLabel} Consultation • ${item.durationMinutes} min`;
+  const canViewReceipt = Boolean(payment && ['PAID', 'REFUND_PENDING', 'REFUNDED'].includes(payment.status));
+
+  return {
+    id: item.id,
+    bookingType: 'ADVOCATE',
+    bookingId: item.bookingId || null,
+    title,
+    callStatus,
+    status,
+    statusGroup,
+    statusLabel,
+    mode: item.mode,
+    scheduledAt: item.startAt,
+    startAt: item.startAt,
+    endAt: item.endAt,
+    durationMinutes: item.durationMinutes,
+    subject: item.subject,
+    advocate: item.advocate
+      ? {
+          id: item.advocate.id,
+          fullName: item.advocate.fullName,
+          profilePhotoUrl: item.advocate.profilePhotoUrl,
+          bestPracticeArea: item.advocate.bestPracticeArea || item.advocate.practiceAreas?.[0] || null
+        }
+      : null,
+    breakdown: {
+      fee: parseFloat((item.feePaise / 100).toFixed(2)),
+      gst: parseFloat((item.gstPaise / 100).toFixed(2)),
+      gstPercent: item.gstPercent,
+      platformFee: parseFloat((item.platformFeePaise / 100).toFixed(2)),
+      total: parseFloat((item.totalPaise / 100).toFixed(2))
+    },
+    contact: {
+      phoneNumber: item.userPhone,
+      email: item.userEmail
+    },
+    payment: payment
+      ? {
+          status: payment.status,
+          amount: payment.amount ? payment.amount / 100 : 0,
+          paidAt: payment.paidAt,
+          razorpayOrderId: payment.razorpayOrderId,
+          razorpayPaymentId,
+          refundEligibleAt: null,
+          refundedAt: payment.refundedAt
+        }
+      : null,
+    completedAt: item.completedAt,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+    actions: {
+      canViewReceipt,
       refundEligibleNow: false
     }
   };
@@ -170,7 +282,7 @@ const buildTimeline = (booking) => {
     });
   }
 
-  if (booking.payment?.status === 'REFUND_PENDING') {
+  if (booking.payment?.status === 'REFUND_PENDING' || booking.status === 'REFUND_IN_PROGRESS') {
     events.push({
       at: booking.updatedAt,
       event: 'REFUND_INITIATED'
@@ -184,7 +296,6 @@ const buildTimeline = (booking) => {
     });
   }
 
-  // Sort chronological (earliest event first)
   return events.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
 };
 
@@ -200,75 +311,125 @@ const buildDateFilter = (from, to) => {
 };
 
 /**
- * Retrieve user's bookings with filtering, pagination, and status tab counts
+ * Retrieve user's bookings with filtering across Consultancy and Advocate bookings,
+ * unified pagination, and statusGroup tab counts.
  */
-export const listUserBookings = async (userId, { status = 'ALL', from, to, page = 1, limit = 10 } = {}) => {
+export const listUserBookings = async (
+  userId,
+  { status = 'ALL', type = 'ALL', from, to, page = 1, limit = 10 } = {}
+) => {
   const dateFilter = buildDateFilter(from, to);
 
-  // 1. Fetch user's consultancy requests (No N+1: include payment and its attempts in single query)
-  const consultancyWhere = {
-    userId,
-    ...(dateFilter ? { createdAt: dateFilter } : {})
-  };
+  const shouldFetchConsultancy = type === 'ALL' || type === 'CONSULTANCY';
+  const shouldFetchAdvocate = type === 'ALL' || type === 'ADVOCATE';
 
-  const consultancies = await prisma.consultancyRequest.findMany({
-    where: consultancyWhere,
-    include: {
-      payment: {
-        include: {
-          attempts: {
-            orderBy: { createdAt: 'desc' }
+  let formattedConsultancies = [];
+  let formattedProcessingConsultancy = [];
+  let formattedAdvocateBookings = [];
+
+  // 1. Fetch Consultancy Bookings if requested
+  if (shouldFetchConsultancy) {
+    const consultancyWhere = {
+      userId,
+      ...(dateFilter ? { createdAt: dateFilter } : {})
+    };
+
+    const consultancies = await prisma.consultancyRequest.findMany({
+      where: consultancyWhere,
+      include: {
+        payment: {
+          include: {
+            attempts: {
+              orderBy: { createdAt: 'desc' }
+            }
           }
         }
-      }
-    },
-    orderBy: [
-      { createdAt: 'desc' },
-      { id: 'desc' }
-    ]
-  });
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]
+    });
 
-  // 2. Fetch PAYMENT_PROCESSING items
-  // Note: PAYMENT_PROCESSING items come from Payment rows, not ConsultancyRequest.
-  // These represent transactions still processing at the gateway without a finalized ConsultancyRequest yet.
-  // These are very few (typically 0 or 1 per user), so fetching them for the user and merging in memory before paginating is safe and efficient.
-  const paymentWhere = {
-    userId,
-    consultancyRequestId: null,
-    OR: [
-      { status: 'PROCESSING' },
-      { status: 'CREATED', attempts: { some: {} } }
-    ],
-    ...(dateFilter ? { createdAt: dateFilter } : {})
-  };
+    const paymentWhere = {
+      userId,
+      purpose: 'CONSULTANCY',
+      consultancyRequestId: null,
+      OR: [
+        { status: 'PROCESSING' },
+        { status: 'CREATED', attempts: { some: {} } }
+      ],
+      ...(dateFilter ? { createdAt: dateFilter } : {})
+    };
 
-  const processingPayments = await prisma.payment.findMany({
-    where: paymentWhere,
-    include: {
-      attempts: {
-        orderBy: { createdAt: 'desc' }
-      }
-    },
-    orderBy: [
-      { createdAt: 'desc' },
-      { id: 'desc' }
-    ]
-  });
+    const processingPayments = await prisma.payment.findMany({
+      where: paymentWhere,
+      include: {
+        attempts: {
+          orderBy: { createdAt: 'desc' }
+        }
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]
+    });
 
-  // 3. Format and merge in-memory
-  const formattedConsultancies = consultancies.map(formatConsultancyBooking);
-  const formattedProcessing = processingPayments.map(formatProcessingPaymentBooking);
+    formattedConsultancies = consultancies.map(formatConsultancyBooking);
+    formattedProcessingConsultancy = processingPayments.map(formatProcessingPaymentBooking);
+  }
 
-  const allItems = [...formattedConsultancies, ...formattedProcessing];
+  // 2. Fetch Advocate Bookings if requested
+  if (shouldFetchAdvocate) {
+    // Only fetch finalized bookings or HOLD with active PROCESSING payment
+    const advocateWhere = {
+      userId,
+      OR: [
+        { status: { in: ['CONFIRMED', 'COMPLETED', 'REFUND_PENDING', 'REFUNDED'] } },
+        {
+          status: 'HOLD',
+          payment: { status: 'PROCESSING' }
+        }
+      ],
+      ...(dateFilter ? { createdAt: dateFilter } : {})
+    };
 
-  // Sort descending by createdAt with tie-breaker id
+    const advocateBookings = await prisma.advocateBooking.findMany({
+      where: advocateWhere,
+      include: {
+        advocate: {
+          select: {
+            id: true,
+            fullName: true,
+            profilePhotoUrl: true,
+            bestPracticeArea: true,
+            practiceAreas: true
+          }
+        },
+        payment: {
+          include: {
+            attempts: {
+              orderBy: { createdAt: 'desc' }
+            }
+          }
+        }
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]
+    });
+
+    formattedAdvocateBookings = advocateBookings.map(formatAdvocateBooking);
+  }
+
+  // 3. Merge all items in memory
+  // Note: To paginate properly across both tables, we fetch user records, merge in memory,
+  // sort by createdAt descending, and slice for the requested page.
+  const allItems = [
+    ...formattedConsultancies,
+    ...formattedProcessingConsultancy,
+    ...formattedAdvocateBookings
+  ];
+
   allItems.sort((a, b) => {
     const diff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     if (diff !== 0) return diff;
     return String(b.id).localeCompare(String(a.id));
   });
 
-  // 4. Compute statusGroup tab counts across all items (ignoring status query filter)
+  // 4. Compute statusGroup tab counts across all merged items (ignoring status query filter)
   const counts = {
     ALL: allItems.length,
     UPCOMING: 0,
@@ -284,9 +445,7 @@ export const listUserBookings = async (userId, { status = 'ALL', from, to, page 
   }
 
   // 5. Apply statusGroup filter
-  const filteredItems = status === 'ALL'
-    ? allItems
-    : allItems.filter(item => item.statusGroup === status);
+  const filteredItems = status === 'ALL' ? allItems : allItems.filter((item) => item.statusGroup === status);
 
   // 6. Paginate
   const parsedPage = Math.max(1, parseInt(page, 10) || 1);
@@ -298,6 +457,7 @@ export const listUserBookings = async (userId, { status = 'ALL', from, to, page 
   const hasNextPage = parsedPage < totalPages;
 
   return {
+    availableTypes: ['CONSULTANCY', 'ADVOCATE'],
     bookings: paginatedItems,
     pagination: {
       page: parsedPage,
@@ -311,10 +471,10 @@ export const listUserBookings = async (userId, { status = 'ALL', from, to, page 
 };
 
 /**
- * Retrieve a single booking by ID (consultancy UUID or processing payment UUID)
+ * Retrieve a single booking by ID (consultancy UUID, advocate booking UUID, or processing payment UUID)
  */
 export const getUserBooking = async (userId, id) => {
-  // First, check ConsultancyRequest owned by userId
+  // 1. Check ConsultancyRequest owned by userId
   const consultancy = await prisma.consultancyRequest.findUnique({
     where: { id },
     include: {
@@ -336,7 +496,42 @@ export const getUserBooking = async (userId, id) => {
     };
   }
 
-  // Next, check Payment owned by userId that is PAYMENT_PROCESSING
+  // 2. Check AdvocateBooking owned by userId
+  const advocateBooking = await prisma.advocateBooking.findUnique({
+    where: { id },
+    include: {
+      advocate: {
+        select: {
+          id: true,
+          fullName: true,
+          profilePhotoUrl: true,
+          bestPracticeArea: true,
+          practiceAreas: true
+        }
+      },
+      payment: {
+        include: {
+          attempts: {
+            orderBy: { createdAt: 'desc' }
+          }
+        }
+      }
+    }
+  });
+
+  if (
+    advocateBooking &&
+    advocateBooking.userId === userId &&
+    (!['HOLD', 'EXPIRED'].includes(advocateBooking.status) || advocateBooking.payment?.status === 'PROCESSING')
+  ) {
+    const booking = formatAdvocateBooking(advocateBooking);
+    return {
+      ...booking,
+      timeline: buildTimeline(booking)
+    };
+  }
+
+  // 3. Check Payment owned by userId that is PAYMENT_PROCESSING
   const payment = await prisma.payment.findUnique({
     where: { id },
     include: {
@@ -346,7 +541,8 @@ export const getUserBooking = async (userId, id) => {
     }
   });
 
-  const isProcessingPayment = payment &&
+  const isProcessingPayment =
+    payment &&
     payment.userId === userId &&
     payment.consultancyRequestId === null &&
     (payment.status === 'PROCESSING' || (payment.status === 'CREATED' && payment.attempts.length > 0));

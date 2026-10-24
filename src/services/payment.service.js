@@ -3,7 +3,8 @@ import prisma from '../lib/prisma.js';
 import { getRazorpayClient, isRazorpayConfigured } from '../config/razorpay.js';
 import { getConsultancyPrice } from '../config/consultancyPricing.js';
 import { addWorkingDays } from '../utils/workingDays.js';
-import { createConsultancyWithUniqueBookingId } from '../utils/bookingId.util.js';
+import { createConsultancyWithUniqueBookingId, generateUniqueAdvocateBookingId } from '../utils/bookingId.util.js';
+import { isSlotFree } from './advocateBooking/slotValidation.js';
 import { logApiError } from './errorLogger.service.js';
 
 /**
@@ -243,36 +244,108 @@ export const syncPaymentFromRazorpay = async ({ paymentId, razorpayOrderId }) =>
             return;
           }
 
-          // Valid captured payment: Create ConsultancyRequest with unique bookingId and mark PAID
-          const priceDecimal = Number(currentPayment.amount) / 100;
+          // Valid captured payment: Branch on purpose
           const paidAtDate = firstCaptured.capturedAt || now;
-          const consultancy = await createConsultancyWithUniqueBookingId(
-            tx,
-            {
-              userId: currentPayment.userId,
-              callType: currentPayment.callType,
-              duration: currentPayment.duration,
-              price: priceDecimal,
-              phoneNumber: currentPayment.phoneNumber,
-              email: currentPayment.email,
-              status: 'PENDING',
-              completedAt: null
-            },
-            paidAtDate
-          );
-          const refundWorkingDays = parseInt(process.env.REFUND_WORKING_DAYS || '7', 10);
-          const refundEligibleAt = addWorkingDays(paidAtDate, refundWorkingDays);
 
-          await tx.payment.update({
-            where: { id: pId },
-            data: {
-              status: 'PAID',
-              consultancyRequestId: consultancy.id,
-              paidAt: paidAtDate,
-              refundEligibleAt,
-              failureReason: null
+          if (currentPayment.purpose === 'ADVOCATE_BOOKING') {
+            const booking = await tx.advocateBooking.findUnique({
+              where: { id: currentPayment.advocateBookingId }
+            });
+
+            if (!booking) {
+              throw new Error(`AdvocateBooking ${currentPayment.advocateBookingId} not found for payment ${pId}`);
             }
-          });
+
+            // Row lock on Advocate to serialize concurrent confirmations
+            await tx.$queryRaw`
+              SELECT id FROM "Advocate"
+              WHERE id = ${booking.advocateId}
+              FOR UPDATE
+            `;
+
+            // Re-check overlap for this booking, excluding itself
+            const slotFree = await isSlotFree(booking.advocateId, booking.startAt, booking.endAt, tx, booking.id);
+
+            if (slotFree) {
+              const assignedBookingId = booking.bookingId || await generateUniqueAdvocateBookingId(tx, paidAtDate);
+
+              await tx.advocateBooking.update({
+                where: { id: booking.id },
+                data: {
+                  bookingId: assignedBookingId,
+                  status: 'CONFIRMED',
+                  confirmedAt: paidAtDate
+                }
+              });
+
+              await tx.payment.update({
+                where: { id: pId },
+                data: {
+                  status: 'PAID',
+                  paidAt: paidAtDate,
+                  refundEligibleAt: null,
+                  failureReason: null
+                }
+              });
+            } else {
+              // Slot taken (e.g. hold expired and someone else booked before late payment cleared)
+              console.warn(`[Late Payment Conflict] Slot was taken for booking ${booking.id}. Initiating auto-refund.`);
+              await tx.advocateBooking.update({
+                where: { id: booking.id },
+                data: {
+                  status: 'REFUND_PENDING',
+                  refundReason: 'SLOT_CONFLICT_AFTER_EXPIRY'
+                }
+              });
+
+              await tx.payment.update({
+                where: { id: pId },
+                data: {
+                  status: 'FAILED',
+                  failureReason: 'SLOT_CONFLICT_AFTER_EXPIRY'
+                }
+              });
+
+              try {
+                await rzpClient.payments.refund(firstCaptured.razorpayPaymentId, {
+                  amount: firstCaptured.amount,
+                  notes: { reason: 'SLOT_CONFLICT_AFTER_EXPIRY', advocateBookingId: booking.id }
+                });
+              } catch (refErr) {
+                console.error('[Refund Error] Failed to auto-refund conflicted slot payment:', refErr.message);
+              }
+            }
+          } else {
+            // Existing CONSULTANCY branch (completely unchanged)
+            const priceDecimal = Number(currentPayment.amount) / 100;
+            const consultancy = await createConsultancyWithUniqueBookingId(
+              tx,
+              {
+                userId: currentPayment.userId,
+                callType: currentPayment.callType,
+                duration: currentPayment.duration,
+                price: priceDecimal,
+                phoneNumber: currentPayment.phoneNumber,
+                email: currentPayment.email,
+                status: 'PENDING',
+                completedAt: null
+              },
+              paidAtDate
+            );
+            const refundWorkingDays = parseInt(process.env.REFUND_WORKING_DAYS || '7', 10);
+            const refundEligibleAt = addWorkingDays(paidAtDate, refundWorkingDays);
+
+            await tx.payment.update({
+              where: { id: pId },
+              data: {
+                status: 'PAID',
+                consultancyRequestId: consultancy.id,
+                paidAt: paidAtDate,
+                refundEligibleAt,
+                failureReason: null
+              }
+            });
+          }
         }
 
         // Check for duplicate captured attempts
@@ -353,6 +426,13 @@ export const syncPaymentFromRazorpay = async ({ paymentId, razorpayOrderId }) =>
               failureReason: lastError.errorDescription || 'Payment attempt failed'
             }
           });
+
+          if (currentPayment.purpose === 'ADVOCATE_BOOKING' && currentPayment.advocateBookingId && now > currentPayment.expiresAt) {
+            await tx.advocateBooking.update({
+              where: { id: currentPayment.advocateBookingId },
+              data: { status: 'EXPIRED' }
+            });
+          }
         }
         return;
       }
@@ -363,6 +443,13 @@ export const syncPaymentFromRazorpay = async ({ paymentId, razorpayOrderId }) =>
           where: { id: pId },
           data: { status: 'EXPIRED' }
         });
+
+        if (currentPayment.purpose === 'ADVOCATE_BOOKING' && currentPayment.advocateBookingId) {
+          await tx.advocateBooking.update({
+            where: { id: currentPayment.advocateBookingId },
+            data: { status: 'EXPIRED' }
+          });
+        }
       }
     },
     { timeout: 15000 }
@@ -390,6 +477,7 @@ export const syncPaymentFromRazorpay = async ({ paymentId, razorpayOrderId }) =>
     include: {
       attempts: { orderBy: { createdAt: 'desc' } },
       consultancyRequest: true,
+      advocateBooking: true,
       user: {
         select: {
           id: true,

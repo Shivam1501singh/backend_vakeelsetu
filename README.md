@@ -11780,6 +11780,583 @@ On any database environment where past migration `20261007145000_add_rbac_system
    ```
 3. Then execute `npx prisma migrate deploy`.
 
+---
+
+## 32. Advocate Booking (Lawyer Booking) — Complete Postman & Integration Guide
+
+### 1. Overview & Architecture
+
+The Advocate Booking system enables users to discover bookable advocates, view real-time availability across appointment modes, lock a time slot with a transactional 10-minute hold, pay upfront via Razorpay, and have the advocate contact them directly at the scheduled time.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User / Client
+    participant API as VakeelSetu API
+    participant DB as Neon PostgreSQL
+    participant RZP as Razorpay Gateway
+    actor Adv as Advocate
+
+    User->>API: GET /api/advocates/:id/booking-options
+    API-->>User: Bookable modes, durations, rates & subjects
+    User->>API: GET /api/advocates/:id/busy-slots?from=...&to=...
+    API-->>User: Busy intervals (CONFIRMED + active HOLDs)
+    User->>API: POST /api/user/advocate-bookings/checkout (slot, mode, subject)
+    Note over API,DB: Locks advocate row (FOR UPDATE)<br/>Validates slot & user overlap<br/>Creates HOLD booking + Razorpay order
+    API-->>User: razorpayOrderId, amount (paise), holdExpiresAt
+    User->>RZP: Completes payment
+    User->>API: POST /api/payments/verify (orderId, paymentId, signature)
+    Note over API,DB: Verifies HMAC signature<br/>Locks advocate row (FOR UPDATE)<br/>Confirms booking (status: CONFIRMED)
+    API-->>User: Booking confirmed (VLB-YYYYMXXXXXX)
+    Note over Adv,API: Advocate views appointment
+    Adv->>API: GET /api/advocate/appointments?filter=UPCOMING
+    API-->>Adv: Appointments list (with user contact info & net advocate fee)
+    Note over Adv,User: Advocate calls user at startAt
+    Adv->>API: PATCH /api/advocate/appointments/:id/complete
+    API-->>Adv: Appointment marked COMPLETED
+```
+
+---
+
+### 2. Pricing & Currency Specifications
+
+All financial amounts in database and API payloads are strictly stored and computed in **paise integers** (`100 paise = ₹1.00`).
+
+| Mode | Duration | Rate Field on Advocate | Calculation Formula |
+|---|---|---|---|
+| `VOICE_CALL` | **15 minutes** | `voiceCallChargePerMinute` (₹/min) | `feePaise = round(voiceCallChargePerMinute * 15 * 100)` |
+| `VIDEO_CALL` | **15 minutes** | `videoCallChargePerMinute` (₹/min) | `feePaise = round(videoCallChargePerMinute * 15 * 100)` |
+| `IN_PERSON` | **60 minutes** | `offlineVisitingFee` (₹ flat) | `feePaise = round(offlineVisitingFee * 100)` |
+
+#### Breakdown & Taxes:
+- **Advocate Fee (`feePaise`):** Rate × duration. Minimum is ₹1 (100 paise).
+- **GST (`gstPaise`):** `round(feePaise * (BOOKING_GST_PERCENT / 100))` (Default `18%`). Tax applies **only to the advocate fee**.
+- **Platform Fee (`platformFeePaise`):** `round(BOOKING_PLATFORM_FEE * 100)` (Default `₹25` = `2500 paise`). **No GST** is charged on the platform fee.
+- **Total Amount (`totalAmountPaise`):** `feePaise + gstPaise + platformFeePaise`.
+
+#### Example (₹34/min Voice Call):
+- Fee: `34 * 15 = ₹510` = `51000 paise`
+- GST (18%): `round(51000 * 0.18) = 9180 paise` (`₹91.80`)
+- Platform fee: `2500 paise` (`₹25.00`)
+- Total: `51000 + 9180 + 2500 = 62680 paise` (`₹626.80`)
+
+#### Environment Variables Reference:
+| Variable | Default | Purpose |
+|---|---|---|
+| `BOOKING_HOLD_DURATION_MINUTES` | `10` | Duration of active slot hold before checkout expires |
+| `BOOKING_GST_PERCENT` | `18` | GST percentage applied strictly to lawyer fee |
+| `BOOKING_PLATFORM_FEE` | `25` | Platform convenience fee in Rupees (flat) |
+| `BOOKING_MIN_LEAD_TIME_MINUTES` | `15` | Minimum minutes in future required for booking `startAt` |
+| `BOOKING_MAX_FUTURE_DAYS` | `30` | Maximum days in future allowed for booking `startAt` |
+| `BOOKING_TIMEZONE` | `Asia/Kolkata` | Working timezone (IST) for calendar day & month generation |
+| `ADVOCATE_BOOKING_ID_FORMAT` | `VLB-{YYYY}{MONTH_LETTER}{RAND6}` | Format for human-readable booking IDs (e.g. `VLB-2026J4X8K9P`) |
+
+---
+
+### 3. Slot Rules & Concurrency Control
+
+1. **Frontend-Driven Calendar:**
+   The frontend generates calendar slot grids based on the advocate's duration (15 min for voice/video, 60 min for in-person) and filters them against `GET /api/advocates/:id/busy-slots`.
+2. **Grid Alignment Validation:**
+   - Voice/Video: `startAt.getMinutes() % 15 === 0` and `startAt.getSeconds() === 0`.
+   - In-Person: `startAt.getMinutes() === 0` and `startAt.getSeconds() === 0` (top of the hour).
+3. **Cross-Mode Overlap Protection:**
+   An advocate has only **one physical schedule**. If an advocate has a 60-minute In-Person booking from `14:00` to `15:00`, all voice/video slots within that entire 60-minute window (`14:00`, `14:15`, `14:30`, `14:45`) are occupied.
+4. **User Conflict Protection:**
+   A user cannot book two overlapping appointments with different advocates. Attempting to book during an existing confirmed or active hold slot returns `409 Conflict` (`code: USER_SLOT_CONFLICT`).
+5. **Concurrency & Race Conditions:**
+   All slot modifications (hold creation, checkout reuse, and payment confirmation) execute inside transactions with PostgreSQL row-level locks (`SELECT id FROM "Advocate" WHERE id = $1 FOR UPDATE`). Two users clicking "Pay" on the exact same slot concurrently are serialized: the second request is rejected with `409 Conflict` (`code: SLOT_TAKEN`).
+
+---
+
+### 4. Status State Machines & Visibility
+
+#### Advocate Booking Status (`AdvocateBookingStatus`):
+```
+[HOLD] ──(payment verified)──> [CONFIRMED] ──(lawyer completes)──> [COMPLETED]
+   │                               │
+   ├──(10 min timeout)──> [EXPIRED]├──(admin/webhook refund)──> [REFUNDED]
+   └──(payment failed)──> [FAILED] └──(late pay conflict)──> [CANCELLED] (auto-refunded)
+```
+
+#### Status Mappings Across Endpoints:
+
+| Internal DB Status | User `GET /api/user/bookings` | Advocate `GET /api/advocate/appointments` |
+|---|---|---|
+| `HOLD` | Not visible in list (or ignored if uncommitted) | Not visible |
+| `CONFIRMED` (`now < startAt`) | `statusGroup: UPCOMING`, `statusLabel: Confirmed – advocate will call you` | Filter `UPCOMING` |
+| `CONFIRMED` (`now >= startAt`) | `statusGroup: UPCOMING`, `statusLabel: Scheduled time passed – awaiting completion` | Filter `PAST_DUE` |
+| `COMPLETED` | `statusGroup: COMPLETED`, `statusLabel: Completed` | Filter `COMPLETED` |
+| `REFUNDED` | `statusGroup: CANCELLED`, `statusLabel: Refunded` | Filter `REFUNDED` |
+| `CANCELLED` | `statusGroup: CANCELLED`, `statusLabel: Cancelled & Refunded` | Filter `REFUNDED` |
+| `EXPIRED` | `statusGroup: EXPIRED`, `statusLabel: Hold expired` | Not visible |
+
+---
+
+### 5. API Reference Table
+
+| Method | Endpoint | Auth | Permission | Purpose |
+|---|---|---|---|---|
+| `GET` | `/api/advocates/:id/booking-options` | None | Public | Get bookable modes, prices, durations & subjects |
+| `GET` | `/api/advocates/:id/busy-slots` | None | Public | Get busy intervals for a date range |
+| `POST` | `/api/advocates/:id/booking-quote` | None | Public | Calculate exact fee, GST & total before checkout |
+| `POST` | `/api/user/advocate-bookings/checkout` | User JWT | None | Lock slot (10m hold) & create Razorpay order |
+| `POST` | `/api/payments/verify` | User JWT | None | Verify Razorpay payment signature & confirm slot |
+| `GET` | `/api/user/bookings` | User JWT | None | Unified My Bookings (`?type=ALL\|CONSULTANCY\|ADVOCATE`) |
+| `GET` | `/api/user/bookings/:id` | User JWT | None | Detailed booking view with event timeline |
+| `GET` | `/api/advocate/appointments` | Advocate JWT | None | Advocate's appointments (`?filter=UPCOMING\|PAST_DUE\|COMPLETED\|REFUNDED`) |
+| `GET` | `/api/advocate/appointments/:id` | Advocate JWT | None | Advocate appointment detail with client contact & net fee |
+| `PATCH` | `/api/advocate/appointments/:id/complete` | Advocate JWT | None | Mark appointment complete (allowed when `now >= startAt`) |
+| `GET` | `/api/admin/advocate-bookings` | Admin JWT | `advocate_bookings:view` | Admin list with search, status, mode & date filters |
+| `GET` | `/api/admin/advocate-bookings/:id` | Admin JWT | `advocate_bookings:view` | Admin booking detail with payment attempts & timeline |
+| `POST` | `/api/payments/admin/refund` | Admin JWT | `payments:refund` | Refund advocate booking payment via Razorpay |
+
+---
+
+### 6. Endpoint Request & Response Examples
+
+#### A. Get Booking Options (`GET /api/advocates/:id/booking-options`)
+- **URL:** `/api/advocates/442f6fa6-d27a-40a7-9d85-7c03dc69c1f8/booking-options`
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "advocate": {
+    "id": "442f6fa6-d27a-40a7-9d85-7c03dc69c1f8",
+    "fullName": "Adv. Priya Patel",
+    "profilePhotoUrl": null,
+    "bookable": true,
+    "modes": [
+      {
+        "mode": "VOICE_CALL",
+        "label": "Voice Call",
+        "durationMinutes": 15,
+        "ratePerMinute": 34,
+        "flatFee": null,
+        "feePaise": 51000,
+        "fee": 510
+      },
+      {
+        "mode": "VIDEO_CALL",
+        "label": "Video Call",
+        "durationMinutes": 15,
+        "ratePerMinute": 50,
+        "flatFee": null,
+        "feePaise": 75000,
+        "fee": 750
+      },
+      {
+        "mode": "IN_PERSON",
+        "label": "In-Person Consultation",
+        "durationMinutes": 60,
+        "ratePerMinute": null,
+        "flatFee": 2000,
+        "feePaise": 200000,
+        "fee": 2000
+      }
+    ],
+    "pricingConfig": {
+      "gstPercent": 18,
+      "platformFeeRupees": 25,
+      "platformFeePaise": 2500
+    },
+    "subjects": [
+      "Divorce & Matrimonial",
+      "Property & Real Estate Dispute",
+      "Criminal Defense & Bail",
+      "Cheque Bounce / Section 138 NI Act",
+      "Corporate & Commercial Contracts",
+      "Employment & Labour Dispute",
+      "Consumer Court Dispute",
+      "Cyber Crime & Online Fraud",
+      "Civil Suit & Injunction",
+      "Wills, Trusts & Succession",
+      "Intellectual Property (Trademark / Copyright)",
+      "Taxation & GST Dispute",
+      "Other Legal Consultation"
+    ]
+  }
+}
+```
+
+---
+
+#### B. Get Busy Slots (`GET /api/advocates/:id/busy-slots`)
+- **URL:** `/api/advocates/442f6fa6-d27a-40a7-9d85-7c03dc69c1f8/busy-slots?from=2026-10-25T00:00:00.000Z&to=2026-10-26T00:00:00.000Z`
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "advocateId": "442f6fa6-d27a-40a7-9d85-7c03dc69c1f8",
+  "from": "2026-10-25T00:00:00.000Z",
+  "to": "2026-10-26T00:00:00.000Z",
+  "busySlots": [
+    {
+      "startAt": "2026-10-25T05:00:00.000Z",
+      "endAt": "2026-10-25T06:00:00.000Z"
+    },
+    {
+      "startAt": "2026-10-25T08:30:00.000Z",
+      "endAt": "2026-10-25T08:45:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+#### C. Get Quote (`POST /api/advocates/:id/booking-quote`)
+- **URL:** `/api/advocates/442f6fa6-d27a-40a7-9d85-7c03dc69c1f8/booking-quote`
+- **Request Body:**
+```json
+{
+  "mode": "VOICE_CALL",
+  "startAt": "2026-10-25T06:00:00.000Z"
+}
+```
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "quote": {
+    "advocateId": "442f6fa6-d27a-40a7-9d85-7c03dc69c1f8",
+    "mode": "VOICE_CALL",
+    "durationMinutes": 15,
+    "startAt": "2026-10-25T06:00:00.000Z",
+    "endAt": "2026-10-25T06:15:00.000Z",
+    "pricing": {
+      "feePaise": 51000,
+      "fee": 510,
+      "gstPercent": 18,
+      "gstPaise": 9180,
+      "gst": 91.8,
+      "platformFeePaise": 2500,
+      "platformFee": 25,
+      "totalAmountPaise": 62680,
+      "totalAmount": 626.8,
+      "currency": "INR"
+    },
+    "isAvailable": true
+  }
+}
+```
+
+---
+
+#### D. Create Checkout (`POST /api/user/advocate-bookings/checkout`)
+- **Headers:** `Authorization: Bearer {{user_token}}`
+- **Request Body:**
+```json
+{
+  "advocateId": "442f6fa6-d27a-40a7-9d85-7c03dc69c1f8",
+  "mode": "VOICE_CALL",
+  "startAt": "2026-10-25T06:00:00.000Z",
+  "subject": "Property & Real Estate Dispute",
+  "notes": "Need advice regarding ancestral property partition"
+}
+```
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "booking": {
+    "id": "ef47a0f6-57ac-4e1b-a51f-e7c4c510f814",
+    "bookingId": null,
+    "status": "HOLD",
+    "mode": "VOICE_CALL",
+    "durationMinutes": 15,
+    "startAt": "2026-10-25T06:00:00.000Z",
+    "endAt": "2026-10-25T06:15:00.000Z",
+    "subject": "Property & Real Estate Dispute",
+    "notes": "Need advice regarding ancestral property partition",
+    "holdExpiresAt": "2026-10-24T10:00:00.000Z"
+  },
+  "pricing": {
+    "feePaise": 51000,
+    "fee": 510,
+    "gstPercent": 18,
+    "gstPaise": 9180,
+    "gst": 91.8,
+    "platformFeePaise": 2500,
+    "platformFee": 25,
+    "totalAmountPaise": 62680,
+    "totalAmount": 626.8,
+    "currency": "INR"
+  },
+  "razorpay": {
+    "orderId": "order_XXXXX12345",
+    "amount": 62680,
+    "currency": "INR",
+    "keyId": "rzp_test_XXXX"
+  }
+}
+```
+
+---
+
+#### E. Verify Payment (`POST /api/payments/verify`)
+- **Headers:** `Authorization: Bearer {{user_token}}`
+- **Request Body:**
+```json
+{
+  "razorpay_order_id": "order_XXXXX12345",
+  "razorpay_payment_id": "pay_YYYYY67890",
+  "razorpay_signature": "generated_hmac_sha256_hex"
+}
+```
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Payment verified and booking confirmed successfully.",
+  "payment": {
+    "id": "payment-uuid",
+    "status": "PAID",
+    "purpose": "ADVOCATE_BOOKING",
+    "amount": 626.8,
+    "paidAt": "2026-10-24T09:55:00.000Z"
+  },
+  "booking": {
+    "id": "ef47a0f6-57ac-4e1b-a51f-e7c4c510f814",
+    "bookingId": "VLB-2026J4X8K9P",
+    "status": "CONFIRMED",
+    "mode": "VOICE_CALL",
+    "startAt": "2026-10-25T06:00:00.000Z",
+    "endAt": "2026-10-25T06:15:00.000Z",
+    "subject": "Property & Real Estate Dispute"
+  }
+}
+```
+
+---
+
+#### F. Advocate My Appointments (`GET /api/advocate/appointments`)
+- **Headers:** `Authorization: Bearer {{advocate_token}}`
+- **Query Params:** `?filter=UPCOMING&page=1&limit=10`
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "counts": {
+    "upcoming": 1,
+    "pastDue": 0,
+    "completed": 4,
+    "refunded": 0,
+    "all": 5
+  },
+  "appointments": [
+    {
+      "id": "ef47a0f6-57ac-4e1b-a51f-e7c4c510f814",
+      "bookingId": "VLB-2026J4X8K9P",
+      "status": "CONFIRMED",
+      "statusGroup": "UPCOMING",
+      "mode": "VOICE_CALL",
+      "durationMinutes": 15,
+      "startAt": "2026-10-25T06:00:00.000Z",
+      "endAt": "2026-10-25T06:15:00.000Z",
+      "subject": "Property & Real Estate Dispute",
+      "notes": "Need advice regarding ancestral property partition",
+      "advocateFee": 510,
+      "advocateFeePaise": 51000,
+      "user": {
+        "id": "user-uuid",
+        "fullName": "Rahul Verma",
+        "phone": "9876543210",
+        "email": "rahul.verma@example.com",
+        "profilePhotoUrl": null
+      },
+      "canComplete": false,
+      "completedAt": null,
+      "createdAt": "2026-10-24T09:50:00.000Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 10,
+    "total": 1,
+    "totalPages": 1,
+    "hasNextPage": false
+  }
+}
+```
+
+---
+
+#### G. Mark Appointment Complete (`PATCH /api/advocate/appointments/:id/complete`)
+- **Headers:** `Authorization: Bearer {{advocate_token}}`
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Appointment marked as completed successfully.",
+  "appointment": {
+    "id": "ef47a0f6-57ac-4e1b-a51f-e7c4c510f814",
+    "bookingId": "VLB-2026J4X8K9P",
+    "status": "COMPLETED",
+    "completedAt": "2026-10-25T06:20:00.000Z"
+  }
+}
+```
+
+---
+
+#### H. Admin Advocate Bookings List (`GET /api/admin/advocate-bookings`)
+- **Headers:** `Authorization: Bearer {{admin_token}}` (requires `advocate_bookings:view`)
+- **Query Params:** `?page=1&limit=10&search=VLB-2026`
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "counts": {
+    "all": 12,
+    "confirmed": 5,
+    "completed": 4,
+    "refunded": 1,
+    "cancelled": 0,
+    "hold": 2
+  },
+  "bookings": [
+    {
+      "id": "ef47a0f6-57ac-4e1b-a51f-e7c4c510f814",
+      "bookingId": "VLB-2026J4X8K9P",
+      "status": "CONFIRMED",
+      "mode": "VOICE_CALL",
+      "durationMinutes": 15,
+      "startAt": "2026-10-25T06:00:00.000Z",
+      "endAt": "2026-10-25T06:15:00.000Z",
+      "subject": "Property & Real Estate Dispute",
+      "pricing": {
+        "fee": 510,
+        "gst": 91.8,
+        "platformFee": 25,
+        "totalAmount": 626.8
+      },
+      "user": {
+        "id": "user-uuid",
+        "fullName": "Rahul Verma",
+        "phone": "9876543210",
+        "email": "rahul.verma@example.com"
+      },
+      "advocate": {
+        "id": "adv-uuid",
+        "fullName": "Adv. Priya Patel",
+        "phone": "9811223344",
+        "email": "adv.priya@example.com"
+      },
+      "payment": {
+        "id": "pay-uuid",
+        "status": "PAID",
+        "razorpayOrderId": "order_XXXXX12345",
+        "razorpayPaymentId": "pay_YYYYY67890",
+        "paidAt": "2026-10-24T09:55:00.000Z"
+      },
+      "createdAt": "2026-10-24T09:50:00.000Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 10,
+    "total": 1,
+    "totalPages": 1,
+    "hasNextPage": false
+  }
+}
+```
+
+---
+
+### 7. Error Reference Table
+
+| Code | Status | Message / Reason | Action |
+|---|---|---|---|
+| `ADVOCATE_NOT_BOOKABLE` | `400 Bad Request` | `Advocate is currently not accepting bookings.` | Advocate is inactive, not approved, or has no booking fees configured. |
+| `MODE_NOT_AVAILABLE` | `400 Bad Request` | `Mode <MODE> is not available for this advocate.` | Advocate has not set a fee for this mode or set it to 0. |
+| `INVALID_SLOT` | `400 Bad Request` | `startAt must be aligned to ... minutes` / `must be at least 15 min in future` | Check slot alignment, lead time, and max 30-day window. |
+| `SLOT_TAKEN` | `409 Conflict` | `This time slot is no longer available. Please choose another.` | Another user holds or confirmed this slot. Choose another time slot. |
+| `USER_SLOT_CONFLICT` | `409 Conflict` | `You already have an appointment or active checkout at this time.` | User cannot double-book themselves across advocates. Check My Bookings. |
+| `PAYMENT_PROCESSING` | `409 Conflict` | `A payment attempt is currently being processed for this order.` | Wait for webhook or retry verification after a few seconds. |
+| `ALREADY_PAID` | `409 Conflict` | `This order has already been verified and paid.` | Order was already confirmed. Refresh booking status. |
+| `INVALID_SIGNATURE` | `400 Bad Request` | `Payment verification failed: Invalid signature.` | Razorpay HMAC SHA256 signature does not match secret. |
+
+---
+
+### 8. Step-by-Step Postman Testing Workflow
+
+Use this end-to-end workflow to verify all Advocate Booking features in Postman:
+
+#### Step 1: Discover Bookable Advocates
+1. Call `GET {{BACKEND_URL}}/api/advocates`.
+2. Inspect advocate items. Note that each advocate includes `bookable: true/false` and `bookingModes: ["VOICE_CALL", "VIDEO_CALL", "IN_PERSON"]`.
+3. Pick a bookable advocate and save their ID to `{{advocate_id}}`.
+
+#### Step 2: Fetch Booking Options
+1. Send `GET {{BACKEND_URL}}/api/advocates/{{advocate_id}}/booking-options`.
+2. Verify available modes, duration, rates, GST percent (18%), platform fee (₹25), and subject list.
+
+#### Step 3: Fetch Busy Slots
+1. Send `GET {{BACKEND_URL}}/api/advocates/{{advocate_id}}/busy-slots?from=2026-10-25T00:00:00.000Z&to=2026-10-26T00:00:00.000Z`.
+2. Observe any existing confirmed appointments or active holds.
+
+#### Step 4: Get a Price Quote
+1. Send `POST {{BACKEND_URL}}/api/advocates/{{advocate_id}}/booking-quote` with:
+   ```json
+   { "mode": "VOICE_CALL", "startAt": "2026-10-25T06:00:00.000Z" }
+   ```
+2. Verify pricing math: `fee + gst + platformFee = totalAmount`. Verify `isAvailable: true`.
+
+#### Step 5: Initiate Checkout (Hold Creation)
+1. Login as standard user (`POST /api/auth/user/login`). Set `{{user_token}}`.
+2. Send `POST {{BACKEND_URL}}/api/user/advocate-bookings/checkout` with `advocateId`, `mode`, `startAt`, and `subject`.
+3. Verify status `200 OK`.
+4. Save `booking.id` to `{{booking_db_id}}` and `razorpay.orderId` to `{{rzp_order_id}}`. Note `holdExpiresAt` (10 minutes in future).
+
+#### Step 6: Verify Concurrency / Hold Blocking
+1. While the hold is active, repeat `POST /api/advocates/{{advocate_id}}/booking-quote` for the same slot.
+2. Verify `isAvailable: false`.
+3. Attempt another checkout for the same slot from a different user account.
+4. Verify response is `409 Conflict` with `code: "SLOT_TAKEN"`.
+
+#### Step 7: Verify Cross-Mode Overlap Protection
+1. Attempt a checkout for `IN_PERSON` (60 min) starting at `05:30:00.000Z` or `06:00:00.000Z`.
+2. Verify response is `409 Conflict` with `code: "SLOT_TAKEN"`.
+
+#### Step 8: Verify Payment & Confirm Booking
+1. Send `POST {{BACKEND_URL}}/api/payments/verify` with `razorpay_order_id: {{rzp_order_id}}`, `razorpay_payment_id: "pay_test_12345"`, and a valid HMAC signature.
+2. Verify response is `200 OK` and returns `booking.status: "CONFIRMED"` with formatted `bookingId` (e.g. `VLB-2026J4X8K9P`).
+
+#### Step 9: Inspect User "My Bookings"
+1. Send `GET {{BACKEND_URL}}/api/user/bookings?type=ALL`.
+2. Verify both consultancy and advocate bookings appear in the list with `bookingType: "ADVOCATE"` and `statusGroup: "UPCOMING"`.
+3. Send `GET {{BACKEND_URL}}/api/user/bookings?type=ADVOCATE` to filter exclusively for advocate bookings.
+4. Send `GET {{BACKEND_URL}}/api/user/bookings/{{booking_db_id}}`. Verify full detail, payment receipt, and lifecycle `timeline`.
+
+#### Step 10: Inspect Advocate "My Appointments"
+1. Login as the booked advocate (`POST /api/auth/advocate/login`). Set `{{advocate_token}}`.
+2. Send `GET {{BACKEND_URL}}/api/advocate/appointments?filter=UPCOMING`.
+3. Verify the appointment is present. Confirm advocate sees user's phone number and email to initiate contact.
+4. Confirm advocate sees their net fee (`advocateFee`), not the platform convenience fee.
+
+#### Step 11: Mark Appointment Complete
+1. Attempt `PATCH {{BACKEND_URL}}/api/advocate/appointments/{{booking_db_id}}/complete` before `startAt`.
+2. Verify `400 Bad Request` (`Cannot mark as completed before the scheduled start time`).
+3. When `now >= startAt` (or for an appointment scheduled in the past):
+   - Send `PATCH {{BACKEND_URL}}/api/advocate/appointments/{{booking_db_id}}/complete`.
+   - Verify `200 OK` and `appointment.status: "COMPLETED"`.
+4. Call it a second time. Verify idempotency (`200 OK` without error).
+
+#### Step 12: Admin Management & Detail
+1. Login as Administrator (`POST /api/admin/login`). Set `{{admin_token}}`.
+2. Send `GET {{BACKEND_URL}}/api/admin/advocate-bookings?search=VLB-`.
+3. Verify list returns all advocate bookings with status counts, advocate and user contact info.
+4. Send `GET {{BACKEND_URL}}/api/admin/advocate-bookings/{{booking_db_id}}`.
+5. Verify detail includes payment attempts, razorpay IDs, refund status, and event timeline.
+
+#### Step 13: Admin Refund
+1. Send `POST {{BACKEND_URL}}/api/payments/admin/refund` with `{ "paymentId": "<payment_id>", "reason": "Advocate unavailable" }`.
+2. Verify payment status updates to `REFUNDED` and booking status updates to `REFUNDED`.
+3. Verify the appointment now appears under `?filter=REFUNDED` in advocate appointments and `statusGroup: "CANCELLED"` in user My Bookings.
+
+
 
 
 

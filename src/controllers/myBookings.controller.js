@@ -11,6 +11,7 @@ export const listUserBookings = async (req, res, next) => {
 
     const result = await myBookingsService.listUserBookings(req.user.id, {
       status: validated.status,
+      type: validated.type,
       from: validated.from,
       to: validated.to,
       page: validated.page,
@@ -19,6 +20,7 @@ export const listUserBookings = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
+      availableTypes: result.availableTypes,
       bookings: result.bookings,
       pagination: result.pagination,
       counts: result.counts

@@ -64,6 +64,9 @@ export const DEFAULT_PERMISSIONS = [
   { code: 'payments:view', name: 'View Payments', module: 'PAYMENTS', description: 'Permission to view payments and payment details' },
   { code: 'payments:refund', name: 'Refund Payments', module: 'PAYMENTS', description: 'Permission to execute or manage refunds for payments' },
 
+  // Advocate Bookings
+  { code: 'advocate_bookings:view', name: 'View Advocate Bookings', module: 'ADVOCATE_BOOKINGS', description: 'Permission to view advocate bookings list and details' },
+
   // Content Creator Staff Management
   { code: 'content_creators:view', name: 'View Content Creators', module: 'CONTENT_CREATORS', description: 'Permission to list content creator staff accounts' },
   { code: 'content_creators:create', name: 'Create Content Creator', module: 'CONTENT_CREATORS', description: 'Permission to create new content creator staff accounts' },

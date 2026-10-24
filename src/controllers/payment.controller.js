@@ -373,7 +373,9 @@ export const adminListPayments = async (req, res, next) => {
         { email: { contains: search, mode: 'insensitive' } },
         { user: { fullName: { contains: search, mode: 'insensitive' } } },
         { attempts: { some: { razorpayPaymentId: { contains: search } } } },
-        { consultancyRequest: { bookingId: { contains: search, mode: 'insensitive' } } }
+        { consultancyRequest: { bookingId: { contains: search, mode: 'insensitive' } } },
+        { advocateBooking: { bookingId: { contains: search, mode: 'insensitive' } } },
+        { advocateBooking: { advocate: { fullName: { contains: search, mode: 'insensitive' } } } }
       ];
     }
 
@@ -405,6 +407,23 @@ export const adminListPayments = async (req, res, next) => {
               bookingId: true,
               status: true,
               completedAt: true
+            }
+          },
+          advocateBooking: {
+            select: {
+              id: true,
+              bookingId: true,
+              mode: true,
+              startAt: true,
+              endAt: true,
+              advocate: {
+                select: {
+                  id: true,
+                  fullName: true,
+                  barCouncilId: true,
+                  phone: true
+                }
+              }
             }
           },
           attempts: {
@@ -558,6 +577,7 @@ export const adminRefundPayment = async (req, res, next) => {
       where: { id },
       include: {
         consultancyRequest: true,
+        advocateBooking: true,
         attempts: {
           where: { status: 'CAPTURED' },
           orderBy: { createdAt: 'asc' }
@@ -586,27 +606,52 @@ export const adminRefundPayment = async (req, res, next) => {
       });
     }
 
-    if (payment.consultancyRequest?.status === 'COMPLETED') {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot refund a payment for a COMPLETED consultancy request.'
-      });
-    }
-
-    const now = new Date();
-    const isEligible = payment.refundEligibleAt && now >= payment.refundEligibleAt;
-
     const isAdmin =
       (req.user.type && req.user.type.toLowerCase() === 'admin') ||
       (req.user.role && req.user.role.toUpperCase() === 'ADMIN');
 
-    if (!isEligible) {
-      // If not eligible yet, only Main Admin with "force: true" can execute
-      if (!isAdmin || !validated.force) {
+    if (payment.purpose === 'ADVOCATE_BOOKING') {
+      const booking = payment.advocateBooking;
+      if (!booking) {
+        return res.status(404).json({
+          success: false,
+          message: 'Advocate booking associated with this payment was not found.'
+        });
+      }
+
+      if (booking.status === 'COMPLETED') {
+        if (!isAdmin || !validated.force) {
+          return res.status(400).json({
+            success: false,
+            message: 'Appointment is already marked COMPLETED. Only the Main Admin with force:true can refund.'
+          });
+        }
+      } else if (booking.status !== 'CONFIRMED') {
         return res.status(400).json({
           success: false,
-          message: 'Payment is not yet eligible for refund (7 working days SLA has not passed). Only the Main Admin can force refund.'
+          message: `Cannot refund appointment with current status ${booking.status}.`
         });
+      }
+    } else {
+      // Consultancy refund rules
+      if (payment.consultancyRequest?.status === 'COMPLETED') {
+        return res.status(400).json({
+          success: false,
+          message: 'Cannot refund a payment for a COMPLETED consultancy request.'
+        });
+      }
+
+      const now = new Date();
+      const isEligible = payment.refundEligibleAt && now >= payment.refundEligibleAt;
+
+      if (!isEligible) {
+        // If not eligible yet, only Main Admin with "force: true" can execute
+        if (!isAdmin || !validated.force) {
+          return res.status(400).json({
+            success: false,
+            message: 'Payment is not yet eligible for refund (7 working days SLA has not passed). Only the Main Admin can force refund.'
+          });
+        }
       }
     }
 
@@ -654,6 +699,17 @@ export const adminRefundPayment = async (req, res, next) => {
       await prisma.consultancyRequest.update({
         where: { id: payment.consultancyRequestId },
         data: { status: 'REFUNDED' }
+      });
+    }
+
+    if (payment.advocateBookingId) {
+      await prisma.advocateBooking.update({
+        where: { id: payment.advocateBookingId },
+        data: {
+          status: isProcessedImmediately ? 'REFUNDED' : 'REFUND_PENDING',
+          refundedAt: isProcessedImmediately ? new Date() : null,
+          refundReason: validated.reason
+        }
       });
     }
 

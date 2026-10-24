@@ -7,6 +7,7 @@ import { requireAuth, optionalAuth, requireRole, requireApprovedAdvocate } from 
 import { reviewLimiter, generalLimiter } from '../middleware/rate-limit.middleware.js';
 
 import * as advocateProfileController from '../controllers/advocate.profile.controller.js';
+import * as advocateBookingController from '../controllers/advocateBooking.controller.js';
 
 const router = express.Router();
 
@@ -20,7 +21,12 @@ router.delete('/team-mates/:advocateId', requireAuth, requireRole('ADVOCATE'), g
 router.post('/team-request/:requestId/verify', requireAuth, requireRole('ADVOCATE'), generalLimiter, advocateTeamController.verifyTeamRequest);
 router.post('/:advocateId/team-request', requireAuth, requireRole('ADVOCATE'), requireApprovedAdvocate, generalLimiter, advocateTeamController.createTeamRequest);
 
-// 2. Public / Optional Auth routes
+// 2. Advocate Booking Public & User routes (Defined before /:id)
+router.get('/:advocateId/booking-options', optionalAuth, advocateBookingController.getBookingOptions);
+router.get('/:advocateId/busy-slots', advocateBookingController.getBusySlots);
+router.post('/:advocateId/booking-quote', requireAuth, requireRole('USER'), advocateBookingController.getBookingQuote);
+
+// 3. Public / Optional Auth directory and profile routes
 router.get('/', optionalAuth, advocateController.getAdvocatesDirectory);
 router.get('/:id', optionalAuth, advocateController.getAdvocateProfilePublic);
 router.get('/:id/reviews', reviewController.getReviewsList);
