@@ -1,17 +1,3 @@
-export const ADVOCATE_BOOKING_SUBJECTS = [
-  'Criminal Defence',
-  'Corporate',
-  'Family',
-  'Personal Injury',
-  'Employment',
-  'IP Rights',
-  'Real Estate',
-  'Tax',
-  'Immigration',
-  'Civil Litigation',
-  'Other'
-];
-
 export const MODE_LABELS = {
   VOICE_CALL: 'Voice Call',
   VIDEO_CALL: 'Video Call',

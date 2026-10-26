@@ -1,7 +1,6 @@
 import prisma from '../../lib/prisma.js';
 import { getRazorpayClient, getRazorpayKeyId, isPaymentsEnabled } from '../../config/razorpay.js';
 import {
-  ADVOCATE_BOOKING_SUBJECTS,
   isAdvocateBookable,
   assertAdvocateBookable,
   getBookableModes,
@@ -63,7 +62,6 @@ export const getAdvocateBookingOptions = async (advocateId) => {
     },
     bookable,
     modes,
-    subjects: ADVOCATE_BOOKING_SUBJECTS,
     slotMinutes,
     inPersonMinutes,
     minLeadMinutes,
@@ -117,7 +115,7 @@ export const quoteBookingSlot = async (advocateId, { mode, startAt }, userId = n
 /**
  * Creates or reuses a checkout order for an advocate appointment.
  */
-export const createAdvocateBookingCheckout = async ({ userId, advocateId, mode, startAt, subject }) => {
+export const createAdvocateBookingCheckout = async ({ userId, advocateId, mode, startAt }) => {
   if (!isPaymentsEnabled()) {
     const err = new Error('Payments are currently disabled on this platform.');
     err.statusCode = 400;
@@ -206,7 +204,6 @@ export const createAdvocateBookingCheckout = async ({ userId, advocateId, mode, 
       const updatedBooking = await prisma.advocateBooking.update({
         where: { id: synced.advocateBookingId },
         data: {
-          subject: subject.trim(),
           userName: user.fullName || '',
           userPhone: user.phone,
           userEmail: user.email
@@ -305,7 +302,7 @@ export const createAdvocateBookingCheckout = async ({ userId, advocateId, mode, 
             startAt: slotStart,
             endAt: slotEnd,
             durationMinutes,
-            subject: subject.trim(),
+            subject: null,
             ratePerMinutePaise: pricing.ratePerMinutePaise,
             feePaise: pricing.feePaise,
             gstPercent: pricing.gstPercent,

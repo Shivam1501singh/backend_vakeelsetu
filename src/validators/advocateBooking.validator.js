@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { ADVOCATE_BOOKING_SUBJECTS } from '../services/advocateBooking/pricing.js';
 
 export const bookingQuoteSchema = z.object({
   mode: z.enum(['VOICE_CALL', 'VIDEO_CALL', 'IN_PERSON'], {
@@ -13,14 +12,7 @@ export const advocateCheckoutSchema = z.object({
   mode: z.enum(['VOICE_CALL', 'VIDEO_CALL', 'IN_PERSON'], {
     errorMap: () => ({ message: 'Invalid booking mode. Must be VOICE_CALL, VIDEO_CALL, or IN_PERSON.' })
   }),
-  startAt: z.string({ required_error: 'startAt is required.' }).min(1, 'startAt cannot be empty.'),
-  subject: z
-    .string({ required_error: 'subject is required.' })
-    .trim()
-    .min(1, 'subject cannot be empty.')
-    .refine((val) => ADVOCATE_BOOKING_SUBJECTS.includes(val), {
-      message: `Invalid subject. Must be one of: ${ADVOCATE_BOOKING_SUBJECTS.join(', ')}`
-    })
+  startAt: z.string({ required_error: 'startAt is required.' }).min(1, 'startAt cannot be empty.')
 });
 
 export const advocateAppointmentQuerySchema = z.object({

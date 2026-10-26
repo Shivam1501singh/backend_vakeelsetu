@@ -11798,10 +11798,10 @@ sequenceDiagram
     actor Adv as Advocate
 
     User->>API: GET /api/advocates/:id/booking-options
-    API-->>User: Bookable modes, durations, rates & subjects
+    API-->>User: Bookable modes, durations & rates (subject removed; may be added back later)
     User->>API: GET /api/advocates/:id/busy-slots?from=...&to=...
     API-->>User: Busy intervals (CONFIRMED + active HOLDs)
-    User->>API: POST /api/user/advocate-bookings/checkout (slot, mode, subject)
+    User->>API: POST /api/user/advocate-bookings/checkout (slot, mode)
     Note over API,DB: Locks advocate row (FOR UPDATE)<br/>Validates slot & user overlap<br/>Creates HOLD booking + Razorpay order
     API-->>User: razorpayOrderId, amount (paise), holdExpiresAt
     User->>RZP: Completes payment
@@ -11897,7 +11897,7 @@ All financial amounts in database and API payloads are strictly stored and compu
 
 | Method | Endpoint | Auth | Permission | Purpose |
 |---|---|---|---|---|
-| `GET` | `/api/advocates/:id/booking-options` | None | Public | Get bookable modes, prices, durations & subjects |
+| `GET` | `/api/advocates/:id/booking-options` | None | Public | Get bookable modes, prices & durations (subject removed; may be added back later) |
 | `GET` | `/api/advocates/:id/busy-slots` | None | Public | Get busy intervals for a date range |
 | `POST` | `/api/advocates/:id/booking-quote` | None | Public | Calculate exact fee, GST & total before checkout |
 | `POST` | `/api/user/advocate-bookings/checkout` | User JWT | None | Lock slot (10m hold) & create Razorpay order |
@@ -11959,24 +11959,11 @@ All financial amounts in database and API payloads are strictly stored and compu
       "gstPercent": 18,
       "platformFeeRupees": 25,
       "platformFeePaise": 2500
-    },
-    "subjects": [
-      "Divorce & Matrimonial",
-      "Property & Real Estate Dispute",
-      "Criminal Defense & Bail",
-      "Cheque Bounce / Section 138 NI Act",
-      "Corporate & Commercial Contracts",
-      "Employment & Labour Dispute",
-      "Consumer Court Dispute",
-      "Cyber Crime & Online Fraud",
-      "Civil Suit & Injunction",
-      "Wills, Trusts & Succession",
-      "Intellectual Property (Trademark / Copyright)",
-      "Taxation & GST Dispute",
-      "Other Legal Consultation"
-    ]
+    }
   }
 }
+```
+*(Note: `subjects` removed from booking options; may be added back later).*
 ```
 
 ---
@@ -12050,10 +12037,10 @@ All financial amounts in database and API payloads are strictly stored and compu
 {
   "advocateId": "442f6fa6-d27a-40a7-9d85-7c03dc69c1f8",
   "mode": "VOICE_CALL",
-  "startAt": "2026-10-25T06:00:00.000Z",
-  "subject": "Property & Real Estate Dispute",
-  "notes": "Need advice regarding ancestral property partition"
+  "startAt": "2026-10-25T06:00:00.000Z"
 }
+```
+*(Note: `subject` removed; may be added back later. If passed by legacy clients, it is ignored without failure. New bookings set `subject = null` in the database).*
 ```
 - **Response (200 OK):**
 ```json
@@ -12306,7 +12293,7 @@ Use this end-to-end workflow to verify all Advocate Booking features in Postman:
 
 #### Step 5: Initiate Checkout (Hold Creation)
 1. Login as standard user (`POST /api/auth/user/login`). Set `{{user_token}}`.
-2. Send `POST {{BACKEND_URL}}/api/user/advocate-bookings/checkout` with `advocateId`, `mode`, `startAt`, and `subject`.
+2. Send `POST {{BACKEND_URL}}/api/user/advocate-bookings/checkout` with `advocateId`, `mode`, and `startAt` (subject removed; may be added back later).
 3. Verify status `200 OK`.
 4. Save `booking.id` to `{{booking_db_id}}` and `razorpay.orderId` to `{{rzp_order_id}}`. Note `holdExpiresAt` (10 minutes in future).
 

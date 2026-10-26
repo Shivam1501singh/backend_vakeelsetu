@@ -72,8 +72,7 @@ export const createCheckout = async (req, res, next) => {
       userId,
       advocateId: validated.advocateId,
       mode: validated.mode,
-      startAt: validated.startAt,
-      subject: validated.subject
+      startAt: validated.startAt
     });
 
     return res.status(result.statusCode).json(result.response);
