@@ -602,13 +602,13 @@ export const searchGlobalBearerActs = async (req, res, next) => {
     const sectionWhere = {
       OR: [
         { section: { contains: trimmedQuery, mode: 'insensitive' } },
+        { chapterNo: { contains: trimmedQuery, mode: 'insensitive' } },
         { chapterName: { contains: trimmedQuery, mode: 'insensitive' } },
         { title: { contains: trimmedQuery, mode: 'insensitive' } },
         { description: { contains: trimmedQuery, mode: 'insensitive' } },
         { metaData: { contains: trimmedQuery, mode: 'insensitive' } },
         { metaDescription: { contains: trimmedQuery, mode: 'insensitive' } },
-        { metaTitle: { contains: trimmedQuery, mode: 'insensitive' } },
-        ...(numericQ !== null ? [{ chapterNo: numericQ }] : [])
+        { metaTitle: { contains: trimmedQuery, mode: 'insensitive' } }
       ]
     };
 

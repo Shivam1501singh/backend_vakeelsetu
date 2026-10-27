@@ -121,11 +121,9 @@ export const createSectionSchema = z.object({
   section: z.string({ required_error: 'section is required' })
     .trim()
     .min(1, 'section cannot be empty'),
-  chapterNo: z.coerce.number({
-    required_error: 'chapterNo is required',
-    invalid_type_error: 'chapterNo must be a valid integer'
-  })
-    .int('chapterNo must be an integer'),
+  chapterNo: z.coerce.string({ required_error: 'chapterNo is required' })
+    .trim()
+    .min(1, 'chapterNo cannot be empty'),
   chapterName: z.string({ required_error: 'chapterName is required' })
     .trim()
     .min(1, 'chapterName cannot be empty'),
@@ -146,8 +144,9 @@ export const updateSectionSchema = z.object({
     .min(1, 'id cannot be empty'),
   actId: z.string().trim().min(1, 'actId cannot be empty').optional(),
   section: z.string().trim().min(1, 'section cannot be empty').optional(),
-  chapterNo: z.coerce.number({ invalid_type_error: 'chapterNo must be a valid integer' })
-    .int('chapterNo must be an integer')
+  chapterNo: z.coerce.string()
+    .trim()
+    .min(1, 'chapterNo cannot be empty')
     .optional(),
   chapterName: z.string().trim().min(1, 'chapterName cannot be empty').optional(),
   title: z.string().trim().min(1, 'title cannot be empty').optional(),

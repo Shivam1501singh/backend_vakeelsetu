@@ -813,7 +813,7 @@ model ActSection {
   actId           String
   section         String
   sectionOrder    Float    @default(0)
-  chapterNo       Int
+  chapterNo       String
   chapterName     String
   title           String
   description     String   @db.Text
