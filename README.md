@@ -6755,6 +6755,29 @@ Pre-seeded Acts under `Tech, Data & Cyber Laws`:
 }
 ```
 
+##### Clearing or Updating Chapter Information (Nullable Fields)
+`chapterNo` and `chapterName` are optional and nullable (stored as SQL `NULL`, never empty string or `"null"`):
+- Ideal for sections that do not have a numbered chapter (e.g., Preamble, Preliminary without chapter, Schedules, Appendices).
+- **Create**: If omitted, passed as `""`, or `null`, both are stored as `null`. (Rule: If `chapterNo` is provided, `chapterName` is required).
+- **Update**:
+  - **Omit field (`undefined`)**: Leaves current value unchanged.
+  - **Pass `""` or `null`**: Clears the field in DB (sets to `NULL`).
+  - **Pass value (e.g. `"IVA"`, `"4"`, `4`)**: Updates to the trimmed string.
+
+**Example: Clearing Chapter Information on an ActSection**
+```json
+{
+  "type": "SECTION",
+  "operation": "UPDATE",
+  "data": {
+    "id": "94e82b71-79e5-4f40-a35f-3dcb295ad602",
+    "chapterNo": null,
+    "chapterName": null
+  }
+}
+```
+*(Sending `"chapterNo": ""` and `"chapterName": ""` also clears them to `null` identically).*
+
 ---
 
 ## 4. Public Read APIs

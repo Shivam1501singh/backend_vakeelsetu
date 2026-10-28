@@ -9,6 +9,15 @@ const SECTION_ORDER_BY = [
   { id: 'asc' }
 ];
 
+export const sanitizeSection = (s) => {
+  if (!s) return s;
+  return {
+    ...s,
+    chapterNo: (!s.chapterNo || s.chapterNo === 'null' || String(s.chapterNo).trim() === '') ? null : String(s.chapterNo).trim(),
+    chapterName: (!s.chapterName || s.chapterName === 'null' || String(s.chapterName).trim() === '') ? null : String(s.chapterName).trim()
+  };
+};
+
 /**
  * Single Admin Write Endpoint
  * POST /api/admin/bearer-acts
@@ -229,7 +238,7 @@ export const contentCreatorWriteHandler = async (req, res, next) => {
         return res.status(201).json({
           success: true,
           message: 'Act section created successfully',
-          data: created
+          data: sanitizeSection(created)
         });
       }
 
@@ -260,6 +269,16 @@ export const contentCreatorWriteHandler = async (req, res, next) => {
           }
         }
 
+        const finalChapterNo = validated.chapterNo !== undefined ? validated.chapterNo : target.chapterNo;
+        const finalChapterName = validated.chapterName !== undefined ? validated.chapterName : target.chapterName;
+
+        if (finalChapterNo !== null && (finalChapterName === null || finalChapterName === undefined || String(finalChapterName).trim() === '')) {
+          return res.status(400).json({
+            success: false,
+            message: 'chapterName is required when chapterNo is provided'
+          });
+        }
+
         const updateData = {};
         if (validated.actId !== undefined) updateData.actId = validated.actId;
         if (validated.section !== undefined) {
@@ -282,7 +301,7 @@ export const contentCreatorWriteHandler = async (req, res, next) => {
         return res.status(200).json({
           success: true,
           message: 'Act section updated successfully',
-          data: updated
+          data: sanitizeSection(updated)
         });
       }
     }
@@ -535,7 +554,7 @@ export const getSectionsByAct = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      data: sections,
+      data: sections.map(sanitizeSection),
       pagination: {
         page,
         limit,
@@ -569,7 +588,7 @@ export const getSingleSection = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      data: section
+      data: sanitizeSection(section)
     });
   } catch (error) {
     next(error);
@@ -602,7 +621,7 @@ export const searchGlobalBearerActs = async (req, res, next) => {
     const sectionWhere = {
       OR: [
         { section: { contains: trimmedQuery, mode: 'insensitive' } },
-        { chapterNo: { contains: trimmedQuery, mode: 'insensitive' } },
+        { chapterNo: { equals: trimmedQuery, mode: 'insensitive' } },
         { chapterName: { contains: trimmedQuery, mode: 'insensitive' } },
         { title: { contains: trimmedQuery, mode: 'insensitive' } },
         { description: { contains: trimmedQuery, mode: 'insensitive' } },
@@ -718,7 +737,7 @@ export const searchGlobalBearerActs = async (req, res, next) => {
             act: s.act.act,
             year: s.act.year
           },
-          section: {
+          section: sanitizeSection({
             id: s.id,
             actId: s.actId,
             section: s.section,
@@ -731,7 +750,7 @@ export const searchGlobalBearerActs = async (req, res, next) => {
             metaTitle: s.metaTitle,
             createdAt: s.createdAt,
             updatedAt: s.updatedAt
-          }
+          })
         });
       }
       currentLimit -= sections.length;
@@ -806,7 +825,7 @@ export const searchActSections = async (req, res, next) => {
           act: act.act,
           year: act.year
         },
-        results: sections
+        results: sections.map(sanitizeSection)
       },
       pagination: {
         page,

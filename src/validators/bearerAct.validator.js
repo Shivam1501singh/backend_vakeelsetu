@@ -113,6 +113,12 @@ export const updateActSchema = z.object({
     .optional()
 });
 
+const optionalCreateChapterField = z.union([z.string(), z.number(), z.null()]).optional()
+  .transform(v => (v === undefined || v === null || String(v).trim() === '') ? null : String(v).trim());
+
+const optionalUpdateChapterField = z.union([z.string(), z.number(), z.null()]).optional()
+  .transform(v => v === undefined ? undefined : (v === null || String(v).trim() === '' ? null : String(v).trim()));
+
 // --- Section Schemas ---
 export const createSectionSchema = z.object({
   actId: z.string({ required_error: 'actId is required' })
@@ -121,12 +127,8 @@ export const createSectionSchema = z.object({
   section: z.string({ required_error: 'section is required' })
     .trim()
     .min(1, 'section cannot be empty'),
-  chapterNo: z.coerce.string({ required_error: 'chapterNo is required' })
-    .trim()
-    .min(1, 'chapterNo cannot be empty'),
-  chapterName: z.string({ required_error: 'chapterName is required' })
-    .trim()
-    .min(1, 'chapterName cannot be empty'),
+  chapterNo: optionalCreateChapterField,
+  chapterName: optionalCreateChapterField,
   title: z.string({ required_error: 'title is required' })
     .trim()
     .min(1, 'title cannot be empty'),
@@ -136,6 +138,14 @@ export const createSectionSchema = z.object({
   metaData: metaDataField,
   metaDescription: z.string().trim().optional().nullable(),
   metaTitle: z.string().trim().optional().nullable()
+}).superRefine((data, ctx) => {
+  if (data.chapterNo !== null && (data.chapterName === null || data.chapterName === undefined)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'chapterName is required when chapterNo is provided',
+      path: ['chapterName']
+    });
+  }
 });
 
 export const updateSectionSchema = z.object({
@@ -144,11 +154,8 @@ export const updateSectionSchema = z.object({
     .min(1, 'id cannot be empty'),
   actId: z.string().trim().min(1, 'actId cannot be empty').optional(),
   section: z.string().trim().min(1, 'section cannot be empty').optional(),
-  chapterNo: z.coerce.string()
-    .trim()
-    .min(1, 'chapterNo cannot be empty')
-    .optional(),
-  chapterName: z.string().trim().min(1, 'chapterName cannot be empty').optional(),
+  chapterNo: optionalUpdateChapterField,
+  chapterName: optionalUpdateChapterField,
   title: z.string().trim().min(1, 'title cannot be empty').optional(),
   description: z.string().trim().min(1, 'description cannot be empty').optional(),
   metaData: metaDataField,
