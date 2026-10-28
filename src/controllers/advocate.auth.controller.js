@@ -345,13 +345,15 @@ export const generateAadhaarOtp = async (req, res, next) => {
     return res.status(200).json(result);
   } catch (error) {
     if (error.statusCode) {
-      return res.status(error.statusCode).json({
+      const payload = {
         success: false,
-        message: error.message,
-        remainingAttempts: error.remainingAttempts,
-        blocked: error.blocked,
-        blockedUntil: error.blockedUntil
-      });
+        message: error.message
+      };
+      if (error.remainingAttempts !== undefined) payload.remainingAttempts = error.remainingAttempts;
+      if (error.blocked !== undefined) payload.blocked = error.blocked;
+      if (error.blockedUntil !== undefined) payload.blockedUntil = error.blockedUntil;
+      if (error.retryAfterSeconds !== undefined) payload.retryAfterSeconds = error.retryAfterSeconds;
+      return res.status(error.statusCode).json(payload);
     }
     next(error);
   }

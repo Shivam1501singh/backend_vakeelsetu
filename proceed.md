@@ -1,899 +1,304 @@
-# Implementation Plan: Advocate (Lawyer) Booking System
+# Plan: Switch Aadhaar OTP Provider from Sandbox to IDSPay (Auto-Verification)
 
-This document outlines the architectural plan and specifications for implementing **Advocate Booking** in VakeelSetu backend. In this flow, a user selects an available time slot with an approved advocate, pays upfront via Razorpay, and upon confirmation, the advocate receives the appointment in "My Appointments" with contact details to call the user.
+This document provides the full implementation plan to transition the advocate Aadhaar OTP generation and verification flow from the discontinued Sandbox OKYC endpoint (`/kyc/aadhaar/okyc/otp`) to the IDSPay "auto-verification" API (`/srv2/digital-kyc/aadhar/auto-verification`), while preserving 100% of the frontend contract.
 
 ---
 
 ## 1. Current Behaviour Analysis
 
-### 1.1 Existing Payment & Razorpay Architecture
-- **Models:**
-  - `Payment`: Currently tightly coupled to `ConsultancyRequest` (`callType: ConsultancyCallType`, `duration: Int`, `consultancyRequestId: String? @unique`). Amount is stored as an integer in paise.
-  - `PaymentAttempt`: Stores gateway attempts (`razorpayPaymentId`, `status: PaymentAttemptStatus`, `amount`, `method`, `capturedAt`, `raw`).
-  - `PaymentWebhookEvent`: Stores deduplicated webhook events (`eventId`, `event`, `payload`, `processedAt`).
-- **Core State Machine (`src/services/payment.service.js` -> `syncPaymentFromRazorpay`):**
-  - Idempotent and thread-safe via PostgreSQL row-level locking (`SELECT * FROM "Payment" WHERE "id" = $1 FOR UPDATE`).
-  - If captured and amount matches:
-    - Generates unique `bookingId` using `createConsultancyWithUniqueBookingId` (`VSB-...`).
-    - Creates `ConsultancyRequest` with status `PENDING`.
-    - Updates `Payment` to `PAID` with `paidAt` and `refundEligibleAt` (7 working days).
-  - Handles duplicate captured attempts by refunding extras (`DUPLICATE_REFUNDED`).
-  - Handles authorized but uncaptured attempts by calling Razorpay capture.
-  - Sets `EXPIRED` if order has no attempts and `now > expiresAt`.
-- **Checkout Controller (`src/controllers/payment.controller.js`):**
-  - `createCheckout`: Finds reusable active payment (`status in ['CREATED', 'PROCESSING', 'FAILED']` and `expiresAt > now`). If already paid -> returns `ALREADY_PAID`. If processing -> returns `409 PAYMENT_PROCESSING`. Otherwise reuses order or creates new Razorpay order.
-  - `verifyCheckout`: Validates HMAC SHA256 signature using `verifyCheckoutSignature` and calls `syncPaymentFromRazorpay`.
-  - `getCheckoutStatus`: Throttled polling (10s) syncing status with Razorpay.
-- **Webhook & Cron:**
-  - `handleRazorpayWebhook`: Handles `payment.captured`, `payment.authorized`, `order.paid`, `refund.processed`.
-  - `reconcilePaymentsCron`: Reconciles pending payments older than 2 minutes and expires stale checkouts.
+### 1.1 Fields Saved After Successful Verification
 
-### 1.2 "My Bookings" (`src/services/myBookings.service.js`)
-- Currently only exposes `ConsultancyRequest` records merged with pending `Payment` records having status `PROCESSING` or `CREATED` with attempts.
-- Normalizes records to `{ id, bookingId, title, callStatus, status, statusGroup, statusLabel, callType, durationMinutes, price, contact, payment, actions }`.
-- Filtered by `statusGroup` (`ALL`, `UPCOMING`, `PROCESSING`, `COMPLETED`, `REFUNDED`).
+| Field | Saved in OTP Flow (`verifyAadhaarOtpService`) | Saved in DigiLocker Flow (`verifyAadhaarStatusService`) | Final Advocate Profile Creation (`completeProfile`) |
+|---|---|---|---|
+| `aadhaarVerified` | `true` | `true` | Copied from `session.aadhaarVerified` |
+| `aadhaarVerifiedAt` | `new Date()` | `new Date()` | Copied from `session.aadhaarVerifiedAt` |
+| `aadhaarVerificationMethod` | `'OTP'` | `'DIGILOCKER'` | Copied from `session.aadhaarVerificationMethod` |
+| `aadhaarVerificationId` | `reference_id` (from generate OTP) | `clientId` (from initiate) | Copied from `session.aadhaarVerificationId` |
+| `aadhaarVerificationAttempts` | Reset to `0` | Reset to `0` | Copied from `session.aadhaarVerificationAttempts` |
+| `aadhaarBlockedUntil` | Reset to `null` | Reset to `null` | Copied from `session.aadhaarBlockedUntil` |
+| `aadhaarNumber` | Set during OTP generate (`cleanAadhaar`) | Set during initiate (`cleanAadhaar`) | Copied from `session.aadhaarNumber` |
+| Name / DOB / Gender / Address / Photo | **Not stored** in session or Advocate table | **Not stored** in session or Advocate table | Basic details entered by advocate in Step 2 are used |
 
-### 1.3 Advocate Profile & Availability
-- `Advocate` schema stores rates:
-  - `voiceCallChargePerMinute` (Decimal?)
-  - `videoCallChargePerMinute` (Decimal?)
-  - `offlineVisitingFee` (Decimal?)
-- Status flags:
-  - `isActive`: Boolean
-  - `status`: AdvocateStatus (`ACTIVE`, `BLOCKED`)
-  - `approvalStatus`: AdvocateApprovalStatus (`PENDING`, `APPROVED`, `REJECTED`)
-  - `deletionStatus`: AdvocateDeletionStatus (`NONE`, `PENDING`)
-  - `callAvailability`: Boolean (used solely for immediate live calling in other modules; **must NOT** block advance scheduled slot bookings).
+### 1.2 Full Aadhaar Number Storage
+- **Current Status:** The code currently stores the **full 12-digit clean Aadhaar number** (e.g., `266809098341`) in:
+  1. `RegistrationSession.aadhaarNumber`
+  2. `Advocate.aadhaarNumber`
+- It is also checked in `checkDuplicateAadhaarNumber` via `prisma.advocate.findFirst({ where: { aadhaarNumber: cleanAadhaar } })`.
+- **Compliance Risk:** UIDAI regulations prohibit storing plain 12-digit Aadhaar numbers in non-vault databases. See Open Question 1.
 
-### 1.4 RBAC System
-- Roles and permissions in `prisma/schema.prisma` (`Role`, `Permission`, `RolePermission`, `UserRole`).
-- Seed script: `prisma/seedRbac.js`.
-- Middleware: `requirePermission('permission:code')` and `requireRole('ROLE')`.
-
----
-
-## 2. Final Database Design
-
-### 2.1 Enums
-
-```prisma
-enum AdvocateBookingMode {
-  VOICE_CALL
-  VIDEO_CALL
-  IN_PERSON
-}
-
-enum AdvocateBookingStatus {
-  HOLD
-  CONFIRMED
-  COMPLETED
-  EXPIRED
-  REFUND_PENDING
-  REFUNDED
-}
-
-enum PaymentPurpose {
-  CONSULTANCY
-  ADVOCATE_BOOKING
-}
-```
-
-### 2.2 New Model `AdvocateBooking`
-
-```prisma
-model AdvocateBooking {
-  id                   String                @id @default(uuid())
-  bookingId            String?               @unique
-  userId               String
-  advocateId           String
-  mode                 AdvocateBookingMode
-  startAt              DateTime
-  endAt                DateTime
-  durationMinutes      Int
-  subject              String
-
-  // Price snapshot (in integer paise)
-  ratePerMinutePaise   Int?                  // null for IN_PERSON
-  feePaise             Int
-  gstPercent           Int
-  gstPaise             Int
-  platformFeePaise     Int
-  totalPaise           Int
-  currency             String                @default("INR")
-
-  // Contact snapshot taken at the time of booking
-  userName             String
-  userPhone            String
-  userEmail            String
-  advocateName         String
-
-  // Lifecycle status
-  status               AdvocateBookingStatus @default(HOLD)
-  holdExpiresAt        DateTime
-  confirmedAt          DateTime?
-  completedAt          DateTime?
-  refundedAt           DateTime?
-  refundReason         String?
-
-  createdAt            DateTime              @default(now())
-  updatedAt            DateTime              @updatedAt
-
-  // Relationships
-  user                 User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
-  advocate             Advocate              @relation(fields: [advocateId], references: [id], onDelete: Restrict)
-  payment              Payment?
-
-  @@index([advocateId, startAt])
-  @@index([userId, createdAt])
-  @@index([status])
-  @@index([startAt])
-}
-```
-
-#### Cascade Rule Rationale (`onDelete: Restrict`)
-- `AdvocateBooking` records represent legally binding appointments and financial transactions.
-- Silently wiping booking records if a `User` or `Advocate` account is deleted would destroy audit trails and violate financial retention compliance.
-- Therefore, foreign keys use `Restrict`. When users or advocates request account deletion, the system retains the booking history or marks accounts as soft-deleted / scheduled for deletion without deleting transaction rows.
-
-### 2.3 Additive Extension to `Payment`
-
-```prisma
-model Payment {
-  id                   String              @id @default(uuid())
-  purpose              PaymentPurpose      @default(CONSULTANCY)
-  userId               String
-  callType             ConsultancyCallType?  // Made optional for ADVOCATE_BOOKING
-  duration             Int?                  // Made optional for ADVOCATE_BOOKING
-  phoneNumber          String
-  email                String
-  amount               Int                 // in paise
-  currency             String              @default("INR")
-  status               PaymentStatus       @default(CREATED)
-  razorpayOrderId      String              @unique
-  consultancyRequestId String?             @unique
-  advocateBookingId    String?             @unique // Added for ADVOCATE_BOOKING
-  paidAt               DateTime?
-  expiresAt            DateTime
-  refundEligibleAt     DateTime?
-  refundId             String?
-  refundedAt           DateTime?
-  refundReason         String?
-  refundedById         String?
-  refundedByType       String?
-  failureReason        String?
-  createdAt            DateTime            @default(now())
-  updatedAt            DateTime            @updatedAt
-
-  user                 User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  consultancyRequest   ConsultancyRequest? @relation(fields: [consultancyRequestId], references: [id], onDelete: SetNull)
-  advocateBooking      AdvocateBooking?    @relation(fields: [advocateBookingId], references: [id], onDelete: SetNull)
-  attempts             PaymentAttempt[]
-
-  @@index([userId])
-  @@index([status])
-  @@index([createdAt])
-  @@index([refundEligibleAt])
-  @@index([purpose])
-}
-```
-
-### 2.4 Proposed Migration SQL
-
-Following README Section 31, the migration script will be placed under `prisma/migrations/<timestamp>_add_advocate_booking/migration.sql`.
-
-```sql
--- 1. Create Enums
-DO $$ BEGIN
-    CREATE TYPE "AdvocateBookingMode" AS ENUM ('VOICE_CALL', 'VIDEO_CALL', 'IN_PERSON');
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
-DO $$ BEGIN
-    CREATE TYPE "AdvocateBookingStatus" AS ENUM ('HOLD', 'CONFIRMED', 'COMPLETED', 'EXPIRED', 'REFUND_PENDING', 'REFUNDED');
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
-DO $$ BEGIN
-    CREATE TYPE "PaymentPurpose" AS ENUM ('CONSULTANCY', 'ADVOCATE_BOOKING');
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
--- 2. Create Table AdvocateBooking
-CREATE TABLE IF NOT EXISTS "AdvocateBooking" (
-    "id" TEXT NOT NULL,
-    "bookingId" TEXT,
-    "userId" TEXT NOT NULL,
-    "advocateId" TEXT NOT NULL,
-    "mode" "AdvocateBookingMode" NOT NULL,
-    "startAt" TIMESTAMP(3) NOT NULL,
-    "endAt" TIMESTAMP(3) NOT NULL,
-    "durationMinutes" INTEGER NOT NULL,
-    "subject" TEXT NOT NULL,
-    "ratePerMinutePaise" INTEGER,
-    "feePaise" INTEGER NOT NULL,
-    "gstPercent" INTEGER NOT NULL,
-    "gstPaise" INTEGER NOT NULL,
-    "platformFeePaise" INTEGER NOT NULL,
-    "totalPaise" INTEGER NOT NULL,
-    "currency" TEXT NOT NULL DEFAULT 'INR',
-    "userName" TEXT NOT NULL,
-    "userPhone" TEXT NOT NULL,
-    "userEmail" TEXT NOT NULL,
-    "advocateName" TEXT NOT NULL,
-    "status" "AdvocateBookingStatus" NOT NULL DEFAULT 'HOLD',
-    "holdExpiresAt" TIMESTAMP(3) NOT NULL,
-    "confirmedAt" TIMESTAMP(3),
-    "completedAt" TIMESTAMP(3),
-    "refundedAt" TIMESTAMP(3),
-    "refundReason" TEXT,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "AdvocateBooking_pkey" PRIMARY KEY ("id")
-);
-
--- 3. Alter Table Payment (Additive & Non-destructive)
-ALTER TABLE "Payment" ADD COLUMN IF NOT EXISTS "purpose" "PaymentPurpose" NOT NULL DEFAULT 'CONSULTANCY';
-ALTER TABLE "Payment" ADD COLUMN IF NOT EXISTS "advocateBookingId" TEXT;
-ALTER TABLE "Payment" ALTER COLUMN "callType" DROP NOT NULL;
-ALTER TABLE "Payment" ALTER COLUMN "duration" DROP NOT NULL;
-
--- 4. Create Indexes
-CREATE UNIQUE INDEX IF NOT EXISTS "AdvocateBooking_bookingId_key" ON "AdvocateBooking"("bookingId");
-CREATE INDEX IF NOT EXISTS "AdvocateBooking_advocateId_startAt_idx" ON "AdvocateBooking"("advocateId", "startAt");
-CREATE INDEX IF NOT EXISTS "AdvocateBooking_userId_createdAt_idx" ON "AdvocateBooking"("userId", "createdAt");
-CREATE INDEX IF NOT EXISTS "AdvocateBooking_status_idx" ON "AdvocateBooking"("status");
-CREATE INDEX IF NOT EXISTS "AdvocateBooking_startAt_idx" ON "AdvocateBooking"("startAt");
-
-CREATE UNIQUE INDEX IF NOT EXISTS "Payment_advocateBookingId_key" ON "Payment"("advocateBookingId");
-CREATE INDEX IF NOT EXISTS "Payment_purpose_idx" ON "Payment"("purpose");
-
--- 5. Foreign Key Constraints
-DO $$ BEGIN
-    ALTER TABLE "AdvocateBooking" ADD CONSTRAINT "AdvocateBooking_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
-DO $$ BEGIN
-    ALTER TABLE "AdvocateBooking" ADD CONSTRAINT "AdvocateBooking_advocateId_fkey" FOREIGN KEY ("advocateId") REFERENCES "Advocate"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
-DO $$ BEGIN
-    ALTER TABLE "Payment" ADD CONSTRAINT "Payment_advocateBookingId_fkey" FOREIGN KEY ("advocateBookingId") REFERENCES "AdvocateBooking"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
--- 6. PostgreSQL Double-Booking Exclusion Constraint (Requires btree_gist)
-CREATE EXTENSION IF NOT EXISTS btree_gist;
-
-DO $$ BEGIN
-    ALTER TABLE "AdvocateBooking" ADD CONSTRAINT "advocate_booking_no_overlap"
-      EXCLUDE USING gist ("advocateId" WITH =, tstzrange("startAt", "endAt", '[)') WITH &&)
-      WHERE ("status" IN ('CONFIRMED', 'COMPLETED', 'REFUND_PENDING'));
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-```
-
----
-
-## 3. Double-Booking Prevention & Overlap Strategy
-
-Double booking is prevented using a multi-layer strategy:
-
-### Layer 1: Application-Level Overlap Check (`isSlotFree`)
-- Used by public quote, checkout, and pre-payment confirmation.
-- Queries `AdvocateBooking` for the given `advocateId` where:
-  - `startAt < requestedEndAt` AND `endAt > requestedStartAt`
-  - AND status is in `['CONFIRMED', 'COMPLETED', 'REFUND_PENDING']` OR (`status = 'HOLD'` AND `holdExpiresAt > now`).
-- Expired `HOLD` records (`holdExpiresAt <= now`) are lazily ignored and treated as free.
-- Also validates `USER_SLOT_CONFLICT`: ensures the same user does not already hold or have a confirmed slot overlapping the requested time window across any advocate.
-
-### Layer 2: Transaction Row Locking
-- When creating a checkout `HOLD` or confirming on payment, execute:
-  ```sql
-  SELECT id FROM "Advocate" WHERE id = $1 FOR UPDATE
-  ```
-- This serializes concurrent checkout requests for the same advocate in PostgreSQL.
-
-### Layer 3: Database Exclusion Constraint
-- The PostgreSQL `advocate_booking_no_overlap` exclusion constraint operates on `tstzrange("startAt", "endAt", '[)')`.
-- Even if two concurrent requests somehow bypass application locks, the database engine enforces physical serialization at commit time and raises error `23P01 (exclusion_violation)`.
-
----
-
-## 4. How Payment Machinery is Reused
-
-The existing Razorpay state machine is reused 100% without creating a second webhook or payment flow.
-
-```
-+-----------------------------------------------------------------------------------------+
-|                                    Razorpay Gateway                                     |
-+-----------------------------------------------------------------------------------------+
-         |                                |                                   |
-         v                                v                                   v
-+------------------+             +------------------+                +------------------+
-| Verify Endpoint  |             | Webhook Endpoint |                |   Cron Reconcile |
-| (/checkout/verify|             | (/payments/      |                |  (/payments-     |
-|                  |             |  razorpay/webhook|                |   reconcile)     |
-+------------------+             +------------------+                +------------------+
-         |                                |                                   |
-         +--------------------------------+-----------------------------------+
-                                          |
-                                          v
-                    +------------------------------------------+
-                    |  syncPaymentFromRazorpay(paymentId)      |
-                    |  - Row-level lock: Payment FOR UPDATE   |
-                    |  - Fetch attempts from Razorpay          |
-                    |  - Branch on payment.purpose             |
-                    +------------------------------------------+
-                                          |
-                +-------------------------+-------------------------+
-                |                                                   |
-                v                                                   v
-      [purpose: CONSULTANCY]                            [purpose: ADVOCATE_BOOKING]
-   (Existing behavior unchanged)                  - Re-check overlap (excluding current booking)
-                                                  - If slot free:
-                                                      * Generate bookingId (VLB-...)
-                                                      * AdvocateBooking -> CONFIRMED, confirmedAt
-                                                      * Payment -> PAID
-                                                  - If slot taken (late payment after expiry):
-                                                      * AdvocateBooking -> REFUND_PENDING
-                                                      * Reason: SLOT_CONFLICT_AFTER_EXPIRY
-                                                      * Auto-refund attempt via Razorpay
-                                                  - If failed/expired:
-                                                      * AdvocateBooking -> EXPIRED
-```
-
-### Key Reuse Rules:
-1. **Single Webhook:** `handleRazorpayWebhook` already processes events by fetching `order_id` or `payment_id` and calling `syncPaymentFromRazorpay`. For `refund.processed`, it updates both `consultancyRequest` and `advocateBooking`.
-2. **Single Cron:** `reconcilePaymentsCron` selects pending payments older than 2 minutes and calls `syncPaymentFromRazorpay`. Stale `CREATED` checkouts are updated to `EXPIRED`, which automatically expires the linked `AdvocateBooking`.
-3. **Refund Endpoint:** `POST /api/admin/payments/:id/refund` checks `payment.purpose`. If `ADVOCATE_BOOKING`, the 7-day rule is skipped:
-   - If booking is `CONFIRMED`, refund is allowed immediately.
-   - If booking is `COMPLETED`, only Main Admin with `force: true` is allowed.
-   - Updates `AdvocateBooking.status` to `REFUND_PENDING` (and `REFUNDED` if processed immediately).
-
----
-
-## 5. Pricing, Duration & Subjects Service
-
-### 5.1 Service Location: `src/services/advocateBooking/pricing.js`
-
-- **Rules:**
-  - `VOICE_CALL`: Slot = `ADVOCATE_BOOKING_SLOT_MINUTES` (default 15 min). Rate = `advocate.voiceCallChargePerMinute`. Fee = `Math.round(rate * 15)`.
-  - `VIDEO_CALL`: Slot = `ADVOCATE_BOOKING_SLOT_MINUTES` (default 15 min). Rate = `advocate.videoCallChargePerMinute`. Fee = `Math.round(rate * 15)`.
-  - `IN_PERSON`: Slot = `ADVOCATE_IN_PERSON_MINUTES` (default 60 min). Flat Fee = `advocate.offlineVisitingFee`.
-  - GST = `Math.round(feePaise * BOOKING_GST_PERCENT / 100)`. (18% on fee only).
-  - Platform Fee = `BOOKING_PLATFORM_FEE * 100` paise (₹25 flat, no GST).
-  - Total = `feePaise + gstPaise + platformFeePaise`.
-  - A mode is bookable only if rate/fee > 0.
-
-- **Example Calculation:**
-  - Voice Call at ₹34.00/min:
-    - `feePaise` = $34 \times 15 \times 100 = 51000$ (₹510.00)
-    - `gstPaise` = $\text{Math.round}(51000 \times 18 / 100) = 9180$ (₹91.80)
-    - `platformFeePaise` = 2500 (₹25.00)
-    - `totalPaise` = $51000 + 9180 + 2500 = 62680$ (₹626.80)
-
-- **Advocate Bookable Verification:**
-  - An advocate is bookable if and only if:
-    `isActive === true` AND `status === 'ACTIVE'` AND `approvalStatus === 'APPROVED'` AND `deletionStatus !== 'PENDING'`.
-  - **`callAvailability` is NOT checked** for scheduled bookings.
-
-- **Standard Subject List:**
+### 1.3 Where `reference_id` is Stored
+- During `POST /aadhaar/otp/generate`, the provider's `reference_id` (or `request_id`) is stored in `RegistrationSession.aadhaarVerificationId`.
+- During `POST /aadhaar/otp/verify`, the incoming `reference_id` is strictly compared with `session.aadhaarVerificationId`:
   ```javascript
-  export const ADVOCATE_BOOKING_SUBJECTS = [
-    'Criminal Defence',
-    'Corporate',
-    'Family',
-    'Personal Injury',
-    'Employment',
-    'IP Rights',
-    'Real Estate',
-    'Tax',
-    'Immigration',
-    'Civil Litigation',
-    'Other'
-  ];
-  ```
-
----
-
-## 6. Endpoints & API Specifications
-
-### Public & User Endpoints
-
-#### 1. `GET /api/advocates/:advocateId/booking-options`
-- **Auth:** Optional (`optionalAuth`)
-- **Query:** None
-- **Response `200 OK`:**
-  ```json
-  {
-    "success": true,
-    "advocate": {
-      "id": "c6a1e3a4-8461-460d-a3df-20ce4b9685a1",
-      "fullName": "Adv. Rajesh Sharma",
-      "profilePhotoUrl": "https://res.cloudinary.com/...",
-      "bestPracticeArea": "Criminal Litigation"
-    },
-    "bookable": true,
-    "modes": [
-      {
-        "mode": "VOICE_CALL",
-        "label": "Voice Call",
-        "durationMinutes": 15,
-        "ratePerMinute": 34,
-        "ratePerMinutePaise": 3400,
-        "fee": 510,
-        "feePaise": 51000,
-        "gst": 91.8,
-        "gstPercent": 18,
-        "gstPaise": 9180,
-        "platformFee": 25,
-        "platformFeePaise": 2500,
-        "total": 626.8,
-        "totalPaise": 62680
-      },
-      {
-        "mode": "VIDEO_CALL",
-        "label": "Video Call",
-        "durationMinutes": 15,
-        "ratePerMinute": 50,
-        "ratePerMinutePaise": 5000,
-        "fee": 750,
-        "feePaise": 75000,
-        "gst": 135,
-        "gstPercent": 18,
-        "gstPaise": 13500,
-        "platformFee": 25,
-        "platformFeePaise": 2500,
-        "total": 910,
-        "totalPaise": 91000
-      },
-      {
-        "mode": "IN_PERSON",
-        "label": "In-Person Meeting",
-        "durationMinutes": 60,
-        "ratePerMinute": null,
-        "ratePerMinutePaise": null,
-        "fee": 2500,
-        "feePaise": 250000,
-        "gst": 450,
-        "gstPercent": 18,
-        "gstPaise": 45000,
-        "platformFee": 25,
-        "platformFeePaise": 2500,
-        "total": 2975,
-        "totalPaise": 297500
-      }
-    ],
-    "subjects": [
-      "Criminal Defence",
-      "Corporate",
-      "Family",
-      "Personal Injury",
-      "Employment",
-      "IP Rights",
-      "Real Estate",
-      "Tax",
-      "Immigration",
-      "Civil Litigation",
-      "Other"
-    ],
-    "slotMinutes": 15,
-    "inPersonMinutes": 60,
-    "minLeadMinutes": 30,
-    "maxDaysAhead": 30,
-    "timezone": "Asia/Kolkata"
-  }
-  ```
-
-#### 2. `GET /api/advocates/:advocateId/busy-slots?date=YYYY-MM-DD`
-- **Auth:** Public
-- **Query:** `date` (YYYY-MM-DD)
-- **Response `200 OK`:**
-  ```json
-  {
-    "success": true,
-    "date": "2026-10-25",
-    "timezone": "Asia/Kolkata",
-    "busy": [
-      {
-        "startAt": "2026-10-25T05:30:00.000Z",
-        "endAt": "2026-10-25T05:45:00.000Z"
-      },
-      {
-        "startAt": "2026-10-25T09:00:00.000Z",
-        "endAt": "2026-10-25T10:00:00.000Z"
-      }
-    ]
-  }
-  ```
-
-#### 3. `POST /api/advocates/:advocateId/booking-quote`
-- **Auth:** Required (`USER`)
-- **Body:**
-  ```json
-  {
-    "mode": "VOICE_CALL",
-    "startAt": "2026-10-25T11:00:00.000Z"
-  }
-  ```
-- **Response `200 OK`:**
-  ```json
-  {
-    "success": true,
-    "available": true,
-    "startAt": "2026-10-25T11:00:00.000Z",
-    "endAt": "2026-10-25T11:15:00.000Z",
-    "durationMinutes": 15,
-    "mode": "VOICE_CALL",
-    "breakdown": {
-      "ratePerMinute": 34,
-      "ratePerMinutePaise": 3400,
-      "fee": 510,
-      "feePaise": 51000,
-      "gst": 91.8,
-      "gstPercent": 18,
-      "gstPaise": 9180,
-      "platformFee": 25,
-      "platformFeePaise": 2500,
-      "total": 626.8,
-      "totalPaise": 62680
-    }
-  }
-  ```
-- **Error `409 Conflict` (Slot Taken):**
-  ```json
-  {
-    "success": false,
-    "code": "SLOT_TAKEN",
-    "message": "The selected time slot is no longer available. Please select another time."
-  }
-  ```
-
-#### 4. `POST /api/user/advocate-bookings/checkout`
-- **Auth:** Required (`USER`), rate-limited
-- **Body:**
-  ```json
-  {
-    "advocateId": "c6a1e3a4-8461-460d-a3df-20ce4b9685a1",
-    "mode": "VOICE_CALL",
-    "startAt": "2026-10-25T11:00:00.000Z",
-    "subject": "Criminal Defence"
-  }
-  ```
-- **Response `201 Created`:**
-  ```json
-  {
-    "success": true,
-    "checkout": {
-      "checkoutId": "f78d8f99-281b-4191-8848-eaefda142cb1",
-      "razorpayOrderId": "order_Q8dKn9K2sLa",
-      "amount": 62680,
-      "currency": "INR",
-      "keyId": "rzp_test_...",
-      "status": "CREATED",
-      "expiresAt": "2026-10-24T15:10:00.000Z",
-      "booking": {
-        "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
-        "mode": "VOICE_CALL",
-        "startAt": "2026-10-25T11:00:00.000Z",
-        "endAt": "2026-10-25T11:15:00.000Z",
-        "durationMinutes": 15,
-        "subject": "Criminal Defence",
-        "breakdown": {
-          "fee": 510,
-          "feePaise": 51000,
-          "gst": 91.8,
-          "gstPercent": 18,
-          "gstPaise": 9180,
-          "platformFee": 25,
-          "platformFeePaise": 2500,
-          "total": 626.8,
-          "totalPaise": 62680
-        }
-      },
-      "prefill": {
-        "name": "Rahul Verma",
-        "email": "client.rahul@example.com",
-        "contact": "9876543210"
-      }
-    }
-  }
-  ```
-
-#### 5. `POST /api/user/advocate-bookings/checkout/verify`
-- **Auth:** Required (`USER`)
-- **Body:**
-  ```json
-  {
-    "razorpay_order_id": "order_Q8dKn9K2sLa",
-    "razorpay_payment_id": "pay_Q8dMwP931l",
-    "razorpay_signature": "abcdef123456..."
-  }
-  ```
-- **Response `200 OK`:**
-  ```json
-  {
-    "success": true,
-    "status": "PAID",
-    "booking": {
-      "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
-      "bookingId": "VLB-2026JK8M2NP",
-      "status": "CONFIRMED",
-      "confirmedAt": "2026-10-24T15:02:10.000Z"
-    }
-  }
-  ```
-
-#### 6. `GET /api/user/advocate-bookings/checkout/:checkoutId/status`
-- **Auth:** Required (`USER`)
-- **Response `200 OK`:**
-  ```json
-  {
-    "success": true,
-    "status": "PAID",
-    "payment": {
-      "id": "f78d8f99-281b-4191-8848-eaefda142cb1",
-      "status": "PAID",
-      "amount": 62680,
-      "amountRupees": 626.8
-    },
-    "booking": {
-      "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
-      "bookingId": "VLB-2026JK8M2NP",
-      "status": "CONFIRMED"
-    }
+  if (session.aadhaarVerificationId !== reference_id) {
+    const err = new Error('Invalid reference ID. Please initiate OTP generation first.');
+    err.statusCode = 400;
+    throw err;
   }
   ```
 
 ---
 
-### Advocate Endpoints ("My Appointments")
+## 2. Existing IDSPay Environment Variables
 
-#### 7. `GET /api/advocate/appointments`
-- **Auth:** Required (`requireAuth`, `requireRole('ADVOCATE')`)
-- **Query:**
-  - `status`: `UPCOMING` (default) | `PAST_DUE` | `COMPLETED` | `REFUNDED` | `ALL`
-  - `date`: `YYYY-MM-DD` (optional filter)
-  - `page`: default 1
-  - `limit`: default 10 (max 50)
-- **Response `200 OK`:**
-  ```json
-  {
-    "success": true,
-    "appointments": [
-      {
-        "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
-        "bookingId": "VLB-2026JK8M2NP",
-        "mode": "VOICE_CALL",
-        "startAt": "2026-10-25T11:00:00.000Z",
-        "endAt": "2026-10-25T11:15:00.000Z",
-        "durationMinutes": 15,
-        "subject": "Criminal Defence",
-        "status": "CONFIRMED",
-        "user": {
-          "name": "Rahul Verma",
-          "phone": "9876543210",
-          "email": "client.rahul@example.com"
-        },
-        "fee": 510,
-        "feePaise": 51000,
-        "confirmedAt": "2026-10-24T15:02:10.000Z",
-        "completedAt": null,
-        "message": "This user has booked you. Please call the user at the booked time."
-      }
-    ],
-    "counts": {
-      "ALL": 12,
-      "UPCOMING": 4,
-      "PAST_DUE": 1,
-      "COMPLETED": 6,
-      "REFUNDED": 1
-    },
-    "pagination": {
-      "page": 1,
-      "limit": 10,
-      "total": 4,
-      "totalPages": 1
-    }
-  }
-  ```
+### 2.1 Existing Variable Names in `.env` / `.env.example`
+- `IDSPAY_BASE_URL`: Can be reused directly (`https://javabackend.idspay.in/api/v1/prod`).
+- `IDSPAY_CLIENT_ID`: Existing DigiLocker config. In `idspay.service.js`, this was passed as both `client_id` and `api_id`.
+- `IDSPAY_CLIENT_SECRET`: Used in DigiLocker flow; not needed for auto-verification request body.
+- `IDSPAY_API_KEY`: Can be reused directly for the auto-verification payload if using the same credentials.
+- `IDSPAY_AADHAAR_INITIATE_PATH`: Specific to DigiLocker (`/srv2/validation/digilocker-digital-kyc`). **Do NOT touch or rename**.
+- `IDSPAY_AADHAAR_STATUS_PATH`: Specific to DigiLocker (`/srv2/validation/digilocker-digital-kyc`). **Do NOT touch or rename**.
 
-#### 8. `GET /api/advocate/appointments/:id`
-- **Auth:** Required (`ADVOCATE` - owner only)
-- **Response `200 OK`:** Single appointment object with full timeline and contact details.
+### 2.2 Variables Needed for IDSPay Auto-Verification
+- `IDSPAY_BASE_URL`: (Reuse existing)
+- `IDSPAY_API_ID`: Will support explicit `IDSPAY_API_ID` with fallback to `IDSPAY_CLIENT_ID`.
+- `IDSPAY_API_KEY`: (Reuse existing or override)
+- `IDSPAY_TOKEN_ID`: **New** (required by auto-verification endpoint).
+- `IDSPAY_AADHAAR_OTP_PATH`: **New** (default `/srv2/digital-kyc/aadhar/auto-verification`).
+- `AADHAAR_OTP_PROVIDER`: **New** (options: `idspay` | `sandbox` | `mock`, default `idspay`).
+- `AADHAAR_OTP_TIMEOUT_MS`: **New** (default `20000`).
 
-#### 9. `PATCH /api/advocate/appointments/:id/complete`
-- **Auth:** Required (`ADVOCATE` - owner only)
-- **Conditions:** Status must be `CONFIRMED` and `now >= startAt`.
-- **Response `200 OK`:**
-  ```json
-  {
-    "success": true,
-    "message": "Appointment marked as completed.",
-    "appointment": {
-      "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
-      "status": "COMPLETED",
-      "completedAt": "2026-10-25T11:16:00.000Z"
-    }
-  }
-  ```
-- **Error `400 Bad Request`:**
-  ```json
-  {
-    "success": false,
-    "message": "You can mark this appointment completed only after it starts."
-  }
-  ```
+### 2.3 Variables to Set in Vercel (Production & Preview)
+1. `IDSPAY_BASE_URL`
+2. `IDSPAY_API_ID` (or `IDSPAY_CLIENT_ID`)
+3. `IDSPAY_API_KEY`
+4. `IDSPAY_TOKEN_ID`
+5. `IDSPAY_AADHAAR_OTP_PATH`
+6. `AADHAAR_OTP_PROVIDER=idspay`
+7. `AADHAAR_OTP_TIMEOUT_MS=20000`
 
 ---
 
-### User "My Bookings" Endpoints (Extended)
-
-#### 10. `GET /api/user/bookings`
-- **Query:** `status` (`ALL`, `UPCOMING`, `PROCESSING`, `COMPLETED`, `REFUNDED`), `type` (`ALL`, `CONSULTANCY`, `ADVOCATE`), `from`, `to`, `page`, `limit`
-- **Response `200 OK`:**
-  ```json
-  {
-    "success": true,
-    "availableTypes": ["CONSULTANCY", "ADVOCATE"],
-    "bookings": [
-      {
-        "id": "e81d7398-319b-4322-bfa1-d419a71b8e19",
-        "bookingType": "ADVOCATE",
-        "bookingId": "VLB-2026JK8M2NP",
-        "title": "Voice Call Consultation • 15 min",
-        "mode": "VOICE_CALL",
-        "status": "CONFIRMED",
-        "statusGroup": "UPCOMING",
-        "statusLabel": "Confirmed – the advocate will contact you",
-        "callStatus": "PENDING",
-        "scheduledAt": "2026-10-25T11:00:00.000Z",
-        "startAt": "2026-10-25T11:00:00.000Z",
-        "endAt": "2026-10-25T11:15:00.000Z",
-        "durationMinutes": 15,
-        "subject": "Criminal Defence",
-        "advocate": {
-          "id": "c6a1e3a4-8461-460d-a3df-20ce4b9685a1",
-          "fullName": "Adv. Rajesh Sharma",
-          "profilePhotoUrl": "https://...",
-          "bestPracticeArea": "Criminal Litigation"
-        },
-        "breakdown": {
-          "fee": 510,
-          "gst": 91.8,
-          "gstPercent": 18,
-          "platformFee": 25,
-          "total": 626.8
-        },
-        "actions": {
-          "canViewReceipt": true,
-          "refundEligibleNow": false
-        },
-        "createdAt": "2026-10-24T15:00:00.000Z"
-      }
-    ],
-    "counts": {
-      "ALL": 5,
-      "UPCOMING": 2,
-      "PROCESSING": 0,
-      "COMPLETED": 2,
-      "REFUNDED": 1
-    },
-    "pagination": { ... }
-  }
-  ```
-
----
-
-### Admin Endpoints (RBAC)
-
-#### 11. `GET /api/admin/advocate-bookings`
-- **Auth:** Staff with `advocate_bookings:view`
-- **Query:** `status`, `mode`, `advocateId`, `userId`, `from`, `to`, `paidFrom`, `paidTo`, `search`, `page`, `limit`
-- **Response `200 OK`:** Full list of advocate bookings with user & advocate summaries, breakdown, payment links, and counts.
-
-#### 12. `GET /api/admin/advocate-bookings/:id`
-- **Auth:** Staff with `advocate_bookings:view`
-- **Response `200 OK`:** Complete detail, payment attempts, and event timeline.
-
----
-
-## 7. Status State Machine & Mappings
-
-### 7.1 Advocate Booking State Machine
+## 3. Architecture & Modular Adapter Design
 
 ```
-              +--------------+
-              |     HOLD     |
-              +--------------+
-                /     |     \
- (Hold expires /      |      \ (Payment captured
-  no payment) /       |       \  & slot free)
-             v        |        v
-      +-----------+   |   +---------------+
-      |  EXPIRED  |   |   |   CONFIRMED   |
-      +-----------+   |   +---------------+
-                      |      /         \
-       (Late payment  |     /           \ (Advocate marks
-        after hold    |    /             \  after startAt)
-        & slot taken) |   / (Admin        v
-                      v  v   refund)  +-----------+
-              +----------------+      | COMPLETED |
-              | REFUND_PENDING |      +-----------+
-              +----------------+            | (Admin force
-                      |                     |  refund)
-                      | (Refund processed)  v
-                      +------------> +----------+
-                                     | REFUNDED |
-                                     +----------+
++-------------------------------------------------------------------------------------------------+
+|                                 Advocate Auth Controller                                        |
+|             (POST /aadhaar/otp/generate  &  POST /aadhaar/otp/verify)                           |
++-------------------------------------------------------------------------------------------------+
+                                                |
+                                                v
++-------------------------------------------------------------------------------------------------+
+|                                  auth.service.js                                                |
+|   - 24h block & attempt check (max 3 attempts)                                                  |
+|   - 60s resend cooldown per registrationId                                                      |
+|   - Reference ID session binding                                                                |
+|   - Aadhaar last 4 cross-check on verify                                                        |
++-------------------------------------------------------------------------------------------------+
+                                                |
+                                                v
++-------------------------------------------------------------------------------------------------+
+|                              src/services/aadhaarOtp/index.js                                   |
+|   - Provider switch (AADHAAR_OTP_PROVIDER = 'idspay' | 'sandbox' | 'mock')                      |
+|   - Production safety guard (blocks 'mock' in NODE_ENV === 'production' with 503)               |
++-------------------------------------------------------------------------------------------------+
+                 |                                      |                                  |
+                 v                                      v                                  v
++---------------------------------+  +---------------------------------+  +-------------------------------+
+|      idspay.provider.js         |  |      sandbox.provider.js        |  |       mock.provider.js        |
+|  - Real IDSPay Auto-Verify      |  |  - Legacy Sandbox OKYC          |  |  - Mock test numbers          |
+|  - HTTP timeout 20s             |  |  - Marked @deprecated           |  |    (123456789012, etc.)       |
+|  - No mock bypass in live path  |  |  - Kept for rollback            |  |  - Test OTP 123456            |
++---------------------------------+  +---------------------------------+  +-------------------------------+
 ```
 
-### 7.2 User "My Bookings" Status Mapping
+### 3.1 Normalized Provider Interface
+Regardless of the active provider, `src/services/aadhaarOtp/index.js` returns uniform shapes:
 
-| Booking Status | `status` | `statusGroup` | `statusLabel` | `callStatus` |
+**Generate OTP:**
+```typescript
+type GenerateOtpResult = 
+  | { ok: true; referenceId: string }
+  | { ok: false; reason: 'INVALID_AADHAAR' | 'NO_MOBILE_LINKED' | 'RATE_LIMITED' | 'PROVIDER_ERROR'; providerMessage?: string }
+```
+
+**Verify OTP:**
+```typescript
+type VerifyOtpResult = 
+  | { 
+      ok: true; 
+      kyc: { 
+        fullName: string; 
+        dob: string; 
+        gender: string; 
+        aadhaarLast4: string; 
+        address: Record<string, any>; 
+        zip: string; 
+      } 
+    }
+  | { ok: false; reason: 'INVALID_OTP' | 'OTP_EXPIRED' | 'PROVIDER_ERROR'; providerMessage?: string }
+```
+
+### 3.2 IDSPay Provider Details (`idspay.provider.js`)
+- **Missing env check:** If any required env var (`IDSPAY_BASE_URL`, `IDSPAY_API_ID` / `IDSPAY_CLIENT_ID`, `IDSPAY_API_KEY`, `IDSPAY_TOKEN_ID`) is missing at request time, log error naming the missing var (name only) and return `{ ok: false, reason: 'PROVIDER_ERROR', providerMessage: 'Configuration missing' }` which maps to HTTP 503.
+- **Generate OTP:**
+  - POST to `{IDSPAY_BASE_URL}{IDSPAY_AADHAAR_OTP_PATH}`
+  - Payload: `{ api_id, api_key, token_id, methodName: 'getotp', aadhaar_no: aadhaarNumber }`
+  - Success condition: HTTP 200 AND `status.type === "success"` AND `data.data.otp_sent === true` AND `data.request_id` is present.
+  - Returns: `{ ok: true, referenceId: String(data.request_id) }`
+  - If `valid_aadhaar === false` -> `reason: 'INVALID_AADHAAR'`
+  - If `if_number === false` -> `reason: 'NO_MOBILE_LINKED'`
+  - Otherwise -> `reason: 'PROVIDER_ERROR'` (with `// TODO: refine with real failure samples`).
+- **Verify OTP:**
+  - POST to `{IDSPAY_BASE_URL}{IDSPAY_AADHAAR_OTP_PATH}`
+  - Payload: `{ api_id, api_key, token_id, methodName: 'validateotp', request_id: String(referenceId), otp: String(otp) }`
+  - Success condition: HTTP 200 AND `status.type === "success"` AND `data.full_name` is present.
+  - Returns: `{ ok: true, kyc: { fullName: data.full_name, dob: data.dob, gender: data.gender, aadhaarLast4: data.aadhaar_number?.slice(-4) || '', address: data.address || {}, zip: data.zip || '' } }`
+  - If not successful: Network/5xx/unparseable -> `reason: 'PROVIDER_ERROR'`. Other -> `reason: 'INVALID_OTP'` (with `// TODO: refine with real failure samples`).
+- **Timeout:** 20,000ms via Axios timeout. No automatic retries.
+
+### 3.3 Mock Safety & Complete Removal from Live Path
+- **Remove mock bypass from live code:** In `idspay.provider.js`, there is NO check for `123456789012`. All requests to `idspay.provider.js` proceed strictly through HTTP.
+- **Mock isolated in `mock.provider.js`:** Mock numbers live exclusively in `mock.provider.js`, triggered only when `AADHAAR_OTP_PROVIDER=mock`.
+- **Production Guard:** If `NODE_ENV === 'production'` and `AADHAAR_OTP_PROVIDER === 'mock'`, the adapter logs an alert at startup and immediately rejects any OTP call with HTTP 503 "Aadhaar mock verification is disabled in production."
+
+### 3.4 Resend Cooldown (60s)
+- Implemented in `auth.service.js` using an in-memory TTL map: `aadhaarOtpCooldowns = new Map<string, number>()`.
+- If `generateAadhaarOtpService` is invoked for the same `registrationId` within 60 seconds of the previous generation:
+  - Returns `HTTP 429` with:
+    ```json
+    {
+      "success": false,
+      "message": "Please wait before requesting another OTP.",
+      "retryAfterSeconds": 48
+    }
+    ```
+- This prevents spamming IDSPay and saves per-SMS costs.
+
+---
+
+## 4. Error Mapping to API (Frontend Contract)
+
+| Normalized reason | HTTP | Response Message | Counts as failed attempt? | Session Blocked? |
 |---|---|---|---|---|
-| HOLD + payment PROCESSING | `PAYMENT_PROCESSING` | `PROCESSING` | Payment processing – don't pay again | `PENDING` |
-| CONFIRMED | `CONFIRMED` | `UPCOMING` | Confirmed – the advocate will contact you | `PENDING` |
-| COMPLETED | `COMPLETED` | `COMPLETED` | Completed | `COMPLETED` |
-| REFUND_PENDING | `REFUND_IN_PROGRESS` | `REFUNDED` | Refund in progress | `CANCELLED` |
-| REFUNDED | `REFUNDED` | `REFUNDED` | Refunded | `CANCELLED` |
-
-*HOLD without processing payment and EXPIRED are filtered out from user's booking list.*
-
----
-
-## 8. Environment Variables
-
-Documented in `.env.example` and `README.md`:
-
-| Variable | Default Value | Description |
-|---|---|---|
-| `ADVOCATE_BOOKING_SLOT_MINUTES` | `15` | Default duration (mins) for voice & video call slots |
-| `ADVOCATE_IN_PERSON_MINUTES` | `60` | Default duration (mins) for in-person meeting slots |
-| `BOOKING_GST_PERCENT` | `18` | GST percentage applied to advocate booking fee only |
-| `BOOKING_PLATFORM_FEE` | `25` | Flat platform fee in INR (no GST applied to it) |
-| `ADVOCATE_BOOKING_MIN_LEAD_MINUTES` | `30` | Minimum lead time required before a slot can start |
-| `ADVOCATE_BOOKING_MAX_DAYS_AHEAD` | `30` | Maximum booking window into the future in days |
-| `ADVOCATE_BOOKING_HOLD_MINUTES` | `10` | Slot hold time while customer is on Razorpay payment checkout |
-| `ADVOCATE_BOOKING_ID_FORMAT` | `VLB-{YYYY}{MONTH_LETTER}{RAND6}` | Format template for confirmed advocate booking IDs |
-| `BOOKING_TIMEZONE` | `Asia/Kolkata` | Timezone for interpreting date filters and slot alignments |
+| `INVALID_AADHAAR` | 400 | Invalid Aadhaar Number or Aadhaar not registered. | **No** | No |
+| `NO_MOBILE_LINKED` | 400 | No mobile number is linked with this Aadhaar. Please use DigiLocker verification. | **No** | No |
+| `RATE_LIMITED` / Cooldown | 429 | Please wait before requesting another OTP. (+ `retryAfterSeconds`) | **No** | No |
+| `INVALID_OTP` | 400 | Invalid OTP. (+ `remainingAttempts`, `blocked`, `blockedUntil`) | **Yes** (increments `attempts`) | Yes if attempts >= 3 (24h block) |
+| `OTP_EXPIRED` | 400 | OTP expired. Please request a new OTP. | **No** | No |
+| `PROVIDER_ERROR` | 502 | Aadhaar verification service is temporarily unavailable. Please try again. | **No** | No |
+| Missing Env / Provider Config | 503 | Aadhaar verification is temporarily unavailable. | **No** | No |
 
 ---
 
-## 9. Potential Risks & Mitigations
+## 5. Files to Change
 
-1. **Risk:** Concurrency race condition where two users simultaneously checkout the same slot.
-   - **Mitigation:** Two-tier protection:
-     1. PostgreSQL row-level lock (`SELECT id FROM "Advocate" WHERE id = $1 FOR UPDATE`) serializes checkouts.
-     2. PostgreSQL exclusion constraint (`advocate_booking_no_overlap`) catches any overlapping confirmation.
-2. **Risk:** Customer pays right after the 10-minute hold expires, and another customer booked the slot in the meantime.
-   - **Mitigation:** In `syncPaymentFromRazorpay`, before confirming, the slot is re-checked. If taken, status moves to `REFUND_PENDING` with reason `SLOT_CONFLICT_AFTER_EXPIRY`, an automatic full refund is initiated via Razorpay, and the incident is logged. If still free, the late payment is honored and confirmed.
-3. **Risk:** Breaking consultancy payments or shared webhook logic.
-   - **Mitigation:** In `syncPaymentFromRazorpay`, strict branching on `payment.purpose`: if `CONSULTANCY`, the existing code runs untouched. Existing consultancy tests and verify routes remain intact.
-4. **Risk:** Migration replay failure on deployment.
-   - **Mitigation:** Strictly follow README Section 31: generate diff via `--script`, review for zero destructive actions, and execute `prisma migrate deploy`.
+1. **`src/services/aadhaarOtp/index.js`** (NEW): Provider selection, normalized contract, production safety guard.
+2. **`src/services/aadhaarOtp/idspay.provider.js`** (NEW): IDSPay auto-verification HTTP requests with defensive parsing.
+3. **`src/services/aadhaarOtp/sandbox.provider.js`** (NEW): Legacy Sandbox implementation moved and marked `@deprecated`.
+4. **`src/services/aadhaarOtp/mock.provider.js`** (NEW): Mock test numbers and OTP logic isolated here.
+5. **`src/services/auth.service.js`** (MODIFIED):
+   - Replace Sandbox calls in `generateAadhaarOtpService` and `verifyAadhaarOtpService` with calls to `aadhaarOtp` adapter.
+   - Add 60s cooldown check.
+   - Cross-check Aadhaar last 4 on verify.
+   - Map normalized error reasons to existing HTTP response schema.
+6. **`src/services/sandboxAadhaar.service.js`** (MODIFIED): Marked deprecated, re-exports from `src/services/aadhaarOtp` to avoid breaking any loose imports.
+7. **`.env.example`** (MODIFIED): Add placeholders for `IDSPAY_API_ID`, `IDSPAY_TOKEN_ID`, `IDSPAY_AADHAAR_OTP_PATH`, `AADHAAR_OTP_PROVIDER`, `AADHAAR_OTP_TIMEOUT_MS`.
+8. **`README.md`** (MODIFIED): Add **`## 33. Aadhaar OTP Verification (IDSPay) — Postman Guide`**.
+9. **Tests:**
+   - Unit tests for `idspay.provider.js` with stubbed Axios (no live calls).
+   - Service layer unit tests for `auth.service.js` (cooldown, error mapping, attempt counter, last 4 cross-check).
 
 ---
 
-## 10. Answers to OPEN QUESTIONS
+## 6. Request & Response Samples
 
-1. **Exclusion constraint: Does Neon support `btree_gist`?**
-   - **Answer & Recommendation:** **Yes, Neon PostgreSQL natively supports `btree_gist`**. Neon is compatible with standard PostgreSQL extensions. We recommend implementing **Option (a)**: the exclusion constraint `advocate_booking_no_overlap` in the migration SQL, combined with **Option (b)** row-locking `Advocate` during checkout/confirmation transactions for clean serialized application responses.
-2. **Advocate amount: Should the advocate see only their fee (default) or the full total?**
-   - **Answer & Recommendation:** **Show only their fee** (default). GST is remitted to the government and the ₹25 platform fee belongs to VakeelSetu. Showing the net advocate fee avoids confusion regarding payouts and earnings.
-3. **Same advocate: Should a user be allowed several future bookings with the same advocate?**
-   - **Answer & Recommendation:** **Yes, allowed**, provided the time slots do not overlap. Clients frequently require multiple consultations on different days.
-4. **`PAST_DUE`: Confirmed but not marked completed after the end time. Show it to the admin as a separate filter?**
-   - **Answer & Recommendation:** **Yes**. Adding `status=PAST_DUE` in admin filters allows operational staff to monitor advocates who have not fulfilled or completed their scheduled appointments.
-5. **Video calls: The advocate contacts the user (phone/WhatsApp video) for now, with no meeting link. OK?**
-   - **Answer & Recommendation:** **Yes, agreed**. The advocate receives the client's verified phone number and calls the client directly at the appointed time, adhering strictly to Business Decision #7.
+### 1. Generate Aadhaar OTP
+**`POST /api/auth/advocate/aadhaar/otp/generate`**
+```json
+{
+  "registrationId": "0536adf1-b64f-4f3d-bfb9-676d8f964486",
+  "aadhaar_number": "123456789012"
+}
+```
+**Success Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Aadhaar verification OTP sent successfully.",
+  "reference_id": "16746854"
+}
+```
+**Resend Within 60s (`429 Too Many Requests`):**
+```json
+{
+  "success": false,
+  "message": "Please wait before requesting another OTP.",
+  "retryAfterSeconds": 52
+}
+```
+
+### 2. Verify Aadhaar OTP
+**`POST /api/auth/advocate/aadhaar/otp/verify`**
+```json
+{
+  "registrationId": "0536adf1-b64f-4f3d-bfb9-676d8f964486",
+  "reference_id": "16746854",
+  "otp": "123456"
+}
+```
+**Success Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "aadhaarVerified": true,
+  "message": "Aadhaar verified successfully."
+}
+```
+**Invalid OTP Response (`400 Bad Request`):**
+```json
+{
+  "success": false,
+  "message": "Invalid OTP.",
+  "remainingAttempts": 2,
+  "blocked": false,
+  "blockedUntil": null
+}
+```
+
+---
+
+## 7. Risks & Mitigations
+
+1. **Failure Shapes Unknown:**
+   - *Risk:* IDSPay's failure response JSON structures for invalid OTP, expired OTP, and server errors are not yet documented.
+   - *Mitigation:* We code defensively. A response is treated as a success *only* when explicit HTTP 200, `status.type === "success"`, and the required payload keys exist. All non-successes map cleanly to `INVALID_OTP` (for verify) or `PROVIDER_ERROR` (for generate) until Postman failure samples are captured and refined.
+2. **PII & Logging Compliance:**
+   - *Risk:* Leaking plain Aadhaar numbers, OTPs, or customer names in server logs.
+   - *Mitigation:* Never log raw request/response bodies. Mask Aadhaar numbers as `XXXXXXXX1234`. Log only metadata: provider name, HTTP status, `status.type`, and `request_id`.
+3. **No Unintended Side Effects on DigiLocker Flow:**
+   - *Risk:* Touching `idspay.service.js` could break the DigiLocker redirect flow (`/aadhaar/initiate` and `/aadhaar/verify`).
+   - *Mitigation:* The DigiLocker flow in `idspay.service.js` remains 100% untouched. The new OTP code is housed in its own clean directory `src/services/aadhaarOtp/`.
+
+---
+
+## 8. Answers to Open Questions & Recommendations
+
+### Question 1: Aadhaar number storage — full or masked (last 4)?
+- **Current Behavior:** Full 12 digits stored in `RegistrationSession.aadhaarNumber` and `Advocate.aadhaarNumber`.
+- **Recommendation:**
+  - In Indian law (UIDAI Aadhaar Act regulations), storing full unencrypted 12-digit Aadhaar numbers without a licensed Aadhaar Data Vault is illegal.
+  - **Recommended Action:** Store masked format `XXXXXXXX1234` in `aadhaarNumber`. For uniqueness checks, store a one-way `SHA-256` hash of the 12 digits.
+  - **Decision:** Awaiting your confirmation. If you want zero database schema changes right now, we can continue saving the clean 12 digits in the existing text column, or mask it as `XXXXXXXX1234`.
+
+### Question 2: Name match — compare Aadhaar `full_name` with registered advocate name?
+- **Recommendation:** Do **not** block the registration flow automatically on a name mismatch. Legal names in India frequently differ in spelling or initials (e.g. "R. Sharma" vs "Rajesh Sharma").
+- Instead, simply calculate a similarity score (or log a warning) and store or surface it for the admin in the advocate approval panel (`AdvocateApprovalStatus`).
+
+### Question 3: Sandbox provider — keep or delete?
+- **Recommendation:** **Keep `sandbox.provider.js` marked `@deprecated`**.
+- It provides immediate fallback and reference without cluttering the active codebase, easily switchable via `AADHAAR_OTP_PROVIDER=sandbox`.
+
+### Question 4: Do existing IDSPay env vars belong to the same account/credentials as this new endpoint?
+- In `.env`, `IDSPAY_CLIENT_ID`, `IDSPAY_CLIENT_SECRET`, and `IDSPAY_API_KEY` are currently configured.
+- The new auto-verification endpoint requires `api_id`, `api_key`, and `token_id`.
+- If `api_id` matches `IDSPAY_CLIENT_ID` and `api_key` matches `IDSPAY_API_KEY`, they can be reused. However, `IDSPAY_TOKEN_ID` is new and must be provided in `.env`.
+- We will support explicit `IDSPAY_API_ID` with automatic fallback to `IDSPAY_CLIENT_ID`.
+
+---
+
+## 9. Current Database Host Notice
+
+Per instructions:
+> **Database Host:** `ep-weathered-hat-b47xszyr-pooler.c-6.us-east-2.aws.neon.tech` (Neon AWS Cloud PostgreSQL)
+> **Notice:** No live database modifications or test data will be created in this database. No live calls to IDSPay will be made prior to explicit approval.

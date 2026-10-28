@@ -7,7 +7,10 @@ import { finalizeAdvocateDeletion } from './advocateDeletion.service.js';
 import bcrypt from 'bcryptjs';
 import { encrypt, decrypt } from '../utils/crypto.js';
 import { initiateAadhaarDigiLocker, fetchAadhaarDetails } from './idspay.service.js';
-import { generateAadhaarOtpSandbox, verifyAadhaarOtpSandbox } from './sandboxAadhaar.service.js';
+import * as aadhaarOtp from './aadhaarOtp/index.js';
+
+// Cooldown map for Aadhaar OTP generation (60 seconds per registration session)
+const aadhaarOtpCooldowns = new Map();
 
 // Helper to check duplicates in both tables
 export const checkDuplicateEmail = async (email) => {
@@ -996,7 +999,7 @@ export const verifyAadhaarStatusService = async ({ registrationId, clientId }) =
   }
 };
 
-// Sandbox Aadhaar OTP Generate service
+// Aadhaar OTP Generate service
 export const generateAadhaarOtpService = async ({ registrationId, aadhaarNumber }) => {
   const session = await getValidSession(registrationId);
 
@@ -1039,40 +1042,77 @@ export const generateAadhaarOtpService = async ({ registrationId, aadhaarNumber 
     };
   }
 
+  // 60-second resend cooldown per registration session
+  const COOLDOWN_MS = 60 * 1000;
+  const lastGeneratedAt = aadhaarOtpCooldowns.get(registrationId);
+  if (lastGeneratedAt && (now.getTime() - lastGeneratedAt) < COOLDOWN_MS) {
+    const remainingSeconds = Math.ceil((COOLDOWN_MS - (now.getTime() - lastGeneratedAt)) / 1000);
+    const err = new Error('Please wait before requesting another OTP.');
+    err.statusCode = 429;
+    err.retryAfterSeconds = remainingSeconds;
+    throw err;
+  }
+
   const cleanAadhaar = aadhaarNumber.replace(/\s/g, '');
 
-  // Invoke Sandbox API
-  const response = await generateAadhaarOtpSandbox(cleanAadhaar);
+  // Invoke configured Aadhaar OTP provider
+  const result = await aadhaarOtp.generateOtp({ aadhaarNumber: cleanAadhaar });
 
-  const isSuccess = response && response.code === 200 && response.data && response.data.reference_id;
+  if (result.ok && result.referenceId) {
+    // Record cooldown timestamp
+    aadhaarOtpCooldowns.set(registrationId, now.getTime());
 
-  if (isSuccess) {
-    // Save details to session
+    // Save details to session (Aadhaar number stored full as today)
     await prisma.registrationSession.update({
       where: { id: registrationId },
       data: {
         aadhaarNumber: cleanAadhaar,
-        aadhaarVerificationId: String(response.data.reference_id),
+        aadhaarVerificationId: String(result.referenceId),
         aadhaarVerificationMethod: 'OTP'
       }
     });
 
     return {
       success: true,
-      message: response.data.message || 'OTP sent successfully',
-      reference_id: String(response.data.reference_id)
+      message: 'Aadhaar verification OTP sent successfully.',
+      reference_id: String(result.referenceId)
     };
   } else {
-    // Technical/validation failure from provider
-    const errorMsg = response?.message || 'Failed to generate Aadhaar OTP with Sandbox.';
-    const statusCode = response?.code || 502;
-    const err = new Error(errorMsg);
-    err.statusCode = statusCode >= 400 && statusCode < 600 ? statusCode : 502;
+    // Never log raw PII or expose provider internal payload to client
+    console.warn(`[Aadhaar OTP Generate Failed] Reason: ${result.reason}`);
+
+    if (result.isConfigMissing || result.statusCode === 503) {
+      const err = new Error('Aadhaar verification is temporarily unavailable.');
+      err.statusCode = 503;
+      throw err;
+    }
+
+    if (result.reason === 'INVALID_AADHAAR') {
+      const err = new Error('Invalid Aadhaar Number or Aadhaar not registered.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    if (result.reason === 'NO_MOBILE_LINKED') {
+      const err = new Error('No mobile number is linked with this Aadhaar. Please use DigiLocker verification.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    if (result.reason === 'RATE_LIMITED') {
+      const err = new Error('Too many OTP requests. Please try again later.');
+      err.statusCode = 429;
+      throw err;
+    }
+
+    // Default provider failure: do NOT increment failed attempts
+    const err = new Error('Aadhaar verification service is temporarily unavailable. Please try again.');
+    err.statusCode = 502;
     throw err;
   }
 };
 
-// Sandbox Aadhaar OTP Verify service
+// Aadhaar OTP Verify service
 export const verifyAadhaarOtpService = async ({ registrationId, reference_id, otp }) => {
   const session = await getValidSession(registrationId);
 
@@ -1094,19 +1134,28 @@ export const verifyAadhaarOtpService = async ({ registrationId, reference_id, ot
   }
 
   // Verify ID matches session's initiated verification ID
-  if (session.aadhaarVerificationId !== reference_id) {
-    const err = new Error('Invalid reference ID. Please initiate OTP generation first.');
+  if (!session.aadhaarVerificationId || session.aadhaarVerificationId !== reference_id) {
+    const err = new Error('Invalid or expired OTP session. Please request a new OTP.');
     err.statusCode = 400;
     throw err;
   }
 
-  // Invoke Sandbox API
-  const response = await verifyAadhaarOtpSandbox(reference_id, otp);
+  // Invoke configured Aadhaar OTP provider
+  const result = await aadhaarOtp.verifyOtp({ referenceId: reference_id, otp });
 
-  const statusStr = String(response?.data?.status || '').toUpperCase();
-  const isSuccess = response && response.code === 200 && (statusStr === 'VALID' || statusStr === 'SUCCESS' || statusStr === 'VERIFIED');
+  if (result.ok) {
+    // In-memory cross-check: verify last 4 digits of Aadhaar match the session
+    if (result.kyc?.aadhaarLast4 && session.aadhaarNumber) {
+      const sessionLast4 = session.aadhaarNumber.slice(-4);
+      if (result.kyc.aadhaarLast4 !== sessionLast4) {
+        console.warn(`[Aadhaar OTP Verify] Aadhaar last-4 mismatch for session ${registrationId}`);
+        const err = new Error('Aadhaar verification failed. Identity mismatch.');
+        err.statusCode = 400;
+        throw err;
+      }
+    }
 
-  if (isSuccess) {
+    // Save only what was saved today (no KYC fields stored)
     await prisma.registrationSession.update({
       where: { id: registrationId },
       data: {
@@ -1118,34 +1167,58 @@ export const verifyAadhaarOtpService = async ({ registrationId, reference_id, ot
       }
     });
 
+    // Clear cooldown for this session
+    aadhaarOtpCooldowns.delete(registrationId);
+
     return {
       success: true,
       aadhaarVerified: true,
       message: 'Aadhaar verified successfully.'
     };
   } else {
-    // Increment attempts
-    const newAttempts = session.aadhaarVerificationAttempts + 1;
-    const isBlocked = newAttempts >= 3;
-    const blockedUntil = isBlocked ? new Date(now.getTime() + 24 * 60 * 60 * 1000) : null;
+    // Log provider message at warn level without PII
+    console.warn(`[Aadhaar OTP Verify Failed] Reason: ${result.reason}`);
 
-    await prisma.registrationSession.update({
-      where: { id: registrationId },
-      data: {
-        aadhaarVerified: false,
-        aadhaarVerifiedAt: null,
-        aadhaarVerificationAttempts: newAttempts,
-        aadhaarBlockedUntil: blockedUntil
-      }
-    });
+    if (result.isConfigMissing || result.statusCode === 503) {
+      const err = new Error('Aadhaar verification is temporarily unavailable.');
+      err.statusCode = 503;
+      throw err;
+    }
 
-    const errorMsg = response?.message || 'Aadhaar verification failed.';
-    const statusCode = response?.code || 400;
-    const err = new Error(errorMsg);
-    err.statusCode = statusCode >= 400 && statusCode < 600 ? statusCode : 400;
-    err.remainingAttempts = Math.max(0, 3 - newAttempts);
-    err.blocked = isBlocked;
-    err.blockedUntil = blockedUntil;
+    if (result.reason === 'INVALID_OTP') {
+      // Increment attempts only for invalid OTP
+      const newAttempts = session.aadhaarVerificationAttempts + 1;
+      const isBlocked = newAttempts >= 3;
+      const blockedUntil = isBlocked ? new Date(now.getTime() + 24 * 60 * 60 * 1000) : null;
+
+      await prisma.registrationSession.update({
+        where: { id: registrationId },
+        data: {
+          aadhaarVerified: false,
+          aadhaarVerifiedAt: null,
+          aadhaarVerificationAttempts: newAttempts,
+          aadhaarBlockedUntil: blockedUntil
+        }
+      });
+
+      const err = new Error('Invalid OTP.');
+      err.statusCode = isBlocked ? 403 : 400;
+      err.remainingAttempts = Math.max(0, 3 - newAttempts);
+      err.blocked = isBlocked;
+      err.blockedUntil = blockedUntil;
+      throw err;
+    }
+
+    if (result.reason === 'OTP_EXPIRED') {
+      // Expired OTP does NOT count as a failed attempt
+      const err = new Error('OTP expired. Please request a new OTP.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    // Provider error / network timeout does NOT count as a failed attempt
+    const err = new Error('Aadhaar verification service is temporarily unavailable. Please try again.');
+    err.statusCode = 502;
     throw err;
   }
 };

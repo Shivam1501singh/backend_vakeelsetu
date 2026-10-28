@@ -12366,6 +12366,157 @@ Use this end-to-end workflow to verify all Advocate Booking features in Postman:
 2. Verify payment status updates to `REFUNDED` and booking status updates to `REFUNDED`.
 3. Verify the appointment now appears under `?filter=REFUNDED` in advocate appointments and `statusGroup: "CANCELLED"` in user My Bookings.
 
+---
+
+## 33. Aadhaar OTP Verification (IDSPay) — Postman Guide
+
+### 1. Overview & Architecture
+VakeelSetu supports two methods for advocate Aadhaar identity verification:
+1. **Aadhaar OTP Flow (Auto-Verification via IDSPay)**:
+   - User inputs their 12-digit Aadhaar number in the registration wizard.
+   - Backend calls IDSPay Auto-Verification (`/srv2/digital-kyc/aadhar/auto-verification` with `methodName: "getotp"`).
+   - UIDAI sends an SMS OTP directly to the mobile linked with that Aadhaar.
+   - User submits the 6-digit OTP along with the `reference_id`.
+   - Backend calls IDSPay with `methodName: "validateotp"` to verify identity.
+2. **DigiLocker Flow (IDSPay Digital KYC)**:
+   - Initiates a DigiLocker session via `POST /api/auth/advocate/aadhaar/initiate`.
+   - User authenticates via the DigiLocker consent portal and redirects back to complete verification via `POST /api/auth/advocate/aadhaar/verify`.
+
+> [!NOTE]
+> **Provider Notice:** UIDAI has officially discontinued Aadhaar Offline e-KYC (OKYC). Sandbox's `/kyc/aadhaar/okyc/otp` endpoint is deprecated and returns HTTP 410 Gone. The OTP flow is now powered by **IDSPay Auto-Verification**. The legacy `sandbox` provider code is retained only for reference and rollback.
+
+---
+
+### 2. Environment Variables & Provider Switching
+To configure the OTP verification provider:
+
+| Variable Name | Description | Example / Default |
+|---|---|---|
+| `AADHAAR_OTP_PROVIDER` | Active provider: `idspay`, `sandbox`, or `mock` | `idspay` |
+| `AADHAAR_OTP_TIMEOUT_MS` | HTTP timeout in milliseconds | `20000` |
+| `IDSPAY_BASE_URL` | Base API URL of IDSPay | `https://javabackend.idspay.in/api/v1/prod` |
+| `IDSPAY_API_ID` | Your IDSPay API ID | Set in `.env` / Vercel |
+| `IDSPAY_API_KEY` | Your IDSPay API Key | Set in `.env` / Vercel |
+| `IDSPAY_TOKEN_ID` | Your IDSPay Token ID | Set in `.env` / Vercel |
+| `IDSPAY_AADHAAR_OTP_PATH` | Path for auto-verification | `/srv2/digital-kyc/aadhar/auto-verification` |
+
+> [!IMPORTANT]
+> **Production Safety:** If `NODE_ENV=production` and `AADHAAR_OTP_PROVIDER=mock`, the backend logs a critical error on startup and rejects all OTP requests with `HTTP 503`. Mock testing is only permitted in local development and automated testing environments.
+
+---
+
+### 3. API Endpoints Reference
+
+#### Step 1: Generate Aadhaar OTP
+**`POST {{BACKEND_URL}}/api/auth/advocate/aadhaar/otp/generate`**
+
+**Request Body:**
+```json
+{
+  "registrationId": "0536adf1-b64f-4f3d-bfb9-676d8f964486",
+  "aadhaar_number": "123456789012"
+}
+```
+
+**Success Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Aadhaar verification OTP sent successfully.",
+  "reference_id": "16746854"
+}
+```
+
+**Cooldown Active (`429 Too Many Requests`):**
+```json
+{
+  "success": false,
+  "message": "Please wait before requesting another OTP.",
+  "retryAfterSeconds": 58
+}
+```
+
+---
+
+#### Step 2: Verify Aadhaar OTP
+**`POST {{BACKEND_URL}}/api/auth/advocate/aadhaar/otp/verify`**
+
+**Request Body:**
+```json
+{
+  "registrationId": "0536adf1-b64f-4f3d-bfb9-676d8f964486",
+  "reference_id": "16746854",
+  "otp": "123456"
+}
+```
+
+**Success Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "aadhaarVerified": true,
+  "message": "Aadhaar verified successfully."
+}
+```
+
+**Invalid OTP Response (`400 Bad Request`):**
+```json
+{
+  "success": false,
+  "message": "Invalid OTP.",
+  "remainingAttempts": 2,
+  "blocked": false,
+  "blockedUntil": null
+}
+```
+
+**Session Blocked After 3 Failed Attempts (`403 Forbidden`):**
+```json
+{
+  "success": false,
+  "message": "Aadhaar verification is temporarily blocked. Please try again after 24 hours.",
+  "remainingAttempts": 0,
+  "blocked": true,
+  "blockedUntil": "2026-10-29T14:30:00.000Z"
+}
+```
+
+---
+
+### 4. Normalized Error Mapping Matrix
+
+| Normalized Reason | HTTP Status | Response Message | Counts as Failed Attempt? |
+|---|---|---|---|
+| `INVALID_AADHAAR` | 400 | Invalid Aadhaar Number or Aadhaar not registered. | No |
+| `NO_MOBILE_LINKED` | 400 | No mobile number is linked with this Aadhaar. Please use DigiLocker verification. | No |
+| `RATE_LIMITED` / Cooldown | 429 | Please wait before requesting another OTP. (+ `retryAfterSeconds`) | No |
+| `INVALID_OTP` | 400 (403 on max) | Invalid OTP. (+ `remainingAttempts`, `blocked`, `blockedUntil`) | **Yes** |
+| `OTP_EXPIRED` | 400 | OTP expired. Please request a new OTP. | No |
+| `PROVIDER_ERROR` | 502 | Aadhaar verification service is temporarily unavailable. Please try again. | No |
+| Missing Env Var | 503 | Aadhaar verification is temporarily unavailable. | No |
+
+---
+
+### 5. Postman Testing Flow (Step-by-Step)
+1. **Start Advocate Registration:**
+   - Call `POST /api/auth/advocate/register/start` with email.
+   - Save the returned `registrationId`.
+2. **Generate Aadhaar OTP:**
+   - Call `POST /api/auth/advocate/aadhaar/otp/generate` with `{ "registrationId": "{{registrationId}}", "aadhaar_number": "123456789012" }`.
+   - Save the returned `reference_id`.
+3. **Verify Resend Cooldown:**
+   - Immediately invoke `POST /api/auth/advocate/aadhaar/otp/generate` again within 60s.
+   - Verify `429 Too Many Requests` with `retryAfterSeconds`.
+4. **Submit Invalid Reference ID:**
+   - Call `POST /api/auth/advocate/aadhaar/otp/verify` with `"reference_id": "invalid-ref"`.
+   - Verify `400 Bad Request` ("Invalid or expired OTP session. Please request a new OTP.").
+5. **Submit Wrong OTP:**
+   - Call `POST /api/auth/advocate/aadhaar/otp/verify` with `"otp": "000000"`.
+   - Verify `400 Bad Request` ("Invalid OTP.") and verify `remainingAttempts` drops to `2`.
+6. **Submit Valid OTP:**
+   - Call `POST /api/auth/advocate/aadhaar/otp/verify` with correct OTP.
+   - Verify `200 OK` with `{ "success": true, "aadhaarVerified": true }`.
+
 
 
 
