@@ -75,6 +75,13 @@ model RegistrationSession {
   country              String?
   latitude             Float?
   longitude            Float?
+
+  // Office location and photo collected at registration
+  officeAddress       String?
+  officePhotoUrl      String?
+  officePhotoPublicId String?
+  officeLatitude      Float?
+  officeLongitude     Float?
 }
 
 model OtpVerification {
@@ -266,12 +273,20 @@ model Advocate {
   latitude                 Float?
   longitude                Float?
 
-  // Office location and photo collected at profile completion
-  officePhotoUrl           String?
-  officePhotoPublicId      String?
-  officeLatitude           Float?
-  officeLongitude          Float?
-  officeLocationUpdatedAt  DateTime?
+  // Office location and photo collected at registration
+  officeAddress               String?
+  officePhotoUrl              String?
+  officePhotoPublicId         String?
+  officeLatitude              Float?
+  officeLongitude             Float?
+  officeLocationUpdatedAt     DateTime?
+
+  // Office change approval workflow
+  pendingOfficeChange         Json?
+  officeChangeStatus          String?
+  officeChangeRequestedAt     DateTime?
+  officeChangeReviewedAt      DateTime?
+  officeChangeRejectionReason String?
 
   savedBy                  SavedLawyer[]
   likes                    AdvocateLike[]

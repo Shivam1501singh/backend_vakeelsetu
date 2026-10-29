@@ -4,8 +4,16 @@ import {
   advocateProfileUpdateBaseSchema,
   validateOfficeCoordinates,
   genderSchema,
-  barCouncilIdSchema
+  barCouncilIdSchema,
+  officeAddressSchema
 } from './advocate.validator.js';
+
+export const rejectOfficeChangeSchema = z.object({
+  reason: z.string({ required_error: 'Rejection reason is required.' })
+    .trim()
+    .min(5, { message: 'Reason must be at least 5 characters.' })
+    .max(500, { message: 'Reason cannot exceed 500 characters.' })
+}).strict();
 
 export const adminApproveAdvocateSchema = z.object({
   approvalStatus: z.enum(['APPROVED', 'REJECTED']).optional(),
@@ -69,7 +77,8 @@ export const adminAdvocateProfileUpdateSchema = advocateProfileUpdateBaseSchema.
     .max(100, { message: 'Full name cannot exceed 100 characters.' })
     .optional(),
   gender: genderSchema.optional(),
-  barCouncilId: barCouncilIdSchema.optional()
+  barCouncilId: barCouncilIdSchema.optional(),
+  officeAddress: officeAddressSchema.optional().nullable()
 }).strict().superRefine(validateOfficeCoordinates).refine((data) => Object.keys(data).length > 0, {
   message: 'Provide at least one field to update.'
 });

@@ -216,7 +216,76 @@ export const advocateProfileUpdateBaseSchema = z.object({
   officeLongitude: officeLongitudeSchema
 });
 
-export const advocateProfileUpdateSchema = advocateProfileUpdateBaseSchema.strict().superRefine(validateOfficeCoordinates);
+export const officeAddressSchema = z.string({ required_error: 'Office address is required.' })
+  .trim()
+  .min(10, { message: 'Office address must be at least 10 characters.' })
+  .max(500, { message: 'Office address cannot exceed 500 characters.' });
+
+export const requiredOfficeLatitudeSchema = z.preprocess((val) => {
+  if (val === undefined || val === null) return val;
+  if (typeof val === 'number') return val;
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (trimmed === '') return NaN;
+    if (!/^-?\d+(\.\d+)?$/.test(trimmed)) return NaN;
+    return Number(trimmed);
+  }
+  return NaN;
+}, z.number({ required_error: 'officeLatitude is required.', invalid_type_error: 'officeLatitude must be a valid number.' })
+  .refine((n) => !Number.isNaN(n) && Number.isFinite(n), { message: 'officeLatitude must be a valid finite number.' })
+  .refine((n) => n >= -90 && n <= 90, { message: 'officeLatitude must be between -90 and 90.' })
+);
+
+export const requiredOfficeLongitudeSchema = z.preprocess((val) => {
+  if (val === undefined || val === null) return val;
+  if (typeof val === 'number') return val;
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (trimmed === '') return NaN;
+    if (!/^-?\d+(\.\d+)?$/.test(trimmed)) return NaN;
+    return Number(trimmed);
+  }
+  return NaN;
+}, z.number({ required_error: 'officeLongitude is required.', invalid_type_error: 'officeLongitude must be a valid number.' })
+  .refine((n) => !Number.isNaN(n) && Number.isFinite(n), { message: 'officeLongitude must be a valid finite number.' })
+  .refine((n) => n >= -180 && n <= 180, { message: 'officeLongitude must be between -180 and 180.' })
+);
+
+export const advocateRegistrationAddressSchema = z.object({
+  registrationId: z.string({ required_error: 'registrationId is required.' }).uuid({ message: 'Invalid registration session ID.' }),
+  pincode: pincodeSchema,
+  city: z.string({ required_error: 'City is required.' }).trim().min(2, { message: 'City must be at least 2 characters.' }).max(100),
+  state: z.string({ required_error: 'State is required.' }).trim().min(2, { message: 'State must be at least 2 characters.' }).max(100),
+  officeAddress: officeAddressSchema,
+  officeLatitude: requiredOfficeLatitudeSchema,
+  officeLongitude: requiredOfficeLongitudeSchema
+});
+
+export const advocateOfficeChangeSchema = z.object({
+  officeAddress: officeAddressSchema,
+  pincode: pincodeSchema,
+  city: z.string({ required_error: 'City is required.' }).trim().min(2, { message: 'City must be at least 2 characters.' }).max(100),
+  state: z.string({ required_error: 'State is required.' }).trim().min(2, { message: 'State must be at least 2 characters.' }).max(100),
+  officeLatitude: requiredOfficeLatitudeSchema,
+  officeLongitude: requiredOfficeLongitudeSchema
+});
+
+export const validateNoAddressOrOfficeFields = (data, ctx) => {
+  const disallowed = ['officeLatitude', 'officeLongitude', 'city', 'state', 'pincode', 'latitude', 'longitude'];
+  for (const field of disallowed) {
+    if (data[field] !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Office/address can't be changed here. Use the office change request.",
+        path: [field]
+      });
+    }
+  }
+};
+
+export const advocateProfileUpdateSchema = advocateProfileUpdateBaseSchema.strict()
+  .superRefine(validateNoAddressOrOfficeFields)
+  .superRefine(validateOfficeCoordinates);
 
 export const initiateAadhaarSchema = z.object({
   registrationId: z.string().uuid({ message: 'Invalid registration session ID.' }),

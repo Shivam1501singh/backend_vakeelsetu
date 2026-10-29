@@ -9,11 +9,13 @@ import {
   adminUpdateAdvocateStatusSchema,
   createStaffAccountSchema,
   updateStaffRolesSchema,
-  adminAdvocateProfileUpdateSchema
+  adminAdvocateProfileUpdateSchema,
+  rejectOfficeChangeSchema
 } from '../validators/admin.validator.js';
 import * as blogValidator from '../validators/blog.validator.js';
 import { getCurrentUserProfile } from '../services/auth.service.js';
 import { checkUserPermission } from '../services/rbac.service.js';
+import { deleteFromCloudinary } from '../services/cloudinary.service.js';
 
 /**
  * Admin / Staff Unified Login
@@ -669,11 +671,13 @@ export const listPendingAdvocates = async (req, res, next) => {
       city: adv.city,
       state: adv.state,
       pincode: adv.pincode,
+      officeAddress: adv.officeAddress ?? null,
       officePhotoUrl: adv.officePhotoUrl ?? null,
       officeLatitude: adv.officeLatitude ?? null,
       officeLongitude: adv.officeLongitude ?? null,
       officeLocationUpdatedAt: adv.officeLocationUpdatedAt ?? null,
       office: {
+        address: adv.officeAddress ?? null,
         photoUrl: adv.officePhotoUrl ?? null,
         latitude: adv.officeLatitude ?? null,
         longitude: adv.officeLongitude ?? null,
@@ -702,15 +706,21 @@ export const listPendingAdvocates = async (req, res, next) => {
  */
 export const formatAdvocateReviewData = (advocate) => {
   if (!advocate) return null;
-  const { passwordHash, aadhaarNumber, officePhotoPublicId, ...safeAdvocate } = advocate;
+  const { passwordHash, aadhaarNumber, officePhotoPublicId, pendingOfficeChange, ...safeAdvocate } = advocate;
 
   const officeLatitude = advocate.officeLatitude ?? null;
   const officeLongitude = advocate.officeLongitude ?? null;
   const officePhotoUrl = advocate.officePhotoUrl ?? null;
   const officeLocationUpdatedAt = advocate.officeLocationUpdatedAt ?? null;
+  const officeAddress = advocate.officeAddress ?? null;
   const officeMapUrl = (officeLatitude !== null && officeLongitude !== null)
     ? `https://www.google.com/maps?q=${officeLatitude},${officeLongitude}`
     : null;
+
+  const officeChange = advocate.officeChangeStatus ? {
+    status: advocate.officeChangeStatus,
+    requestedAt: advocate.officeChangeRequestedAt
+  } : null;
 
   return {
     ...safeAdvocate,
@@ -722,17 +732,20 @@ export const formatAdvocateReviewData = (advocate) => {
     accountStatus: advocate.status,
     callAvailability: advocate.callAvailability ?? false,
     likeCount: advocate._count?.likes ?? 0,
+    officeAddress,
     officeLatitude,
     officeLongitude,
     officePhotoUrl,
     officeLocationUpdatedAt,
     officeMapUrl,
     office: {
+      address: officeAddress,
       photoUrl: officePhotoUrl,
       latitude: officeLatitude,
       longitude: officeLongitude,
       updatedAt: officeLocationUpdatedAt
-    }
+    },
+    officeChange
   };
 };
 
@@ -786,11 +799,13 @@ export const listRejectedAdvocates = async (req, res, next) => {
       city: adv.city,
       state: adv.state,
       pincode: adv.pincode,
+      officeAddress: adv.officeAddress ?? null,
       officePhotoUrl: adv.officePhotoUrl ?? null,
       officeLatitude: adv.officeLatitude ?? null,
       officeLongitude: adv.officeLongitude ?? null,
       officeLocationUpdatedAt: adv.officeLocationUpdatedAt ?? null,
       office: {
+        address: adv.officeAddress ?? null,
         photoUrl: adv.officePhotoUrl ?? null,
         latitude: adv.officeLatitude ?? null,
         longitude: adv.officeLongitude ?? null,
@@ -917,6 +932,7 @@ export const updateAdvocateProfileByAdmin = async (req, res, next) => {
     if (validated.state !== undefined) updateData.state = validated.state;
     if (validated.city !== undefined) updateData.city = validated.city;
     if (validated.pincode !== undefined) updateData.pincode = validated.pincode;
+    if (validated.officeAddress !== undefined) updateData.officeAddress = validated.officeAddress;
 
     // Aliases
     if (validated.bio !== undefined) {
@@ -1358,4 +1374,288 @@ export const permanentDeleteAdvocate = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * List Office Change Requests (ADMIN / advocates:edit)
+ * GET /api/admin/advocates/office-changes?status=PENDING|APPROVED|REJECTED&page&limit&search
+ */
+export const listOfficeChangeRequests = async (req, res, next) => {
+  try {
+    const { status, search } = req.query;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const skip = (page - 1) * limit;
+
+    const requestedStatus = status ? status.toUpperCase() : 'PENDING';
+    const where = {};
+
+    if (requestedStatus !== 'ALL') {
+      where.officeChangeStatus = requestedStatus;
+    } else {
+      where.officeChangeStatus = { not: null };
+    }
+
+    if (search && search.trim()) {
+      const q = search.trim();
+      where.OR = [
+        { fullName: { contains: q, mode: 'insensitive' } },
+        { email: { contains: q, mode: 'insensitive' } },
+        { phone: { contains: q, mode: 'insensitive' } },
+        { barCouncilId: { contains: q, mode: 'insensitive' } }
+      ];
+    }
+
+    const [total, advocates, pendingCount, approvedCount, rejectedCount] = await Promise.all([
+      prisma.advocate.count({ where }),
+      prisma.advocate.findMany({
+        where,
+        orderBy: { officeChangeRequestedAt: 'desc' },
+        skip,
+        take: limit,
+        select: {
+          id: true,
+          fullName: true,
+          email: true,
+          phone: true,
+          barCouncilId: true,
+          profilePhotoUrl: true,
+          officeChangeStatus: true,
+          officeChangeRequestedAt: true,
+          officeChangeReviewedAt: true,
+          officeChangeRejectionReason: true
+        }
+      }),
+      prisma.advocate.count({ where: { officeChangeStatus: 'PENDING' } }),
+      prisma.advocate.count({ where: { officeChangeStatus: 'APPROVED' } }),
+      prisma.advocate.count({ where: { officeChangeStatus: 'REJECTED' } })
+    ]);
+
+    const data = advocates.map(adv => ({
+      advocate: {
+        id: adv.id,
+        name: adv.fullName,
+        fullName: adv.fullName,
+        email: adv.email,
+        phone: adv.phone,
+        barCouncilId: adv.barCouncilId,
+        barId: adv.barCouncilId,
+        profileImage: adv.profilePhotoUrl
+      },
+      requestedAt: adv.officeChangeRequestedAt,
+      reviewedAt: adv.officeChangeReviewedAt,
+      status: adv.officeChangeStatus,
+      rejectionReason: adv.officeChangeRejectionReason
+    }));
+
+    return res.status(200).json({
+      success: true,
+      data,
+      counts: {
+        PENDING: pendingCount,
+        APPROVED: approvedCount,
+        REJECTED: rejectedCount,
+        total: pendingCount + approvedCount + rejectedCount
+      },
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get Advocate Office Change Details (ADMIN / advocates:edit)
+ * GET /api/admin/advocates/:advocateId/office-change
+ */
+export const getAdvocateOfficeChangeDetails = async (req, res, next) => {
+  try {
+    const { advocateId } = req.params;
+
+    const advocate = await prisma.advocate.findUnique({
+      where: { id: advocateId }
+    });
+
+    if (!advocate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Advocate not found'
+      });
+    }
+
+    const currentLat = advocate.officeLatitude ?? null;
+    const currentLng = advocate.officeLongitude ?? null;
+    const currentOffice = {
+      officeAddress: advocate.officeAddress ?? null,
+      officePhotoUrl: advocate.officePhotoUrl ?? null,
+      officeLatitude: currentLat,
+      officeLongitude: currentLng,
+      officeMapUrl: (currentLat !== null && currentLng !== null)
+        ? `https://www.google.com/maps?q=${currentLat},${currentLng}`
+        : null,
+      city: advocate.city,
+      state: advocate.state,
+      pincode: advocate.pincode,
+      officeLocationUpdatedAt: advocate.officeLocationUpdatedAt ?? null
+    };
+
+    let requestedOffice = null;
+    if (advocate.pendingOfficeChange) {
+      const { officePhotoPublicId: _opId, ...safePending } = advocate.pendingOfficeChange;
+      const reqLat = safePending.officeLatitude ?? null;
+      const reqLng = safePending.officeLongitude ?? null;
+      requestedOffice = {
+        ...safePending,
+        officeMapUrl: (reqLat !== null && reqLng !== null)
+          ? `https://www.google.com/maps?q=${reqLat},${reqLng}`
+          : null
+      };
+    }
+
+    return res.status(200).json({
+      success: true,
+      status: advocate.officeChangeStatus,
+      requestedAt: advocate.officeChangeRequestedAt,
+      reviewedAt: advocate.officeChangeReviewedAt,
+      rejectionReason: advocate.officeChangeRejectionReason,
+      currentOffice,
+      requestedOffice
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Approve Advocate Office Change (ADMIN / advocates:edit)
+ * POST /api/admin/advocates/:advocateId/office-change/approve
+ */
+export const approveAdvocateOfficeChange = async (req, res, next) => {
+  try {
+    const { advocateId } = req.params;
+
+    const advocate = await prisma.advocate.findUnique({
+      where: { id: advocateId }
+    });
+
+    if (!advocate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Advocate not found'
+      });
+    }
+
+    if (advocate.officeChangeStatus !== 'PENDING' || !advocate.pendingOfficeChange) {
+      return res.status(409).json({
+        success: false,
+        message: 'No pending office change.'
+      });
+    }
+
+    const requested = advocate.pendingOfficeChange;
+    const oldLiveOfficePhotoPublicId = advocate.officePhotoPublicId;
+    const now = new Date();
+
+    const lat = typeof requested.officeLatitude === 'number' ? requested.officeLatitude : parseFloat(requested.officeLatitude);
+    const lng = typeof requested.officeLongitude === 'number' ? requested.officeLongitude : parseFloat(requested.officeLongitude);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.advocate.update({
+        where: { id: advocateId },
+        data: {
+          officeAddress: requested.officeAddress,
+          officePhotoUrl: requested.officePhotoUrl,
+          officePhotoPublicId: requested.officePhotoPublicId,
+          officeLatitude: lat,
+          officeLongitude: lng,
+          latitude: lat,
+          longitude: lng,
+          city: requested.city,
+          state: requested.state,
+          pincode: requested.pincode,
+          officeLocationUpdatedAt: now,
+          officeChangeStatus: 'APPROVED',
+          officeChangeReviewedAt: now,
+          pendingOfficeChange: null,
+          officeChangeRejectionReason: null
+        }
+      });
+    });
+
+    // Delete old live office photo from Cloudinary after commit
+    if (oldLiveOfficePhotoPublicId && oldLiveOfficePhotoPublicId !== requested.officePhotoPublicId) {
+      await deleteFromCloudinary(oldLiveOfficePhotoPublicId).catch((err) => {
+        console.error(`Failed to delete old live office photo ${oldLiveOfficePhotoPublicId} from Cloudinary:`, err.message);
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Office change approved successfully.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Reject Advocate Office Change (ADMIN / advocates:edit)
+ * POST /api/admin/advocates/:advocateId/office-change/reject
+ */
+export const rejectAdvocateOfficeChange = async (req, res, next) => {
+  try {
+    const { advocateId } = req.params;
+
+    const advocate = await prisma.advocate.findUnique({
+      where: { id: advocateId }
+    });
+
+    if (!advocate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Advocate not found'
+      });
+    }
+
+    if (advocate.officeChangeStatus !== 'PENDING' || !advocate.pendingOfficeChange) {
+      return res.status(409).json({
+        success: false,
+        message: 'No pending office change.'
+      });
+    }
+
+    const validated = rejectOfficeChangeSchema.parse(req.body);
+    const pendingPhotoPublicId = advocate.pendingOfficeChange?.officePhotoPublicId;
+    const now = new Date();
+
+    await prisma.advocate.update({
+      where: { id: advocateId },
+      data: {
+        officeChangeStatus: 'REJECTED',
+        officeChangeRejectionReason: validated.reason,
+        officeChangeReviewedAt: now,
+        pendingOfficeChange: null
+      }
+    });
+
+    // Delete pending office photo from Cloudinary after commit
+    if (pendingPhotoPublicId) {
+      await deleteFromCloudinary(pendingPhotoPublicId).catch((err) => {
+        console.error(`Failed to delete pending office photo ${pendingPhotoPublicId} from Cloudinary:`, err.message);
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Office change rejected.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 

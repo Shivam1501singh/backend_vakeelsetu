@@ -8,6 +8,7 @@ import bcrypt from 'bcryptjs';
 import { encrypt, decrypt } from '../utils/crypto.js';
 import { initiateAadhaarDigiLocker, fetchAadhaarDetails } from './idspay.service.js';
 import * as aadhaarOtp from './aadhaarOtp/index.js';
+import { uploadBufferToCloudinary, deleteFromCloudinary } from './cloudinary.service.js';
 
 // Cooldown map for Aadhaar OTP generation (60 seconds per registration session)
 const aadhaarOtpCooldowns = new Map();
@@ -142,7 +143,14 @@ export const getCurrentRegistrationSession = async (registrationId) => {
     aadhaarBlockedUntil: session.aadhaarBlockedUntil,
     aadhaarVerificationId: session.aadhaarVerificationId,
     aadhaarVerifiedAt: session.aadhaarVerifiedAt,
-    aadhaarNumber: session.aadhaarNumber ? (session.aadhaarNumber.includes(':') ? (decrypt(session.aadhaarNumber) || session.aadhaarNumber) : session.aadhaarNumber) : null
+    aadhaarNumber: session.aadhaarNumber ? (session.aadhaarNumber.includes(':') ? (decrypt(session.aadhaarNumber) || session.aadhaarNumber) : session.aadhaarNumber) : null,
+    city: session.city,
+    state: session.state,
+    pincode: session.pincode,
+    officeAddress: session.officeAddress,
+    officePhotoUrl: session.officePhotoUrl,
+    officeLatitude: session.officeLatitude,
+    officeLongitude: session.officeLongitude
   };
 };
 
@@ -248,6 +256,98 @@ export const completeProfileForRegistration = async ({ registrationId, city, sta
   });
 };
 
+// 4b. Save Address and Office Details for Advocate Registration Session (Multipart)
+export const saveAdvocateRegistrationOfficeDetails = async ({
+  registrationId,
+  pincode,
+  city,
+  state,
+  officeAddress,
+  officeLatitude,
+  officeLongitude,
+  file
+}) => {
+  const session = await getValidSession(registrationId);
+
+  if (session.accountType !== 'ADVOCATE') {
+    const err = new Error('Invalid account type for this operation.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (!session.emailVerified) {
+    const err = new Error('Please verify your email address before saving address and office details.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (!session.phoneVerified) {
+    const err = new Error('Please verify your phone number before saving address and office details.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Photo is required on first save; optional on subsequent update if session already has a photo
+  if (!file && (!session.officePhotoUrl || !session.officePhotoUrl.trim())) {
+    const err = new Error('Office photo is required.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  let photoUrl = session.officePhotoUrl;
+  let photoPublicId = session.officePhotoPublicId;
+  let oldPublicIdToDelete = null;
+
+  if (file) {
+    const uploaded = await uploadBufferToCloudinary(file.buffer);
+    photoUrl = uploaded.url;
+    if (session.officePhotoPublicId) {
+      oldPublicIdToDelete = session.officePhotoPublicId;
+    }
+    photoPublicId = uploaded.publicId;
+  }
+
+  try {
+    const lat = typeof officeLatitude === 'number' ? officeLatitude : parseFloat(officeLatitude);
+    const lng = typeof officeLongitude === 'number' ? officeLongitude : parseFloat(officeLongitude);
+
+    const updated = await prisma.registrationSession.update({
+      where: { id: session.id },
+      data: {
+        officeAddress: officeAddress.trim(),
+        officePhotoUrl: photoUrl,
+        officePhotoPublicId: photoPublicId,
+        officeLatitude: lat,
+        officeLongitude: lng,
+        latitude: lat,
+        longitude: lng,
+        city: city.trim(),
+        state: state.trim(),
+        pincode: pincode.trim()
+      }
+    });
+
+    if (oldPublicIdToDelete) {
+      await deleteFromCloudinary(oldPublicIdToDelete).catch(() => {});
+    }
+
+    return {
+      officeAddress: updated.officeAddress,
+      officePhotoUrl: updated.officePhotoUrl,
+      officeLatitude: updated.officeLatitude,
+      officeLongitude: updated.officeLongitude,
+      city: updated.city,
+      state: updated.state,
+      pincode: updated.pincode
+    };
+  } catch (dbError) {
+    if (file && photoPublicId) {
+      await deleteFromCloudinary(photoPublicId).catch(() => {});
+    }
+    throw dbError;
+  }
+};
+
 // 5. Send Phone OTP
 export const sendPhoneOtpForRegistration = async ({ registrationId, phone }) => {
   const session = await getValidSession(registrationId);
@@ -351,6 +451,27 @@ export const completeAdvocateRegistration = async ({
     throw new Error('Aadhaar verification is required to complete profile.');
   }
 
+  // Office details required from registration address step
+  const missingOfficeFields = [];
+  if (!session.officeAddress || !session.officeAddress.trim()) {
+    missingOfficeFields.push('officeAddress');
+  }
+  if (!session.officePhotoUrl || !session.officePhotoUrl.trim()) {
+    missingOfficeFields.push('officePhoto');
+  }
+  if (
+    session.officeLatitude === null || session.officeLatitude === undefined ||
+    session.officeLongitude === null || session.officeLongitude === undefined
+  ) {
+    missingOfficeFields.push('officeLocation');
+  }
+  if (missingOfficeFields.length > 0) {
+    const err = new Error('Please complete your address and office details.');
+    err.statusCode = 400;
+    err.missingFields = missingOfficeFields;
+    throw err;
+  }
+
   const cleanBarCouncilId = barCouncilId.trim();
   const cleanAadhaar = aadhaarNumber.replace(/\s/g, ''); // Strip spaces
 
@@ -385,6 +506,10 @@ export const completeAdvocateRegistration = async ({
       throw new Error('Bar Council ID already registered.');
     }
 
+    const finalState = session.state || (state ? state.trim() : '');
+    const finalCity = session.city || (city ? city.trim() : '');
+    const finalPincode = session.pincode || (pincode ? pincode.trim() : null);
+
     const createdAdvocate = await tx.advocate.create({
       data: {
         fullName: session.fullName,
@@ -397,14 +522,20 @@ export const completeAdvocateRegistration = async ({
         aadhaarNumber: cleanAadhaar,
         passwordHash,
         languagesSpoken,
-        state: state.trim(),
-        city: city.trim(),
-        pincode: pincode ? pincode.trim() : null,
+        state: finalState,
+        city: finalCity,
+        pincode: finalPincode,
         emailVerified: true,
         phoneVerified: true,
         isActive: true,
-        latitude: latitude !== undefined && latitude !== null ? parseFloat(latitude) : null,
-        longitude: longitude !== undefined && longitude !== null ? parseFloat(longitude) : null,
+        latitude: session.officeLatitude,
+        longitude: session.officeLongitude,
+        officeAddress: session.officeAddress,
+        officePhotoUrl: session.officePhotoUrl,
+        officePhotoPublicId: session.officePhotoPublicId,
+        officeLatitude: session.officeLatitude,
+        officeLongitude: session.officeLongitude,
+        officeLocationUpdatedAt: new Date(),
         about: about ? about.trim() : null,
         aadhaarVerified: session.aadhaarVerified,
         aadhaarVerificationId: session.aadhaarVerificationId,
@@ -415,7 +546,7 @@ export const completeAdvocateRegistration = async ({
       }
     });
 
-    // Delete registration session
+    // Delete registration session (does not delete Cloudinary office photo, which now belongs to the advocate)
     await tx.registrationSession.delete({
       where: { id: session.id }
     });

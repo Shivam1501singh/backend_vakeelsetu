@@ -4,6 +4,7 @@ import { signToken, sendTokenCookie, clearTokenCookie } from '../utils/jwt.js';
 import { uploadBufferToCloudinary } from '../services/cloudinary.service.js';
 import bcrypt from 'bcryptjs';
 import prisma from '../lib/prisma.js';
+import { validateUploadedPhoto } from './advocate.profile.controller.js';
 
 export const startRegistration = async (req, res, next) => {
   try {
@@ -143,6 +144,53 @@ export const verifyEmailOtp = async (req, res, next) => {
 
 export const completeProfile = async (req, res, next) => {
   try {
+    // If request contains barCouncilId or password and NOT officeAddress, support backward-compatible complete registration
+    if ((req.body?.barCouncilId || req.body?.password) && !req.body?.officeAddress && !req.file) {
+      return await completeRegistration(req, res, next);
+    }
+
+    // Validate uploaded photo file if present
+    if (req.file) {
+      const photoValidation = validateUploadedPhoto(req.file);
+      if (!photoValidation.valid) {
+        return res.status(photoValidation.status).json({
+          success: false,
+          message: photoValidation.message
+        });
+      }
+    }
+
+    const validated = advocateValidator.advocateRegistrationAddressSchema.parse(req.body);
+
+    const savedDetails = await authService.saveAdvocateRegistrationOfficeDetails({
+      registrationId: validated.registrationId,
+      pincode: validated.pincode,
+      city: validated.city,
+      state: validated.state,
+      officeAddress: validated.officeAddress,
+      officeLatitude: validated.officeLatitude,
+      officeLongitude: validated.officeLongitude,
+      file: req.file
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Address and office details saved.',
+      ...savedDetails
+    });
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message
+      });
+    }
+    next(error);
+  }
+};
+
+export const completeRegistration = async (req, res, next) => {
+  try {
     const validated = advocateValidator.completeAdvocateRegistrationSchema.parse(req.body);
 
     const advocate = await authService.completeAdvocateRegistration({
@@ -165,6 +213,19 @@ export const completeProfile = async (req, res, next) => {
       advocateId: advocate.id
     });
   } catch (error) {
+    if (error.missingFields) {
+      return res.status(error.statusCode || 400).json({
+        success: false,
+        message: error.message,
+        missingFields: error.missingFields
+      });
+    }
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message
+      });
+    }
     next(error);
   }
 };

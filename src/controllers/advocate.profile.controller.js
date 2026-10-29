@@ -1,12 +1,12 @@
 import prisma from '../lib/prisma.js';
-import { advocateProfileUpdateSchema } from '../validators/advocate.validator.js';
+import { advocateProfileUpdateSchema, advocateOfficeChangeSchema } from '../validators/advocate.validator.js';
 import { uploadBufferToCloudinary, deleteFromCloudinary } from '../services/cloudinary.service.js';
 import { computeEffectiveOnlineStatus } from '../utils/advocateStatus.js';
 
 /**
  * Shared validator for uploaded image files (profile photo, office photo).
  */
-const validateUploadedPhoto = (file) => {
+export const validateUploadedPhoto = (file) => {
   if (!file) {
     return { valid: false, status: 400, message: 'No photo file provided.' };
   }
@@ -30,14 +30,17 @@ export const formatOfficeDetails = (advocate) => {
   const latitude = advocate.officeLatitude ?? null;
   const longitude = advocate.officeLongitude ?? null;
   const updatedAt = advocate.officeLocationUpdatedAt ?? null;
+  const address = advocate.officeAddress ?? null;
 
   return {
     office: {
+      address,
       photoUrl,
       latitude,
       longitude,
       updatedAt
     },
+    officeAddress: address,
     officePhotoUrl: photoUrl,
     officeLatitude: latitude,
     officeLongitude: longitude,
@@ -70,14 +73,26 @@ export const getProfile = async (req, res, next) => {
     }
 
     // Exclude passwordHash, aadhaarNumber, and officePhotoPublicId
-    const { passwordHash, aadhaarNumber, officePhotoPublicId, ...safeAdvocate } = advocate;
+    const { passwordHash, aadhaarNumber, officePhotoPublicId, pendingOfficeChange, ...safeAdvocate } = advocate;
     const officeDetails = formatOfficeDetails(advocate);
+
+    const officeChange = advocate.officeChangeStatus ? {
+      status: advocate.officeChangeStatus,
+      requestedAt: advocate.officeChangeRequestedAt,
+      reviewedAt: advocate.officeChangeReviewedAt,
+      rejectionReason: advocate.officeChangeRejectionReason,
+      requested: advocate.pendingOfficeChange ? (() => {
+        const { officePhotoPublicId: _oppId, ...safePending } = advocate.pendingOfficeChange;
+        return safePending;
+      })() : null
+    } : null;
 
     return res.status(200).json({
       success: true,
       advocate: {
         ...safeAdvocate,
         ...officeDetails,
+        officeChange,
         isOnline: computeEffectiveOnlineStatus(advocate.isOnline, advocate.lastSeenAt),
         lastSeenAt: advocate.lastSeenAt,
         callAvailability: advocate.callAvailability ?? false,
@@ -162,25 +177,6 @@ export const submitForApproval = async (req, res, next) => {
       });
     }
 
-    // Check office details (office photo and office location required for submission)
-    const missingFields = [];
-    if (!advocate.officePhotoUrl || !advocate.officePhotoUrl.trim()) {
-      missingFields.push('officePhoto');
-    }
-    if (
-      advocate.officeLatitude === null || advocate.officeLatitude === undefined ||
-      advocate.officeLongitude === null || advocate.officeLongitude === undefined
-    ) {
-      missingFields.push('officeLocation');
-    }
-    if (missingFields.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please complete your office photo and office location before submitting for approval.',
-        missingFields
-      });
-    }
-
     // Submit / Resubmit for approval -> PENDING
     await prisma.advocate.update({
       where: { id: advocateId },
@@ -218,7 +214,7 @@ export const updateProfile = async (req, res, next) => {
 
     const allowedScalars = [
       'fullName', 'gender', 'barCouncilId', 'aadhaarNumber', 'email', 'about',
-      'completeAddress', 'offlineVisitingFee', 'state', 'city', 'pincode', 'casesHandled',
+      'completeAddress', 'offlineVisitingFee', 'casesHandled',
       'bestPracticeArea', 'topCourtPractised', 'practiceAreas'
     ];
 
@@ -261,30 +257,6 @@ export const updateProfile = async (req, res, next) => {
 
     if (validated.courtPractice !== undefined) {
       updateData.courtPractice = validated.courtPractice;
-    }
-
-    // Office location update (both sent together or both null to clear)
-    if (validated.officeLatitude !== undefined && validated.officeLongitude !== undefined) {
-      if (validated.officeLatitude === null && validated.officeLongitude === null) {
-        // Disallow clearing office location if already APPROVED
-        const currentAdvocate = await prisma.advocate.findUnique({
-          where: { id: req.user.id },
-          select: { approvalStatus: true }
-        });
-        if (currentAdvocate && currentAdvocate.approvalStatus === 'APPROVED') {
-          return res.status(400).json({
-            success: false,
-            message: 'Office location cannot be cleared once your profile is approved.'
-          });
-        }
-        updateData.officeLatitude = null;
-        updateData.officeLongitude = null;
-        updateData.officeLocationUpdatedAt = null;
-      } else {
-        updateData.officeLatitude = validated.officeLatitude;
-        updateData.officeLongitude = validated.officeLongitude;
-        updateData.officeLocationUpdatedAt = new Date();
-      }
     }
 
     const updatedAdvocate = await prisma.advocate.update({
@@ -385,10 +357,12 @@ export const uploadProfilePhoto = async (req, res, next) => {
 };
 
 /**
- * Upload office photo for advocate and cleanup old Cloudinary office image.
- * POST /api/advocate/profile/office-photo
+/**
+ * Request office details change for advocate (PUT /api/advocate/profile/office).
+ * - Non-approved advocate: applied directly to live fields.
+ * - Approved advocate: sent for admin approval via pendingOfficeChange.
  */
-export const uploadOfficePhoto = async (req, res, next) => {
+export const requestOfficeChange = async (req, res, next) => {
   try {
     if (!req.user || req.user.type !== 'advocate') {
       return res.status(403).json({
@@ -405,6 +379,8 @@ export const uploadOfficePhoto = async (req, res, next) => {
       });
     }
 
+    const validated = advocateOfficeChangeSchema.parse(req.body);
+
     const advocate = await prisma.advocate.findUnique({
       where: { id: req.user.id }
     });
@@ -416,42 +392,95 @@ export const uploadOfficePhoto = async (req, res, next) => {
       });
     }
 
-    const oldPublicId = advocate.officePhotoPublicId;
-
-    // Upload new office photo to Cloudinary
+    // Upload new live office photo to Cloudinary
     const { url, publicId } = await uploadBufferToCloudinary(req.file.buffer);
 
     try {
-      // Update DB with new office photo
-      const updatedAdvocate = await prisma.advocate.update({
-        where: { id: req.user.id },
-        data: {
+      if (advocate.approvalStatus !== 'APPROVED') {
+        // Non-approved advocate (draft / PENDING / REJECTED): apply directly to live fields
+        const oldPublicId = advocate.officePhotoPublicId;
+
+        const updatedAdvocate = await prisma.advocate.update({
+          where: { id: req.user.id },
+          data: {
+            officeAddress: validated.officeAddress,
+            officePhotoUrl: url,
+            officePhotoPublicId: publicId,
+            officeLatitude: validated.officeLatitude,
+            officeLongitude: validated.officeLongitude,
+            latitude: validated.officeLatitude,
+            longitude: validated.officeLongitude,
+            city: validated.city,
+            state: validated.state,
+            pincode: validated.pincode,
+            officeLocationUpdatedAt: new Date()
+          }
+        });
+
+        // Delete old live photo after DB commit
+        if (oldPublicId) {
+          await deleteFromCloudinary(oldPublicId).catch(() => {});
+        }
+
+        const { passwordHash, aadhaarNumber, officePhotoPublicId: _opId, pendingOfficeChange: _poc, ...safeAdvocate } = updatedAdvocate;
+        const officeDetails = formatOfficeDetails(updatedAdvocate);
+
+        return res.status(200).json({
+          success: true,
+          message: 'Office details updated.',
+          office: officeDetails.office,
+          advocate: {
+            ...safeAdvocate,
+            ...officeDetails,
+            type: 'advocate'
+          }
+        });
+      } else {
+        // Approved advocate: save to pendingOfficeChange for admin approval
+        const oldPendingPublicId = advocate.pendingOfficeChange?.officePhotoPublicId;
+
+        const requestedAt = new Date();
+        const pendingData = {
+          officeAddress: validated.officeAddress,
+          pincode: validated.pincode,
+          city: validated.city,
+          state: validated.state,
+          officeLatitude: validated.officeLatitude,
+          officeLongitude: validated.officeLongitude,
           officePhotoUrl: url,
           officePhotoPublicId: publicId
-        }
-      });
+        };
 
-      // DB update succeeded, delete old Cloudinary office image if it exists
-      if (oldPublicId) {
-        await deleteFromCloudinary(oldPublicId);
+        await prisma.advocate.update({
+          where: { id: req.user.id },
+          data: {
+            pendingOfficeChange: pendingData,
+            officeChangeStatus: 'PENDING',
+            officeChangeRequestedAt: requestedAt,
+            officeChangeRejectionReason: null
+          }
+        });
+
+        // Delete previous pending photo if one existed
+        if (oldPendingPublicId) {
+          await deleteFromCloudinary(oldPendingPublicId).catch(() => {});
+        }
+
+        const { officePhotoPublicId: _pId, ...safeRequested } = pendingData;
+
+        return res.status(200).json({
+          success: true,
+          message: 'Office change sent for admin approval.',
+          officeChange: {
+            status: 'PENDING',
+            requestedAt: requestedAt.toISOString(),
+            requested: safeRequested
+          }
+        });
       }
-
-      const { passwordHash, aadhaarNumber, officePhotoPublicId: _opId, ...safeAdvocate } = updatedAdvocate;
-      const officeDetails = formatOfficeDetails(updatedAdvocate);
-
-      return res.status(200).json({
-        success: true,
-        message: 'Office photo updated successfully',
-        officePhotoUrl: url,
-        advocate: {
-          ...safeAdvocate,
-          ...officeDetails,
-          type: 'advocate'
-        }
-      });
     } catch (dbError) {
-      // Clean up orphaned new image from Cloudinary
-      await deleteFromCloudinary(publicId);
+      // Clean up newly uploaded image from Cloudinary if DB update failed
+      await deleteFromCloudinary(publicId).catch(() => {});
       throw dbError;
     }
   } catch (error) {

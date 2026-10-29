@@ -162,6 +162,13 @@ export const finalizeAdvocateDeletion = async (advocateId) => {
         console.error(`Failed to delete office photo ${advocate.officePhotoPublicId} from Cloudinary:`, err.message);
       }
     }
+    if (advocate.pendingOfficeChange && advocate.pendingOfficeChange.officePhotoPublicId) {
+      try {
+        await deleteFromCloudinary(advocate.pendingOfficeChange.officePhotoPublicId);
+      } catch (err) {
+        console.error(`Failed to delete pending office photo ${advocate.pendingOfficeChange.officePhotoPublicId} from Cloudinary:`, err.message);
+      }
+    }
 
     return deletedRecord;
   });

@@ -385,59 +385,106 @@ Advocates can also tap **"Continue with Google"** / **"Continue with Gmail"** du
 - **Verify OTP:** `POST /api/auth/advocate/verify-phone`
   - Body: `{ "registrationId": "uuid-string", "otp": "123456" }`
 
-#### Steps 4 to 7: Submit Advocate Profile & Complete Registration
+#### Step 4: Address & Office Details (Multipart Form)
 - **Endpoint:** `POST /api/auth/advocate/profile`
 - **Authentication:** `registrationId` from session (not logged in yet)
+- **Content-Type:** `multipart/form-data`
 
-> **Note:** `country` is NOT required. This platform is specific to Indian legal services.
+> [!IMPORTANT]
+> The advocate's office is collected **once at registration** during this step. Exactly **one office** per advocate is supported.
+
+- **Request Fields (`multipart/form-data`):**
+
+  | Field | Type | Required | Description / Rules |
+  |---|---|---|---|
+  | `registrationId` | Text | Yes | Active session ID from Step 1. |
+  | `officeAddress` | Text | Yes | Physical office / chamber address (min 10, max 255 chars). |
+  | `pincode` | Text | Yes | Exactly 6 digits (`^[0-9]{6}$`). |
+  | `city` | Text | Yes | Min 2, max 100 chars (e.g. `"New Delhi"`). |
+  | `state` | Text | Yes | Valid Indian State or UT name (max 100 chars). |
+  | `officeLatitude` | Text / Number | Yes | Decimal coordinate (-90 to 90). |
+  | `officeLongitude` | Text / Number | Yes | Decimal coordinate (-180 to 180). |
+  | `officePhoto` | File | Yes* | Office photo (JPEG, PNG, WEBP, max 5MB). *Required on first save; optional on re-saves if photo was already uploaded. |
+
+- **Postman Configuration:**
+  - Method: `POST`
+  - URL: `{{BACKEND_URL}}/api/auth/advocate/profile`
+  - Body: Select **form-data**
+    - `registrationId` (Text): `{{registration_id}}`
+    - `officeAddress` (Text): `Chamber 402, Lawyers Chambers Block, Supreme Court of India`
+    - `pincode` (Text): `110001`
+    - `city` (Text): `New Delhi`
+    - `state` (Text): `Delhi`
+    - `officeLatitude` (Text): `28.6219`
+    - `officeLongitude` (Text): `77.2393`
+    - `officePhoto` (File): *Select image file (`.jpg`/`.png`/`.webp` ≤ 5MB)*
+
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "success": true,
+    "message": "Office and address details saved.",
+    "registrationId": "f7a3b4c2-9e8d-4f1a-b3c5-7d8e9f0a1b2c",
+    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1730000000/advocates/office_abc123.jpg"
+  }
+  ```
+
+---
+
+#### Step 5: Complete Advocate Registration
+- **Endpoint:** `POST /api/auth/advocate/register/complete` (or `POST /api/auth/advocate/profile` with `application/json`)
+- **Authentication:** `registrationId` from session
+- **Content-Type:** `application/json`
 
 - **Request Body:**
   ```json
   {
-    "registrationId": "uuid-string",
-    "barCouncilId": "MAH/1234/2024",
-    "aadhaarNumber": "123456789012",
+    "registrationId": "f7a3b4c2-9e8d-4f1a-b3c5-7d8e9f0a1b2c",
+    "barCouncilId": "D/1234/2024",
+    "aadhaarNumber": "987654321098",
     "password": "SecurePassword123",
     "languagesSpoken": ["Hindi", "English"],
-    "state": "Uttar Pradesh",
-    "city": "Ghaziabad",
-    "pincode": "201001",
-    "latitude": 28.6692,
-    "longitude": 77.4538
+    "state": "Delhi",
+    "city": "New Delhi",
+    "pincode": "110001"
   }
   ```
-- **Location Fields (Optional):**
-  - `latitude` — `number` (or float representation), representing the latitude coordinate of advocate's browser location.
-  - `longitude` — `number` (or float representation), representing the longitude coordinate of advocate's browser location.
 
-- **Location Field Validation:**
-  - `state` — Required, Indian State or Union Territory name, max 100 chars
-  - `city` — Required, min 2 chars, max 100 chars
-  - `pincode` — Required, **exactly 6 digits** (e.g. `201001`). Must match `^[0-9]{6}$`. Spaces, letters, and 5 or 7+ digit values are rejected.
-  - `country` — **Removed. Do not send.**
+> [!WARNING]
+> If Step 4 was skipped or office fields were not filled, registration completion fails with `400 Bad Request`:
+> ```json
+> {
+>   "success": false,
+>   "message": "Office address, office photo, and office coordinates are required before completing registration.",
+>   "missingFields": ["officeAddress", "officePhoto", "officeLocation"]
+> }
+> ```
 
-- **Response:**
+- **Registration Completion Side-Effects:**
+  - Office fields (`officeAddress`, `officePhotoUrl`, `officePhotoPublicId`, `officeLatitude`, `officeLongitude`, `officeLocationUpdatedAt`) are copied from session to the new `Advocate` record.
+  - Registration coordinates `latitude` and `longitude` are automatically set to `officeLatitude` and `officeLongitude`.
+  - Cloudinary public IDs are strictly protected and never leaked in API responses.
+
+- **Success Response (`200 OK`):**
   ```json
   {
     "success": true,
     "message": "Registration completed successfully.",
-    "advocateId": "advocate-uuid-string"
+    "advocateId": "c1f7b024-4f9e-4b42-8924-1b1574a23b32"
   }
   ```
 
-- **Postman Testing:**
+- **Postman Testing (Address & Office Step):**
 
-  | Test | Pincode | Expected |
-  |------|---------|----------|
-  | Valid | `201001` | `200 OK` |
-  | Too short | `20100` | `400 Bad Request` — Pincode must be exactly 6 digits |
-  | Too long | `2010011` | `400 Bad Request` — Pincode must be exactly 6 digits |
-  | Non-numeric | `ABC123` | `400 Bad Request` — Pincode must be exactly 6 digits |
-  | Mixed | `12345a` | `400 Bad Request` — Pincode must be exactly 6 digits |
-  | Missing city | send without `city` | `400 Bad Request` — validation failure |
-  | Sending country | send with `"country": "India"` | **Ignored** (not in schema) |
-
----
+  | Test | Condition | Expected Result |
+  |---|---|---|
+  | Valid Submission | All fields present, valid coordinates, valid image | `200 OK` with `officePhotoUrl` |
+  | Missing Photo First Time | No file attached and session has no photo | `400 Bad Request` — Office photo is required. |
+  | Address Too Short | `officeAddress` < 10 characters | `400 Bad Request` — Office address must be at least 10 characters. |
+  | Latitude Out of Range | `officeLatitude: 91` | `400 Bad Request` — officeLatitude must be between -90 and 90. |
+  | Missing One Coordinate | `officeLatitude` sent without `officeLongitude` | `400 Bad Request` — officeLongitude is required. |
+  | Invalid Pincode | `pincode: "1100"` | `400 Bad Request` — Pincode must be exactly 6 digits. |
+  | Session Resume | `GET /api/auth/advocate/register/session/:id` | Returns session with office fields; `officePhotoPublicId` omitted |
 
 ## 5. Google OAuth — Web and Mobile
 
@@ -7876,7 +7923,6 @@ To upload PDFs using Postman:
 | **CONSTITUTION OF INDIA** | 1950 | `c19a63d7-f0f4-46b7-8432-266bbfc8c867` | Constitutional Law | `sections: []`, `pdfs: 2` (Full Bare Act + Schedules) |
 | **ARBITRATION AND CONCILIATION ACT, 1996** | 1996 | `2be54269-7ad5-4a6c-bf71-057565598e76` | Arbitration & Alternative Dispute Resolution (ADR) | `sections: []`, `pdfs: 2` (Full Bare Act + Schedules) |
 | **THE INSOLVENCY AND BANKRUPTCY CODE, 2016** | 2016 | `0a6607a7-7698-428c-819b-1a6aed86e99a` | Insolvency, Banking, & Debt Recovery | `sections: []`, `pdfs: 2` (Full Bare Act + Schedules) |
-| **THE INDIAN PENAL CODE** | 1860 | `b071a92c-1868-48f5-9e5c-025dd75cfb82` | Criminal | `sections: []`, `pdfs: 1` (Full Bare Act) |
 
 ---
 
@@ -12519,20 +12565,28 @@ To configure the OTP verification provider:
 
 ---
 
-## 34. Advocate Office Photo & Office Location — Postman Guide
+## 34. Advocate Office & Office Change Request (One Office Per Advocate)
 
 ### 1. Overview & Architecture
-To support physical office verification and high-trust offline client appointments, advocates submit:
-1. An **Office Photo** (`officePhotoUrl`) — a clear photograph of their physical law office.
-2. An **Office Location** (`officeLatitude`, `officeLongitude`) — GPS coordinates or map pin where the advocate's office is physically located.
-
-> [!IMPORTANT]
-> **Office Location vs. Registration Location:**
-> - `latitude` and `longitude` (collected during registration Step 3) represent the advocate's residence / general practice region used for distance calculation and nearby directory sorting. They remain completely untouched.
-> - `officeLatitude` and `officeLongitude` are **new, dedicated fields** specifically marking the advocate's physical consultation chamber / office.
-> - Office data is collected at **profile completion**, after registration is finished and before the advocate clicks **"Submit for verification"**.
-> - Office data is shown to administrators in the approval verification panel.
-> - `officePhotoPublicId` is strictly internal and **never returned** in any client response.
+To maintain maximum data accuracy, single-source-of-truth office integrity, and physical verification:
+1. **One Office Per Advocate:** Exactly one office is supported per advocate.
+2. **Collected at Registration:** The advocate's office address (`officeAddress`), pincode (`pincode`), city (`city`), state (`state`), GPS coordinates (`officeLatitude`, `officeLongitude`), and physical photo (`officePhoto`) are collected during the **Registration Address Step** (`POST /api/auth/advocate/profile`).
+3. **Synchronized Geographic Coordinates:** When an advocate completes registration, `Advocate.latitude` and `Advocate.longitude` are synchronized with `officeLatitude` and `officeLongitude` for unified proximity queries.
+4. **Removed from Complete Profile:** Office and address fields can no longer be edited freely via standard profile updates:
+   - `POST /api/advocate/profile/office-photo` has been **removed (returns 404 Not Found)**.
+   - `PATCH /api/advocate/profile` strictly **rejects** all address and office fields (`city`, `state`, `pincode`, `officeAddress`, `officeLatitude`, `officeLongitude`, `latitude`, `longitude`) with `400 Bad Request`:
+     ```json
+     {
+       "success": false,
+       "message": "Office/address can't be changed here. Use the office change request."
+     }
+     ```
+   - Profile submission for verification (`POST /api/advocate/profile/submit-for-approval`) does not block legacy advocates who may not have office data populated.
+5. **Office Change Request Approval Flow:**
+   - **Non-Approved Advocates (`PENDING` / `REJECTED`):** Calling `PUT /api/advocate/profile/office` applies updates directly to the live advocate fields.
+   - **Approved Advocates (`APPROVED`):** Calling `PUT /api/advocate/profile/office` does **NOT** touch live advocate fields. Instead, it uploads the new office photo and saves the requested office fields in `Advocate.pendingOfficeChange` (JSON) with status `officeChangeStatus: 'PENDING'`. The advocate's live public profile remains unchanged until an administrator approves the request.
+   - **Re-requests:** If an advocate submits another office change while a previous request is still `PENDING`, the previous pending photo in Cloudinary is deleted, and the pending change object is completely overwritten.
+6. **Strict Asset Security:** Internal Cloudinary public IDs (`officePhotoPublicId`, `pendingOfficeChange.officePhotoPublicId`) are **never returned** in any client or admin API response.
 
 ---
 
@@ -12540,155 +12594,261 @@ To support physical office verification and high-trust offline client appointmen
 
 | Method | Endpoint | Access / Auth | Description |
 |---|---|---|---|
-| `POST` | `/api/advocate/profile/office-photo` | Advocate (`Bearer {{advocate_token}}`) | Uploads office photo (JPEG/PNG/WEBP <= 5MB) to Cloudinary. |
-| `PATCH` | `/api/advocate/profile` | Advocate (`Bearer {{advocate_token}}`) | Sets or updates `officeLatitude` & `officeLongitude` (both together). |
-| `GET` | `/api/advocate/profile` | Advocate (`Bearer {{advocate_token}}`) | Returns advocate's own profile including `office` object and flat office fields. |
-| `GET` | `/api/advocate/profile/verification-status` | Advocate (`Bearer {{advocate_token}}`) | Returns verification status / preview with office details. |
-| `POST` | `/api/advocate/profile/submit-for-approval` | Advocate (`Bearer {{advocate_token}}`) | Submits profile for admin review; requires `officePhoto` and `officeLocation`. |
-| `GET` | `/api/advocates/:id` | Public / Optional Auth | Returns public advocate details including `officeLatitude`, `officeLongitude`, and `officePhotoUrl`. |
-| `GET` | `/api/admin/advocates/pending` | Admin (`advocates:view`) | Lists pending advocates awaiting approval with office photo and coordinates. |
-| `GET` | `/api/admin/advocates/rejected` | Admin (`advocates:view`) | Lists rejected advocate applications with office data. |
-| `GET` | `/api/admin/advocates/:advocateId` | Admin (`advocates:view`) | Returns advocate review details including office data, timestamp, and clickable `officeMapUrl`. |
-| `PATCH` | `/api/admin/advocates/:advocateId/profile` | Admin (`advocates:edit`) | Allows administrators to edit `officeLatitude` and `officeLongitude`. |
+| `PUT` | `/api/advocate/profile/office` | Advocate (`Bearer {{advocate_token}}`) | Submit office change request (`multipart/form-data`). Applies directly if unapproved; queues as PENDING if approved. |
+| `GET` | `/api/advocate/profile` | Advocate (`Bearer {{advocate_token}}`) | Returns advocate's own profile including live office details and pending `officeChange` object (if pending). |
+| `GET` | `/api/advocates/:id` | Public / Optional Auth | Returns public advocate details including live `officeAddress`, `officeLatitude`, `officeLongitude`, `officePhotoUrl`. |
+| `GET` | `/api/admin/advocates/office-changes` | Admin (`advocates:view`) | Lists advocate office change requests (filterable by `?status=PENDING|APPROVED|REJECTED` and pagination). |
+| `GET` | `/api/admin/advocates/:advocateId/office-change` | Admin (`advocates:view`) | Returns side-by-side comparison of current vs requested office, including clickable Google Maps URLs. |
+| `POST` | `/api/admin/advocates/:advocateId/office-change/approve` | Admin (`advocates:edit`) | Approves pending office change, applies requested values to live fields, and deletes old live photo from Cloudinary. |
+| `POST` | `/api/admin/advocates/:advocateId/office-change/reject` | Admin (`advocates:edit`) | Rejects pending office change with a required reason (`reason` ≥ 5 chars) and cleans up the requested photo. |
 
 ---
 
-### 3. Postman Configuration: Office Photo Upload
-- **Method & URL:** `POST {{BACKEND_URL}}/api/advocate/profile/office-photo`
+### 3. Advocate: Request Office Change (`PUT /api/advocate/profile/office`)
+
+- **Method & URL:** `PUT {{BACKEND_URL}}/api/advocate/profile/office`
 - **Headers:**
   - `Authorization: Bearer {{advocate_token}}`
-- **Body:** Select **form-data**
-  - Key: `officePhoto` (change dropdown from `Text` to **`File`**)
-  - Value: Select a local JPG, JPEG, PNG, or WEBP image file (size ≤ 5MB)
+- **Body (`multipart/form-data`):**
 
-**Success Response (`200 OK`):**
+  | Key | Type | Required | Description / Rules |
+  |---|---|---|---|
+  | `officeAddress` | Text | Yes | New physical office address (min 10, max 255 chars). |
+  | `pincode` | Text | Yes | Exactly 6 digits (`^[0-9]{6}$`). |
+  | `city` | Text | Yes | Min 2, max 100 chars. |
+  | `state` | Text | Yes | Valid Indian State or UT name. |
+  | `officeLatitude` | Text / Number | Yes | New latitude coordinate (-90 to 90). |
+  | `officeLongitude` | Text / Number | Yes | New longitude coordinate (-180 to 180). |
+  | `officePhoto` | File | Yes | New office photograph (JPEG, JPG, PNG, WEBP ≤ 5MB). |
+
+#### 3.1 Response for Approved Advocate (Queued for Admin Review)
 ```json
 {
   "success": true,
-  "message": "Office photo updated successfully",
-  "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_abc123.jpg"
+  "message": "Office change request submitted for admin approval.",
+  "status": "PENDING",
+  "requestedOffice": {
+    "officeAddress": "Chamber 204, New High Court Wing, Sector 1",
+    "pincode": "110003",
+    "city": "New Delhi",
+    "state": "Delhi",
+    "officeLatitude": 28.5855,
+    "officeLongitude": 77.2285,
+    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1730000000/advocates/office_new123.jpg"
+  }
 }
 ```
 
----
-
-### 4. Postman Configuration: Office Coordinates (Location)
-- **Method & URL:** `PATCH {{BACKEND_URL}}/api/advocate/profile`
-- **Headers:**
-  - `Authorization: Bearer {{advocate_token}}`
-  - `Content-Type: application/json`
-- **Body:** Select **raw (JSON)**
-```json
-{
-  "officeLatitude": 28.6304,
-  "officeLongitude": 77.2177
-}
-```
-
-> [!NOTE]
-> Numeric strings (e.g. `"28.6304"`, `"77.2177"`) from mobile device form-data are automatically parsed. Both coordinates must be sent together.
-
-**Success Response (`200 OK`):**
+#### 3.2 Response for Unapproved Advocate (Direct Live Update)
 ```json
 {
   "success": true,
-  "message": "Profile updated successfully",
+  "message": "Office details updated successfully.",
   "advocate": {
     "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
-    "fullName": "Advocate Rajesh Sharma",
-    "officeLatitude": 28.6304,
-    "officeLongitude": 77.2177,
-    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_abc123.jpg",
-    "officeLocationUpdatedAt": "2026-10-28T13:15:00.000Z",
-    "office": {
-      "photoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_abc123.jpg",
-      "latitude": 28.6304,
-      "longitude": 77.2177,
-      "updatedAt": "2026-10-28T13:15:00.000Z"
-    },
-    "officeDetailsComplete": true,
-    "type": "advocate"
+    "officeAddress": "Chamber 204, New High Court Wing, Sector 1",
+    "pincode": "110003",
+    "city": "New Delhi",
+    "state": "Delhi",
+    "officeLatitude": 28.5855,
+    "officeLongitude": 77.2285,
+    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1730000000/advocates/office_new123.jpg",
+    "officeLocationUpdatedAt": "2026-10-29T10:00:00.000Z"
   }
 }
 ```
 
 ---
 
-### 5. Sample Responses
+### 4. Admin: Reviewing & Deciding Office Changes
 
-#### 5.1 Own Profile (`GET /api/advocate/profile`)
+#### 4.1 List Office Change Requests (`GET /api/admin/advocates/office-changes`)
+- **Query Parameters (Optional):**
+  - `status`: Filter by `PENDING` (default), `APPROVED`, `REJECTED`, or `ALL`
+  - `page`: Page number (default: `1`)
+  - `limit`: Items per page (default: `20`, max: `100`)
+- **Headers:** `Authorization: Bearer {{admin_token}}`
+
+**Sample Response (`200 OK`):**
 ```json
 {
   "success": true,
-  "advocate": {
-    "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
+  "requests": [
+    {
+      "advocateId": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
+      "fullName": "Advocate Rajesh Sharma",
+      "email": "rajesh.adv@example.com",
+      "phone": "9876543210",
+      "barCouncilId": "D/1234/2015",
+      "approvalStatus": "APPROVED",
+      "officeChangeStatus": "PENDING",
+      "officeChangeRequestedAt": "2026-10-29T09:45:00.000Z",
+      "currentOffice": {
+        "officeAddress": "Old Chamber 12, High Court Complex",
+        "city": "New Delhi",
+        "state": "Delhi",
+        "pincode": "110001",
+        "officeLatitude": 28.6139,
+        "officeLongitude": 77.2090,
+        "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_old.jpg"
+      },
+      "requestedOffice": {
+        "officeAddress": "Chamber 204, New High Court Wing, Sector 1",
+        "city": "New Delhi",
+        "state": "Delhi",
+        "pincode": "110003",
+        "officeLatitude": 28.5855,
+        "officeLongitude": 77.2285,
+        "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1730000000/advocates/office_new123.jpg"
+      }
+    }
+  ],
+  "pagination": {
+    "total": 1,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 1
+  },
+  "counts": {
+    "pending": 1,
+    "approved": 5,
+    "rejected": 2
+  }
+}
+```
+
+#### 4.2 Detail View: Side-by-Side Comparison (`GET /api/admin/advocates/:advocateId/office-change`)
+- **Headers:** `Authorization: Bearer {{admin_token}}`
+
+**Sample Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "officeChange": {
+    "advocateId": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
     "fullName": "Advocate Rajesh Sharma",
     "email": "rajesh.adv@example.com",
     "phone": "9876543210",
     "barCouncilId": "D/1234/2015",
-    "profilePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/profile_avatar.jpg",
-    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_law_chamber.jpg",
-    "officeLatitude": 28.6304,
-    "officeLongitude": 77.2177,
-    "officeLocationUpdatedAt": "2026-10-28T13:15:00.000Z",
-    "office": {
-      "photoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_law_chamber.jpg",
-      "latitude": 28.6304,
-      "longitude": 77.2177,
-      "updatedAt": "2026-10-28T13:15:00.000Z"
+    "approvalStatus": "APPROVED",
+    "status": "PENDING",
+    "requestedAt": "2026-10-29T09:45:00.000Z",
+    "reviewedAt": null,
+    "rejectionReason": null,
+    "current": {
+      "officeAddress": "Old Chamber 12, High Court Complex",
+      "pincode": "110001",
+      "city": "New Delhi",
+      "state": "Delhi",
+      "officeLatitude": 28.6139,
+      "officeLongitude": 77.2090,
+      "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_old.jpg",
+      "mapUrl": "https://www.google.com/maps?q=28.6139,77.209"
     },
-    "officeDetailsComplete": true,
-    "approvalStatus": "PENDING",
-    "accountStatus": "ACTIVE",
-    "type": "advocate"
+    "requested": {
+      "officeAddress": "Chamber 204, New High Court Wing, Sector 1",
+      "pincode": "110003",
+      "city": "New Delhi",
+      "state": "Delhi",
+      "officeLatitude": 28.5855,
+      "officeLongitude": 77.2285,
+      "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1730000000/advocates/office_new123.jpg",
+      "mapUrl": "https://www.google.com/maps?q=28.5855,77.2285"
+    }
   }
 }
 ```
 
-#### 5.2 Public Profile (`GET /api/advocates/:id`)
+#### 4.3 Approve Office Change (`POST /api/admin/advocates/:advocateId/office-change/approve`)
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+- **Actions performed by server:**
+  1. Copies `requested` fields (`officeAddress`, `pincode`, `city`, `state`, `officeLatitude`, `officeLongitude`, `officePhotoUrl`, `officePhotoPublicId`) directly to live advocate fields.
+  2. Updates `latitude` and `longitude` to match the new office coordinates.
+  3. Sets `officeLocationUpdatedAt: new Date()`.
+  4. Deletes the previous live office photo from Cloudinary.
+  5. Clears `pendingOfficeChange` and sets `officeChangeStatus = 'APPROVED'`, `officeChangeReviewedAt = new Date()`.
+
+**Sample Response (`200 OK`):**
 ```json
 {
   "success": true,
+  "message": "Advocate office change approved successfully.",
   "advocate": {
     "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
     "fullName": "Advocate Rajesh Sharma",
-    "profilePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/profile_avatar.jpg",
-    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_law_chamber.jpg",
-    "officeLatitude": 28.6304,
-    "officeLongitude": 77.2177,
-    "office": {
-      "photoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_law_chamber.jpg",
-      "latitude": 28.6304,
-      "longitude": 77.2177,
-      "updatedAt": "2026-10-28T13:15:00.000Z"
-    },
+    "officeAddress": "Chamber 204, New High Court Wing, Sector 1",
+    "pincode": "110003",
     "city": "New Delhi",
     "state": "Delhi",
-    "experienceYears": 9,
-    "approvalStatus": "APPROVED"
+    "officeLatitude": 28.5855,
+    "officeLongitude": 77.2285,
+    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1730000000/advocates/office_new123.jpg",
+    "officeChangeStatus": "APPROVED"
   }
 }
 ```
 
-#### 5.3 Admin Review Profile (`GET /api/admin/advocates/:advocateId`)
+#### 4.4 Reject Office Change (`POST /api/admin/advocates/:advocateId/office-change/reject`)
+- **Headers:**
+  - `Authorization: Bearer {{admin_token}}`
+  - `Content-Type: application/json`
+- **Body (`raw JSON`):**
+  ```json
+  {
+    "reason": "The uploaded office photograph does not match the provided chamber address."
+  }
+  ```
+- **Actions performed by server:**
+  1. Keeps current live office fields completely intact.
+  2. Deletes the requested office photo from Cloudinary.
+  3. Clears `pendingOfficeChange` and sets `officeChangeStatus = 'REJECTED'`, `officeChangeRejectionReason = reason`, `officeChangeReviewedAt = new Date()`.
+
+**Sample Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Advocate office change request rejected.",
+  "advocateId": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
+  "officeChangeStatus": "REJECTED",
+  "rejectionReason": "The uploaded office photograph does not match the provided chamber address."
+}
+```
+
+---
+
+### 5. Advocate: Own Profile View (`GET /api/advocate/profile`)
+When an advocate with a pending office change views their profile, the response contains both their active `office` and the pending `officeChange`:
+
 ```json
 {
   "success": true,
   "advocate": {
     "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
     "fullName": "Advocate Rajesh Sharma",
-    "barCouncilId": "D/1234/2015",
-    "approvalStatus": "PENDING",
-    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_law_chamber.jpg",
-    "officeLatitude": 28.6304,
-    "officeLongitude": 77.2177,
-    "officeLocationUpdatedAt": "2026-10-28T13:15:00.000Z",
-    "officeMapUrl": "https://www.google.com/maps?q=28.6304,77.2177",
+    "officeAddress": "Old Chamber 12, High Court Complex",
+    "officeLatitude": 28.6139,
+    "officeLongitude": 77.2090,
+    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_old.jpg",
     "office": {
-      "photoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_law_chamber.jpg",
-      "latitude": 28.6304,
-      "longitude": 77.2177,
+      "address": "Old Chamber 12, High Court Complex",
+      "photoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_old.jpg",
+      "latitude": 28.6139,
+      "longitude": 77.2090,
       "updatedAt": "2026-10-28T13:15:00.000Z"
+    },
+    "officeChange": {
+      "status": "PENDING",
+      "requestedAt": "2026-10-29T09:45:00.000Z",
+      "requestedOffice": {
+        "officeAddress": "Chamber 204, New High Court Wing, Sector 1",
+        "pincode": "110003",
+        "city": "New Delhi",
+        "state": "Delhi",
+        "officeLatitude": 28.5855,
+        "officeLongitude": 77.2285,
+        "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1730000000/advocates/office_new123.jpg"
+      }
     }
   }
 }
@@ -12696,49 +12856,73 @@ To support physical office verification and high-trust offline client appointmen
 
 ---
 
-### 6. Normalized Error Reference Table
+### 6. Error Reference Table
 
-| Case | Status | Message | Details |
-|---|---|---|---|
-| No file attached | `400 Bad Request` | `No photo file provided.` | File multipart field missing in request. |
-| Wrong file format | `400 Bad Request` | `Invalid file format. Only JPEG, JPG, PNG, and WEBP images are allowed.` | E.g. PDF, GIF, TXT uploaded. |
-| File > 5MB | `400 Bad Request` | `File size exceeds the 5MB limit.` | Uploaded file size exceeds 5,242,880 bytes. |
-| Only lat or only lng | `400 Bad Request` | `officeLatitude and officeLongitude must be sent together.` | One coordinate sent without the other. |
-| Out of range / Not a number | `400 Bad Request` | `officeLatitude must be between -90 and 90.` / `officeLongitude must be between -180 and 180.` / `...must be a valid number.` | Coordinates outside geographic boundaries or non-numeric (`"abc"`). |
-| Submit without office photo/location | `400 Bad Request` | `Please complete your office photo and office location before submitting for approval.` | Returns `missingFields: ["officePhoto", "officeLocation"]`. |
-| Non-advocate token | `403 Forbidden` | `Access forbidden. Advocate role required.` | Token belongs to user or admin role instead of advocate. |
-| No token provided | `401 Unauthorized` | `Authentication token is missing.` | Missing or malformed `Authorization` header. |
+| Status | Error Condition | Message |
+|---|---|---|
+| `400 Bad Request` | Address / office field passed to `PATCH /api/advocate/profile` | `Office/address can't be changed here. Use the office change request.` |
+| `400 Bad Request` | Missing required office file in `PUT /api/advocate/profile/office` | `Office photo is required.` |
+| `400 Bad Request` | Invalid image mime type (e.g. PDF/TXT) | `Invalid file format. Only JPEG, JPG, PNG, and WEBP images are allowed.` |
+| `400 Bad Request` | File size > 5MB | `File size exceeds the 5MB limit.` |
+| `400 Bad Request` | Short office address (< 10 chars) | `Office address must be at least 10 characters.` |
+| `400 Bad Request` | Latitude out of bounds (`> 90` or `< -90`) | `officeLatitude must be between -90 and 90.` |
+| `400 Bad Request` | Longitude out of bounds (`> 180` or `< -180`) | `officeLongitude must be between -180 and 180.` |
+| `400 Bad Request` | Pincode not 6 digits | `Pincode must be exactly 6 digits.` |
+| `400 Bad Request` | Rejection reason too short (< 5 chars) | `Reason must be at least 5 characters.` |
+| `403 Forbidden` | Non-admin calls admin office-changes endpoints | `Access forbidden. Insufficient permissions.` |
+| `404 Not Found` | Accessing removed endpoint `POST /api/advocate/profile/office-photo` | `Route not found - /api/advocate/profile/office-photo` |
+| `404 Not Found` | Advocate ID not found or has no pending request on detail view | `No office change request found for this advocate.` |
+| `409 Conflict` | Admin calls approve/reject when status is not `PENDING` | `This advocate does not have a pending office change request.` |
 
 ---
 
-### 7. Postman End-to-End Testing Flow
+### 7. Step-by-Step Postman Testing Flow
 
 ```text
-Step 1: Advocate Login ──> Step 2: Upload Office Photo ──> Step 3: PATCH Coordinates ──> Step 4: GET Profile (Verify) ──> Step 5: Submit for Approval ──> Step 6: Admin Review (Verify Map & Photo)
+[Registration Address Step]
+POST /api/auth/advocate/profile (multipart: address + coords + photo)
+           │
+           ▼
+[Complete Registration]
+POST /api/auth/advocate/register/complete (coords & office synced to live Advocate)
+           │
+           ▼
+[Advocate Requests Office Change]
+PUT /api/advocate/profile/office (multipart: new office details)
+   ├─ If PENDING advocate ────> Direct update to live fields
+   └─ If APPROVED advocate ───> Queued as PENDING in pendingOfficeChange
+           │
+           ▼
+[Admin Review & Decision]
+GET  /api/admin/advocates/office-changes (List queue)
+GET  /api/admin/advocates/:advocateId/office-change (Side-by-side comparison + map URLs)
+   ├─ POST .../approve ───> Live fields updated, old photo deleted from Cloudinary
+   └─ POST .../reject  ───> Live fields unchanged, requested photo deleted from Cloudinary
 ```
 
-1. **Advocate Login:**
-   - Call `POST /api/auth/advocate/login/otp/verify` (or password login).
-   - Set environment variable `{{advocate_token}}` from response.
-2. **Upload Office Photo:**
-   - Call `POST /api/advocate/profile/office-photo` with form-data file key `officePhoto`.
-   - Verify `200 OK` and save returned `officePhotoUrl`.
-3. **Set Office Location Coordinates:**
-   - Call `PATCH /api/advocate/profile` with `{ "officeLatitude": 28.6304, "officeLongitude": 77.2177 }`.
-   - Verify `200 OK` with `officeDetailsComplete: true`.
-4. **Fetch Own Profile:**
-   - Call `GET /api/advocate/profile`.
-   - Verify `office` object has `photoUrl`, `latitude`, `longitude`, `updatedAt`.
-5. **Submit for Verification:**
-   - Call `POST /api/advocate/profile/submit-for-approval`.
-   - Verify `200 OK` ("Your profile has been submitted for admin approval").
-6. **Admin Login & Pending Verification:**
-   - Login as Admin via `POST /api/admin/login` to obtain `{{admin_token}}`.
-   - Call `GET /api/admin/advocates/pending`. Verify advocate appears in queue with office photo and coordinates.
-   - Call `GET /api/admin/advocates/{{advocate_id}}`. Verify `officeMapUrl` (`https://www.google.com/maps?q=28.6304,77.2177`).
-7. **Negative Test (Submit without Office Data):**
-   - For a newly registered advocate with missing office data, call `POST /api/advocate/profile/submit-for-approval`.
-   - Verify `400 Bad Request` with `missingFields: ["officePhoto", "officeLocation"]`.
+1. **Test Registration Address Step:**
+   - Send `POST {{BACKEND_URL}}/api/auth/advocate/profile` as `multipart/form-data` with `registrationId`, `officeAddress`, `pincode`, `city`, `state`, `officeLatitude`, `officeLongitude`, and `officePhoto`.
+   - Verify `200 OK` and save `officePhotoUrl`.
+2. **Complete Registration:**
+   - Send `POST {{BACKEND_URL}}/api/auth/advocate/register/complete` with `registrationId`, `barCouncilId`, `aadhaarNumber`, `password`, `languagesSpoken`.
+   - Verify `200 OK`. The newly created advocate has `latitude` = `officeLatitude` and `longitude` = `officeLongitude`.
+3. **Verify Complete Profile Restrictions:**
+   - Send `PATCH {{BACKEND_URL}}/api/advocate/profile` with `{ "city": "Mumbai" }`.
+   - Verify `400 Bad Request` with message: `"Office/address can't be changed here. Use the office change request."`.
+   - Send `POST {{BACKEND_URL}}/api/advocate/profile/office-photo`.
+   - Verify `404 Not Found`.
+4. **Submit Office Change Request:**
+   - Send `PUT {{BACKEND_URL}}/api/advocate/profile/office` as `multipart/form-data` with new chamber address and new photo.
+   - For an approved advocate, verify `200 OK` with `"status": "PENDING"`.
+5. **Admin List & Detail:**
+   - As Admin, call `GET {{BACKEND_URL}}/api/admin/advocates/office-changes`.
+   - Verify advocate appears in list with `officeChangeStatus: "PENDING"`.
+   - Call `GET {{BACKEND_URL}}/api/admin/advocates/{{advocate_id}}/office-change`.
+   - Verify side-by-side comparison between `current` and `requested` with map URLs.
+6. **Admin Decision:**
+   - Call `POST {{BACKEND_URL}}/api/admin/advocates/{{advocate_id}}/office-change/approve`.
+   - Verify `200 OK`. Fetch `GET /api/advocates/{{advocate_id}}` and verify new office address and photo are live.
+
 
 
 

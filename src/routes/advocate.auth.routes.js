@@ -14,7 +14,8 @@ router.get('/register/session/:registrationId', generalLimiter, advocateControll
 router.post('/upload-profile-photo', generalLimiter, upload.single('profilePhoto'), advocateController.uploadProfilePhoto);
 router.post('/send-email-otp', sendOtpLimiter, advocateController.sendEmailOtp);
 router.post('/verify-email', verifyOtpLimiter, advocateController.verifyEmailOtp);
-router.post('/profile', generalLimiter, advocateController.completeProfile);
+router.post('/profile', generalLimiter, upload.single('officePhoto'), advocateController.completeProfile);
+router.post('/register/complete', generalLimiter, advocateController.completeRegistration);
 router.post('/send-phone-otp', sendOtpLimiter, advocateController.sendPhoneOtp);
 router.post('/verify-phone', verifyOtpLimiter, advocateController.verifyPhone);
 router.post('/aadhaar/initiate', generalLimiter, advocateController.initiateAadhaar);
