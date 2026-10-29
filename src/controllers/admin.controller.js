@@ -10,8 +10,10 @@ import {
   createStaffAccountSchema,
   updateStaffRolesSchema,
   adminAdvocateProfileUpdateSchema,
-  rejectOfficeChangeSchema
+  rejectOfficeChangeSchema,
+  rejectProfileChangeSchema
 } from '../validators/admin.validator.js';
+import { APPROVAL_FIELDS, FIELD_LABELS } from './advocate.profile.controller.js';
 import * as blogValidator from '../validators/blog.validator.js';
 import { getCurrentUserProfile } from '../services/auth.service.js';
 import { checkUserPermission } from '../services/rbac.service.js';
@@ -706,7 +708,7 @@ export const listPendingAdvocates = async (req, res, next) => {
  */
 export const formatAdvocateReviewData = (advocate) => {
   if (!advocate) return null;
-  const { passwordHash, aadhaarNumber, officePhotoPublicId, pendingOfficeChange, ...safeAdvocate } = advocate;
+  const { passwordHash, aadhaarNumber, officePhotoPublicId, pendingOfficeChange, pendingProfileChange, ...safeAdvocate } = advocate;
 
   const officeLatitude = advocate.officeLatitude ?? null;
   const officeLongitude = advocate.officeLongitude ?? null;
@@ -717,9 +719,10 @@ export const formatAdvocateReviewData = (advocate) => {
     ? `https://www.google.com/maps?q=${officeLatitude},${officeLongitude}`
     : null;
 
-  const officeChange = advocate.officeChangeStatus ? {
-    status: advocate.officeChangeStatus,
-    requestedAt: advocate.officeChangeRequestedAt
+  const profileChange = advocate.profileChangeStatus ? {
+    status: advocate.profileChangeStatus,
+    submittedAt: advocate.profileChangeSubmittedAt,
+    changedFields: advocate.pendingProfileChange ? Object.keys(advocate.pendingProfileChange) : []
   } : null;
 
   return {
@@ -745,7 +748,7 @@ export const formatAdvocateReviewData = (advocate) => {
       longitude: officeLongitude,
       updatedAt: officeLocationUpdatedAt
     },
-    officeChange
+    profileChange
   };
 };
 
@@ -1376,23 +1379,23 @@ export const permanentDeleteAdvocate = async (req, res, next) => {
 };
 
 /**
- * List Office Change Requests (ADMIN / advocates:edit)
- * GET /api/admin/advocates/office-changes?status=PENDING|APPROVED|REJECTED&page&limit&search
+ * List Profile Change Requests (ADMIN / advocates:edit)
+ * GET /api/admin/advocates/profile-changes?status=SUBMITTED|APPROVED|REJECTED|ALL&page&limit&search
  */
-export const listOfficeChangeRequests = async (req, res, next) => {
+export const listProfileChangeRequests = async (req, res, next) => {
   try {
     const { status, search } = req.query;
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
     const skip = (page - 1) * limit;
 
-    const requestedStatus = status ? status.toUpperCase() : 'PENDING';
+    const requestedStatus = status ? status.toUpperCase() : 'SUBMITTED';
     const where = {};
 
     if (requestedStatus !== 'ALL') {
-      where.officeChangeStatus = requestedStatus;
+      where.profileChangeStatus = requestedStatus;
     } else {
-      where.officeChangeStatus = { not: null };
+      where.profileChangeStatus = { not: null };
     }
 
     if (search && search.trim()) {
@@ -1405,11 +1408,11 @@ export const listOfficeChangeRequests = async (req, res, next) => {
       ];
     }
 
-    const [total, advocates, pendingCount, approvedCount, rejectedCount] = await Promise.all([
+    const [total, advocates, submittedCount, approvedCount, rejectedCount] = await Promise.all([
       prisma.advocate.count({ where }),
       prisma.advocate.findMany({
         where,
-        orderBy: { officeChangeRequestedAt: 'desc' },
+        orderBy: { profileChangeSubmittedAt: 'desc' },
         skip,
         take: limit,
         select: {
@@ -1419,18 +1422,19 @@ export const listOfficeChangeRequests = async (req, res, next) => {
           phone: true,
           barCouncilId: true,
           profilePhotoUrl: true,
-          officeChangeStatus: true,
-          officeChangeRequestedAt: true,
-          officeChangeReviewedAt: true,
-          officeChangeRejectionReason: true
+          pendingProfileChange: true,
+          profileChangeStatus: true,
+          profileChangeSubmittedAt: true,
+          profileChangeReviewedAt: true,
+          profileChangeRejectionReason: true
         }
       }),
-      prisma.advocate.count({ where: { officeChangeStatus: 'PENDING' } }),
-      prisma.advocate.count({ where: { officeChangeStatus: 'APPROVED' } }),
-      prisma.advocate.count({ where: { officeChangeStatus: 'REJECTED' } })
+      prisma.advocate.count({ where: { profileChangeStatus: 'SUBMITTED' } }),
+      prisma.advocate.count({ where: { profileChangeStatus: 'APPROVED' } }),
+      prisma.advocate.count({ where: { profileChangeStatus: 'REJECTED' } })
     ]);
 
-    const data = advocates.map(adv => ({
+    const data = advocates.map((adv) => ({
       advocate: {
         id: adv.id,
         name: adv.fullName,
@@ -1441,20 +1445,21 @@ export const listOfficeChangeRequests = async (req, res, next) => {
         barId: adv.barCouncilId,
         profileImage: adv.profilePhotoUrl
       },
-      requestedAt: adv.officeChangeRequestedAt,
-      reviewedAt: adv.officeChangeReviewedAt,
-      status: adv.officeChangeStatus,
-      rejectionReason: adv.officeChangeRejectionReason
+      changedFields: adv.pendingProfileChange ? Object.keys(adv.pendingProfileChange) : [],
+      submittedAt: adv.profileChangeSubmittedAt,
+      reviewedAt: adv.profileChangeReviewedAt,
+      status: adv.profileChangeStatus,
+      rejectionReason: adv.profileChangeRejectionReason
     }));
 
     return res.status(200).json({
       success: true,
       data,
       counts: {
-        PENDING: pendingCount,
+        SUBMITTED: submittedCount,
         APPROVED: approvedCount,
         REJECTED: rejectedCount,
-        total: pendingCount + approvedCount + rejectedCount
+        total: submittedCount + approvedCount + rejectedCount
       },
       pagination: {
         page,
@@ -1469,10 +1474,10 @@ export const listOfficeChangeRequests = async (req, res, next) => {
 };
 
 /**
- * Get Advocate Office Change Details (ADMIN / advocates:edit)
- * GET /api/admin/advocates/:advocateId/office-change
+ * Get Advocate Profile Change Details (ADMIN / advocates:edit)
+ * GET /api/admin/advocates/:advocateId/profile-change
  */
-export const getAdvocateOfficeChangeDetails = async (req, res, next) => {
+export const getAdvocateProfileChangeDetails = async (req, res, next) => {
   try {
     const { advocateId } = req.params;
 
@@ -1487,43 +1492,62 @@ export const getAdvocateOfficeChangeDetails = async (req, res, next) => {
       });
     }
 
+    const pending = advocate.pendingProfileChange || {};
+    const changes = [];
+
+    for (const [field, reqVal] of Object.entries(pending)) {
+      const label = FIELD_LABELS[field] || field;
+      let current = null;
+      let requested = reqVal;
+
+      if (field === 'profilePhoto') {
+        current = advocate.profilePhotoUrl ?? null;
+        requested = reqVal?.url ?? reqVal;
+      } else if (field === 'officePhoto') {
+        current = advocate.officePhotoUrl ?? null;
+        requested = reqVal?.url ?? reqVal;
+      } else {
+        current = advocate[field] !== undefined && advocate[field] !== null
+          ? (typeof advocate[field] === 'object' && 'toNumber' in advocate[field] ? advocate[field].toNumber() : advocate[field])
+          : null;
+        if (typeof reqVal === 'object' && reqVal !== null && 'toNumber' in reqVal) {
+          requested = reqVal.toNumber();
+        }
+      }
+
+      changes.push({
+        field,
+        label,
+        current,
+        requested
+      });
+    }
+
+    // Map URLs
     const currentLat = advocate.officeLatitude ?? null;
     const currentLng = advocate.officeLongitude ?? null;
-    const currentOffice = {
-      officeAddress: advocate.officeAddress ?? null,
-      officePhotoUrl: advocate.officePhotoUrl ?? null,
-      officeLatitude: currentLat,
-      officeLongitude: currentLng,
-      officeMapUrl: (currentLat !== null && currentLng !== null)
-        ? `https://www.google.com/maps?q=${currentLat},${currentLng}`
-        : null,
-      city: advocate.city,
-      state: advocate.state,
-      pincode: advocate.pincode,
-      officeLocationUpdatedAt: advocate.officeLocationUpdatedAt ?? null
-    };
+    const requestedLat = pending.officeLatitude !== undefined ? pending.officeLatitude : currentLat;
+    const requestedLng = pending.officeLongitude !== undefined ? pending.officeLongitude : currentLng;
 
-    let requestedOffice = null;
-    if (advocate.pendingOfficeChange) {
-      const { officePhotoPublicId: _opId, ...safePending } = advocate.pendingOfficeChange;
-      const reqLat = safePending.officeLatitude ?? null;
-      const reqLng = safePending.officeLongitude ?? null;
-      requestedOffice = {
-        ...safePending,
-        officeMapUrl: (reqLat !== null && reqLng !== null)
-          ? `https://www.google.com/maps?q=${reqLat},${reqLng}`
-          : null
-      };
-    }
+    const currentMapUrl = (currentLat !== null && currentLng !== null)
+      ? `https://www.google.com/maps?q=${currentLat},${currentLng}`
+      : null;
+    const requestedMapUrl = (requestedLat !== null && requestedLng !== null)
+      ? `https://www.google.com/maps?q=${requestedLat},${requestedLng}`
+      : null;
 
     return res.status(200).json({
       success: true,
-      status: advocate.officeChangeStatus,
-      requestedAt: advocate.officeChangeRequestedAt,
-      reviewedAt: advocate.officeChangeReviewedAt,
-      rejectionReason: advocate.officeChangeRejectionReason,
-      currentOffice,
-      requestedOffice
+      status: advocate.profileChangeStatus,
+      submittedAt: advocate.profileChangeSubmittedAt,
+      reviewedAt: advocate.profileChangeReviewedAt,
+      rejectionReason: advocate.profileChangeRejectionReason,
+      reviewedBy: advocate.profileChangeReviewedBy,
+      changes,
+      officeMapUrls: (currentMapUrl || requestedMapUrl) ? {
+        current: currentMapUrl,
+        requested: requestedMapUrl
+      } : null
     });
   } catch (error) {
     next(error);
@@ -1531,10 +1555,10 @@ export const getAdvocateOfficeChangeDetails = async (req, res, next) => {
 };
 
 /**
- * Approve Advocate Office Change (ADMIN / advocates:edit)
- * POST /api/admin/advocates/:advocateId/office-change/approve
+ * Approve Advocate Profile Change (ADMIN / advocates:edit)
+ * POST /api/admin/advocates/:advocateId/profile-change/approve
  */
-export const approveAdvocateOfficeChange = async (req, res, next) => {
+export const approveAdvocateProfileChange = async (req, res, next) => {
   try {
     const { advocateId } = req.params;
 
@@ -1549,53 +1573,80 @@ export const approveAdvocateOfficeChange = async (req, res, next) => {
       });
     }
 
-    if (advocate.officeChangeStatus !== 'PENDING' || !advocate.pendingOfficeChange) {
+    if (advocate.profileChangeStatus !== 'SUBMITTED' || !advocate.pendingProfileChange) {
       return res.status(409).json({
         success: false,
-        message: 'No pending office change.'
+        message: 'No submitted profile changes.'
       });
     }
 
-    const requested = advocate.pendingOfficeChange;
+    const requested = advocate.pendingProfileChange;
+    const oldLiveProfilePhotoPublicId = advocate.profilePhotoPublicId;
     const oldLiveOfficePhotoPublicId = advocate.officePhotoPublicId;
     const now = new Date();
 
-    const lat = typeof requested.officeLatitude === 'number' ? requested.officeLatitude : parseFloat(requested.officeLatitude);
-    const lng = typeof requested.officeLongitude === 'number' ? requested.officeLongitude : parseFloat(requested.officeLongitude);
+    const updateData = {};
+
+    const scalarFields = [
+      'experienceYears', 'about', 'videoCallChargePerMinute', 'voiceCallChargePerMinute',
+      'offlineVisitingFee', 'officeAddress', 'pincode', 'city', 'state'
+    ];
+    for (const f of scalarFields) {
+      if (requested[f] !== undefined) {
+        updateData[f] = requested[f];
+      }
+    }
+
+    const hasLat = requested.officeLatitude !== undefined;
+    const hasLng = requested.officeLongitude !== undefined;
+    if (hasLat || hasLng) {
+      const lat = hasLat ? (typeof requested.officeLatitude === 'number' ? requested.officeLatitude : parseFloat(requested.officeLatitude)) : advocate.officeLatitude;
+      const lng = hasLng ? (typeof requested.officeLongitude === 'number' ? requested.officeLongitude : parseFloat(requested.officeLongitude)) : advocate.officeLongitude;
+      updateData.officeLatitude = lat;
+      updateData.officeLongitude = lng;
+      updateData.latitude = lat;
+      updateData.longitude = lng;
+      updateData.officeLocationUpdatedAt = now;
+    }
+
+    let replacedProfilePhoto = false;
+    if (requested.profilePhoto) {
+      updateData.profilePhotoUrl = requested.profilePhoto.url;
+      updateData.profilePhotoPublicId = requested.profilePhoto.publicId;
+      replacedProfilePhoto = true;
+    }
+
+    let replacedOfficePhoto = false;
+    if (requested.officePhoto) {
+      updateData.officePhotoUrl = requested.officePhoto.url;
+      updateData.officePhotoPublicId = requested.officePhoto.publicId;
+      replacedOfficePhoto = true;
+    }
+
+    const reviewer = req.user?.id || req.user?.email || 'env-admin';
+    updateData.profileChangeStatus = 'APPROVED';
+    updateData.profileChangeReviewedAt = now;
+    updateData.profileChangeReviewedBy = reviewer;
+    updateData.pendingProfileChange = null;
+    updateData.profileChangeRejectionReason = null;
 
     await prisma.$transaction(async (tx) => {
       await tx.advocate.update({
         where: { id: advocateId },
-        data: {
-          officeAddress: requested.officeAddress,
-          officePhotoUrl: requested.officePhotoUrl,
-          officePhotoPublicId: requested.officePhotoPublicId,
-          officeLatitude: lat,
-          officeLongitude: lng,
-          latitude: lat,
-          longitude: lng,
-          city: requested.city,
-          state: requested.state,
-          pincode: requested.pincode,
-          officeLocationUpdatedAt: now,
-          officeChangeStatus: 'APPROVED',
-          officeChangeReviewedAt: now,
-          pendingOfficeChange: null,
-          officeChangeRejectionReason: null
-        }
+        data: updateData
       });
     });
 
-    // Delete old live office photo from Cloudinary after commit
-    if (oldLiveOfficePhotoPublicId && oldLiveOfficePhotoPublicId !== requested.officePhotoPublicId) {
-      await deleteFromCloudinary(oldLiveOfficePhotoPublicId).catch((err) => {
-        console.error(`Failed to delete old live office photo ${oldLiveOfficePhotoPublicId} from Cloudinary:`, err.message);
-      });
+    if (replacedProfilePhoto && oldLiveProfilePhotoPublicId && oldLiveProfilePhotoPublicId !== requested.profilePhoto?.publicId) {
+      await deleteFromCloudinary(oldLiveProfilePhotoPublicId).catch(() => {});
+    }
+    if (replacedOfficePhoto && oldLiveOfficePhotoPublicId && oldLiveOfficePhotoPublicId !== requested.officePhoto?.publicId) {
+      await deleteFromCloudinary(oldLiveOfficePhotoPublicId).catch(() => {});
     }
 
     return res.status(200).json({
       success: true,
-      message: 'Office change approved successfully.'
+      message: 'Profile changes approved successfully.'
     });
   } catch (error) {
     next(error);
@@ -1603,10 +1654,10 @@ export const approveAdvocateOfficeChange = async (req, res, next) => {
 };
 
 /**
- * Reject Advocate Office Change (ADMIN / advocates:edit)
- * POST /api/admin/advocates/:advocateId/office-change/reject
+ * Reject Advocate Profile Change (ADMIN / advocates:edit)
+ * POST /api/admin/advocates/:advocateId/profile-change/reject
  */
-export const rejectAdvocateOfficeChange = async (req, res, next) => {
+export const rejectAdvocateProfileChange = async (req, res, next) => {
   try {
     const { advocateId } = req.params;
 
@@ -1621,37 +1672,30 @@ export const rejectAdvocateOfficeChange = async (req, res, next) => {
       });
     }
 
-    if (advocate.officeChangeStatus !== 'PENDING' || !advocate.pendingOfficeChange) {
+    if (advocate.profileChangeStatus !== 'SUBMITTED' || !advocate.pendingProfileChange) {
       return res.status(409).json({
         success: false,
-        message: 'No pending office change.'
+        message: 'No submitted profile changes.'
       });
     }
 
-    const validated = rejectOfficeChangeSchema.parse(req.body);
-    const pendingPhotoPublicId = advocate.pendingOfficeChange?.officePhotoPublicId;
+    const validated = rejectProfileChangeSchema.parse(req.body);
     const now = new Date();
+    const reviewer = req.user?.id || req.user?.email || 'env-admin';
 
     await prisma.advocate.update({
       where: { id: advocateId },
       data: {
-        officeChangeStatus: 'REJECTED',
-        officeChangeRejectionReason: validated.reason,
-        officeChangeReviewedAt: now,
-        pendingOfficeChange: null
+        profileChangeStatus: 'REJECTED',
+        profileChangeRejectionReason: validated.reason,
+        profileChangeReviewedAt: now,
+        profileChangeReviewedBy: reviewer
       }
     });
 
-    // Delete pending office photo from Cloudinary after commit
-    if (pendingPhotoPublicId) {
-      await deleteFromCloudinary(pendingPhotoPublicId).catch((err) => {
-        console.error(`Failed to delete pending office photo ${pendingPhotoPublicId} from Cloudinary:`, err.message);
-      });
-    }
-
     return res.status(200).json({
       success: true,
-      message: 'Office change rejected.'
+      message: 'Profile changes rejected.'
     });
   } catch (error) {
     next(error);

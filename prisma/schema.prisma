@@ -281,12 +281,21 @@ model Advocate {
   officeLongitude             Float?
   officeLocationUpdatedAt     DateTime?
 
-  // Office change approval workflow
+  // Office change approval workflow (legacy)
   pendingOfficeChange         Json?
   officeChangeStatus          String?
   officeChangeRequestedAt     DateTime?
   officeChangeReviewedAt      DateTime?
   officeChangeRejectionReason String?
+
+  // Profile change approval workflow
+  pendingProfileChange         Json?
+  profileChangeStatus          String?
+  profileChangeUpdatedAt       DateTime?
+  profileChangeSubmittedAt     DateTime?
+  profileChangeReviewedAt      DateTime?
+  profileChangeRejectionReason String?
+  profileChangeReviewedBy      String?
 
   savedBy                  SavedLawyer[]
   likes                    AdvocateLike[]

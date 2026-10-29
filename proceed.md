@@ -1,410 +1,545 @@
-# Implementation Plan: One Office per Advocate (Registration, Profile Cleanup, Admin Office Change Approval)
+# Implementation Plan: Advocate Profile Change Approval
 
 ## 0. Database Host Verification
 - **DATABASE_URL Host:** `ep-weathered-hat-b47xszyr-pooler.c-6.us-east-2.aws.neon.tech`
 - **Database / Path:** `/neondb`
-> **SAFETY NOTICE:** No database migrations, DB mutations, or Cloudinary uploads have been performed. Execution is stopped awaiting your explicit approval.
+> **SAFETY NOTICE:**
+> - DB Host has been verified.
+> - **Zero database writes, migrations, or Cloudinary uploads** have been executed.
+> - Execution is stopped at STEP 0 awaiting your explicit typed `"approved"`.
+> - After your approval, the migration SQL will be presented for your "OK" before running `migrate deploy`.
+> - Never run integration tests or create test records against the shared Neon DB (production). All testing will use stubbed Prisma/Cloudinary unit tests.
 
 ---
 
-## 1. Current Codebase Behaviour & Findings
-
-### Registration Flow Today
-1. **Session & Steps:**
-   - Registration begins at `POST /api/auth/advocate/register/start`.
-   - `RegistrationSession` stores temporary registration progress (`fullName`, `email`, `phone`, `gender`, `profilePhotoUrl`, `profilePhotoPublicId`, `aadhaarVerified`, etc.).
-   - OTP steps: `POST /send-email-otp`, `POST /verify-email`, `POST /send-phone-otp`, `POST /verify-phone`.
-   - Aadhaar verification: `POST /aadhaar/otp/generate`, `POST /aadhaar/otp/verify`.
-2. **Address & Profile Finalization (The Current Discrepancy):**
-   - In `user.auth.routes.js`, `POST /api/auth/user/profile` calls `completeProfileForRegistration({ registrationId, city, state, pincode, latitude, longitude })`.
-   - In `advocate.auth.routes.js`, `POST /api/auth/advocate/profile` currently calls `completeProfile` -> `completeAdvocateRegistration` which creates the `Advocate` record directly using `barCouncilId`, `aadhaarNumber`, `password`, `languagesSpoken`, `state`, `city`, `pincode`, `latitude`, `longitude`, `about`.
-   - There was **no intermediate address step** for advocates; address fields were submitted together with credentials at `POST /api/auth/advocate/profile`.
-3. **Pincode to City/State Lookup:**
-   - The backend currently does **not** have an API endpoint to look up city and state from a pincode.
-   - The frontend manages this lookup and supplies `pincode` (6 digits), `city`, and `state`.
-   - Nearby advocate search coordinates are resolved via `resolvePincodeCoordinates` in `src/services/advocate.service.js`.
-
-### Last Task (README Section 34) & Complete Profile Today
-1. `Advocate` currently has:
-   - `officePhotoUrl`, `officePhotoPublicId`, `officeLatitude`, `officeLongitude`, `officeLocationUpdatedAt`.
-2. `POST /api/advocate/profile/office-photo` uploads an office photo and cleans up the previous photo from Cloudinary.
-3. `PATCH /api/advocate/profile` accepts `officeLatitude` and `officeLongitude` (alongside `state`, `city`, `pincode`, `completeAddress`).
-4. `POST /api/advocate/profile/submit-for-approval` currently enforces `missingFields: ["officePhoto", "officeLocation"]` before allowing submission.
-5. Public profile and admin detail formats format office data via `formatOfficeDetails` and `formatAdvocateReviewData`.
-
-### Admin Today
-1. Routes in `src/routes/admin.routes.js` handle advocate review:
-   - `GET /advocates/pending`, `GET /advocates/rejected`, `GET /advocates`, `GET /advocates/:advocateId`.
-   - Approval/Rejection: `PATCH /advocates/:advocateId/approve`, `PATCH /advocates/:advocateId/reject`.
-   - Direct edit: `PATCH /advocates/:advocateId/profile` using permission `advocates:edit`.
+## 1. Database Row Audit (`officeChangeStatus`)
+We executed read-only queries against `ep-weathered-hat-b47xszyr-pooler.c-6.us-east-2.aws.neon.tech`:
+- **Rows where `officeChangeStatus IS NOT NULL`:** `0` rows.
+- **Rows where `pendingOfficeChange IS NOT NULL`:** `0` rows.
+- **Result:** There are NO production or test records with active/historical `officeChangeStatus` or `pendingOfficeChange`. No data migration or conversion of pending office changes is required.
 
 ---
 
-## 2. Adapted Design
+## 2. Current Codebase Behaviour & Findings
 
-### Goal 1 & 2: Registration Address Step (Multipart)
-- **Endpoint:** `POST /api/auth/advocate/profile` (preserving the existing route).
-- **Multipart Form-Data:** handled by `upload.single('officePhoto')`.
-- **Payload:**
-  - `registrationId` (UUID, required)
-  - `pincode` (6 digits regex, required)
-  - `city` (string 2-100 chars, required)
-  - `state` (string 2-100 chars, required)
-  - `officeAddress` (string 10-500 chars, trimmed, required)
-  - `officeLatitude`, `officeLongitude` (valid coordinate strings or numbers, both required)
-  - `officePhoto` (file, required on first save; optional on subsequent updates if session already has `officePhotoUrl`). Validated with `validateUploadedPhoto` (JPEG/JPG/PNG/WEBP, ≤ 5MB).
-- **Session Persistence:**
-  - Saves `officeAddress`, `officePhotoUrl`, `officePhotoPublicId`, `officeLatitude`, `officeLongitude`, `city`, `state`, `pincode` onto `RegistrationSession`.
-  - Also sets `latitude = officeLatitude` and `longitude = officeLongitude` on `RegistrationSession` so nearby search uses the office location seamlessly.
-  - If replaced, deletes the old session office photo from Cloudinary.
-- **Session Resume:**
-  - `GET /api/auth/advocate/register/session/:registrationId` returns `officeAddress`, `officePhotoUrl`, `officeLatitude`, `officeLongitude`, `city`, `state`, `pincode` (never `officePhotoPublicId`).
+1. **`PATCH /api/advocate/profile` (`updateProfile`):**
+   - Uses `advocateProfileUpdateSchema` which has `validateNoAddressOrOfficeFields`. It rejects `officeLatitude`, `officeLongitude`, `city`, `state`, `pincode`, `latitude`, `longitude`.
+   - Allows direct scalar updates for `fullName`, `gender`, `barCouncilId`, `aadhaarNumber`, `email`, `about` / `bio`, `completeAddress`, `offlineVisitingFee`, `casesHandled`, `bestPracticeArea`, `topCourtPractised`, `practiceAreas`, `experienceYears` / `experience`, `videoCallChargePerMinute` / `videoChargePerMinute`, `voiceCallChargePerMinute` / `voiceChargePerMinute`, `languagesSpoken` / `languages`, `courtPractice`.
+   - No approval gate: Approved advocates can currently change their fees, experience, and about directly.
+   - Only accepts JSON (no `multer` middleware on `PATCH /`).
 
-### Goal 3: Registration Completion
-- Endpoint: `POST /api/auth/advocate/register/complete` (and compatibility alias on `POST /api/auth/advocate/profile` when JSON registration body is sent).
-- When creating `Advocate`:
-  - Validates that the session has `officeAddress`, `officePhotoUrl`, `officeLatitude`, and `officeLongitude`.
-  - If missing, returns `400 Bad Request`:
-    ```json
-    {
-      "success": false,
-      "message": "Please complete your address and office details.",
-      "missingFields": ["officeAddress", "officePhoto", "officeLocation"]
-    }
-    ```
-  - Copies to `Advocate`:
-    - `officeAddress = session.officeAddress`
-    - `officePhotoUrl = session.officePhotoUrl`
-    - `officePhotoPublicId = session.officePhotoPublicId`
-    - `officeLatitude = session.officeLatitude`
-    - `officeLongitude = session.officeLongitude`
-    - `latitude = session.officeLatitude`
-    - `longitude = session.officeLongitude`
-    - `city = session.city`
-    - `state = session.state`
-    - `pincode = session.pincode`
-    - `officeLocationUpdatedAt = new Date()`
-  - Note: Session deletion cleans up `RegistrationSession` in DB; the Cloudinary office photo is preserved because it now belongs to the newly created `Advocate`.
+2. **`POST /api/advocate/profile/photo` (`uploadProfilePhoto`):**
+   - Accepts multipart `profilePhoto` (`upload.single('profilePhoto')`), validates via `validateUploadedPhoto`.
+   - Uploads directly to Cloudinary, updates `profilePhotoUrl` / `profilePhotoPublicId` immediately, and deletes the old live photo. No approval gate for approved advocates.
 
-### Goal 4: Complete Profile Cleanup
-1. **`PATCH /api/advocate/profile`:**
-   - Remove `officeLatitude`, `officeLongitude`, `city`, `state`, `pincode`, `latitude`, `longitude` from allowed updates.
-   - If any of these fields are sent, return `400 Bad Request`:
+3. **`PUT /api/advocate/profile/office` (`requestOfficeChange`):**
+   - Previously implemented as a separate endpoint for office updates.
+   - For non-approved advocates: applied directly to live office fields.
+   - For approved advocates: stored in `pendingOfficeChange` with `officeChangeStatus = 'PENDING'`.
+
+4. **`POST /api/advocate/profile/submit-for-approval` (`submitForApproval`):**
+   - Used only for initial profile submission.
+   - If `advocate.approvalStatus === 'APPROVED'`, it returns `400 Bad Request` ("Profile is already approved.").
+
+5. **Admin Office Change Endpoints:**
+   - `GET /api/admin/advocates/office-changes` (`listOfficeChangeRequests`)
+   - `GET /api/admin/advocates/:advocateId/office-change` (`getAdvocateOfficeChangeDetails`)
+   - `POST /api/admin/advocates/:advocateId/office-change/approve` (`approveAdvocateOfficeChange`)
+   - `POST /api/admin/advocates/:advocateId/office-change/reject` (`rejectAdvocateOfficeChange`)
+
+6. **Advocate Bookings & Fees:**
+   - `AdvocateBooking` records store complete price snapshots at creation time: `ratePerMinutePaise`, `feePaise`, `gstPercent`, `gstPaise`, `platformFeePaise`, `totalPaise` (stored in paise, currency INR).
+   - `getAdvocateBookingOptions`, `quoteBookingSlot`, and `createAdvocateBookingCheckout` query the `Advocate` record live columns (`voiceCallChargePerMinute`, `videoCallChargePerMinute`, `offlineVisitingFee`).
+   - Bookings already created keep their price snapshot permanently.
+   - Public profile and listings (`listAdvocates`, `getAdvocateDetailsPublic`) only select live columns.
+
+7. **Advocate Deletion (`advocateDeletion.service.js`):**
+   - Cleans up `profilePhotoPublicId`, `officePhotoPublicId`, and `pendingOfficeChange.officePhotoPublicId`.
+
+---
+
+## 3. Adapted Architecture & Detailed Design
+
+### 3.1 Field Classification
+- **Approval Fields** (sensitive fields requiring admin review for an **APPROVED** advocate):
+  1. `experienceYears` (alias `experience`)
+  2. `about` (alias `bio`)
+  3. `videoCallChargePerMinute` (alias `videoChargePerMinute`)
+  4. `voiceCallChargePerMinute` (alias `voiceChargePerMinute`)
+  5. `offlineVisitingFee`
+  6. `profilePhoto` (file in multipart)
+  7. `officeAddress`
+  8. `pincode`
+  9. `city`
+  10. `state`
+  11. `officeLatitude`
+  12. `officeLongitude`
+  13. `officePhoto` (file in multipart)
+- **Direct Fields** (always live immediately, even for approved advocates):
+  - `casesHandled`, `practiceAreas`, `practiceAreaIds`, `bestPracticeArea`, `topCourtPractised`, `courtPractice`, `languagesSpoken`, `languages`, `completeAddress`, `fullName`, `gender`.
+
+---
+
+### 3.2 Schema Additions (`Advocate` model in `prisma/schema.prisma`)
+Add the following nullable columns (leaving old `officeChange*` columns untouched):
+```prisma
+pendingProfileChange         Json?      // { field: requestedValue, ... } only changed approval fields; photos as { url, publicId }
+profileChangeStatus          String?    // null | "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED"
+profileChangeUpdatedAt       DateTime?
+profileChangeSubmittedAt     DateTime?
+profileChangeReviewedAt      DateTime?
+profileChangeRejectionReason String?
+profileChangeReviewedBy      String?    // admin/staff id or "env-admin"
+```
+
+---
+
+### 3.3 Edit Profile: Single Unified API (`PATCH /api/advocate/profile`)
+1. **Route middleware:**
+   - Add `upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'officePhoto', maxCount: 1 }])` to `PATCH /api/advocate/profile`.
+   - JSON bodies continue to work seamlessly (multer passes through non-multipart requests).
+2. **Validation (`src/validators/advocate.validator.js`):**
+   - **Remove `validateNoAddressOrOfficeFields`.**
+   - Accept `officeAddress` (10–500 chars), `city` (2–100), `state` (2–100), `pincode` (6 digits), `officeLatitude`, `officeLongitude`.
+   - Reject old `latitude` / `longitude` with `400 Bad Request`: `"Use officeLatitude/officeLongitude."`
+   - Validate coordinate pairs: `officeLatitude` and `officeLongitude` must be provided together.
+   - Validate location pairs: `pincode`, `city`, and `state` must be provided together when updating address.
+   - Validate uploaded photos using `validateUploadedPhoto` (max 5MB, JPEG/PNG/WEBP).
+   - Support numeric strings from `multipart/form-data` for numbers/integers (`experienceYears`, `casesHandled`, `videoCallChargePerMinute`, `voiceCallChargePerMinute`, `offlineVisitingFee`, `officeLatitude`, `officeLongitude`).
+3. **Execution Logic:**
+   - **Advocate NOT approved (`approvalStatus !== 'APPROVED'`):**
+     - Direct save for all fields.
+     - Files: upload to Cloudinary, replace live URL/publicId, and delete old live photo from Cloudinary after DB commit.
+     - If office coordinates provided, also set `latitude = officeLatitude`, `longitude = officeLongitude`, `officeLocationUpdatedAt = now()`.
+     - Return updated profile with message `"Profile updated successfully"`.
+   - **Advocate IS approved (`approvalStatus === 'APPROVED'`):**
+     - **Submitted Lock Check:** If `profileChangeStatus === 'SUBMITTED'`:
+       - Reject the entire request with `409 Conflict`:
+         `"Your profile changes are waiting for admin approval. Withdraw the request to edit again."`
+     - Split request body & files into **direct fields** and **approval fields**.
+     - If direct fields are present:
+       - Update live advocate record directly in DB.
+     - If approval fields are present:
+       - Compare each requested approval field against the current live value:
+         - Numerical fields: compare values (handling Decimal/number comparison).
+         - String fields: trimmed equality comparison.
+         - If a requested value is identical to the live value: omit it (or remove it from draft if it reverted to live).
+       - Files: upload new photo to Cloudinary:
+         - If the existing draft in `pendingProfileChange` already has that photo (`url`, `publicId`), delete the old draft photo from Cloudinary after DB commit.
+         - Store `{ url, publicId }` in `pendingProfileChange`.
+       - Merge changed fields into `pendingProfileChange`.
+       - If the draft is not empty:
+         - Set `profileChangeStatus = 'DRAFT'`.
+         - Set `profileChangeUpdatedAt = now()`.
+         - Clear `profileChangeRejectionReason = null` (starts a new draft if previously REJECTED).
+       - If all requested fields matched live and the draft is now empty:
+         - Set `pendingProfileChange = null`.
+         - Set `profileChangeStatus = null`.
+     - **Response:**
+       - If only direct fields updated: `"Profile updated."`
+       - If approval fields updated into draft: `"Changes saved as draft. Submit for approval to publish them."`
+       - Include `profileChange` summary object in the response (see Section 3.6).
+
+4. **`POST /api/advocate/profile/photo`:**
+   - Keep route as an alias to `PATCH /api/advocate/profile` with `profilePhoto`.
+   - If advocate is approved, uploads file to Cloudinary and saves into draft `pendingProfileChange.profilePhoto`.
+   - If advocate is not approved, updates live photo directly.
+   - Documented in README as an alias.
+
+5. **`PUT /api/advocate/profile/office`:**
+   - Removed completely from `advocate.profile.routes.js` and `advocate.profile.controller.js`.
+
+---
+
+### 3.4 Draft Lifecycle: Submit, Withdraw, Discard
+1. **`POST /api/advocate/profile/submit-for-approval` (Extended):**
+   - If advocate is NOT approved: retains existing profile verification submission logic unchanged.
+   - If advocate IS approved:
+     - Check: requires `profileChangeStatus === 'DRAFT'` and `pendingProfileChange` with at least one changed field.
+     - If not met: return `400 Bad Request`: `"No changes to submit."`
+     - Update:
+       - `profileChangeStatus = 'SUBMITTED'`
+       - `profileChangeSubmittedAt = new Date()`
+     - Return `200 OK`: `"Changes sent for admin approval."`
+
+2. **`POST /api/advocate/profile/changes/withdraw` (New route in existing file):**
+   - Requires `profileChangeStatus === 'SUBMITTED'`.
+   - If not SUBMITTED: return `409 Conflict`: `"No submitted changes to withdraw."`
+   - Update:
+     - `profileChangeStatus = 'DRAFT'`
+   - Return `200 OK`: `"Profile change request withdrawn. You can now edit your draft."`
+
+3. **`DELETE /api/advocate/profile/changes` (New route in existing file):**
+   - If `profileChangeStatus === 'SUBMITTED'`: return `409 Conflict`: `"Withdraw first before discarding changes."`
+   - If no draft or not approved: return `400 Bad Request`: `"No changes to discard."`
+   - If `profileChangeStatus === 'DRAFT'` or `'REJECTED'`:
+     - Delete draft photos from Cloudinary (`pendingProfileChange.profilePhoto.publicId`, `pendingProfileChange.officePhoto.publicId`).
+     - Clear:
+       - `pendingProfileChange = null`
+       - `profileChangeStatus = null`
+       - `profileChangeUpdatedAt = null`
+       - `profileChangeSubmittedAt = null`
+       - `profileChangeReviewedAt = null`
+       - `profileChangeRejectionReason = null`
+       - `profileChangeReviewedBy = null`
+     - Return `200 OK`: `"Profile changes discarded."`
+
+---
+
+### 3.5 Admin Endpoints (Replacing Office-Change Endpoints)
+Routes in `src/routes/admin.routes.js` (protected with `advocates:edit`, placed before `/:advocateId`):
+
+1. **`GET /api/admin/advocates/profile-changes?status=SUBMITTED|APPROVED|REJECTED|ALL&page&limit&search`**
+   - Default status: `SUBMITTED`.
+   - Returns paginated list of advocates with profile change requests.
+   - Each item includes:
+     - `advocate`: `{ id, fullName, email, phone, barCouncilId, profilePhotoUrl }`
+     - `changedFields`: array of field names changed (e.g. `["experienceYears", "about", "officeAddress"]`)
+     - `submittedAt`: `profileChangeSubmittedAt`
+     - `reviewedAt`: `profileChangeReviewedAt`
+     - `status`: `profileChangeStatus`
+     - `rejectionReason`: `profileChangeRejectionReason`
+   - Summary counts: `counts: { SUBMITTED, APPROVED, REJECTED, total }`.
+
+2. **`GET /api/admin/advocates/:advocateId/profile-change`**
+   - Returns side-by-side comparison of current vs requested for only the changed fields:
      ```json
      {
-       "success": false,
-       "message": "Office/address can't be changed here. Use the office change request."
+       "success": true,
+       "status": "SUBMITTED",
+       "submittedAt": "2026-10-29T18:00:00.000Z",
+       "reviewedAt": null,
+       "rejectionReason": null,
+       "changes": [
+         { "field": "videoCallChargePerMinute", "label": "Video call fee (₹/min)", "current": 34, "requested": 40 },
+         { "field": "about", "label": "About", "current": "Old bio...", "requested": "New bio..." },
+         { "field": "officePhoto", "label": "Office photo", "current": "https://res.cloudinary.../live.jpg", "requested": "https://res.cloudinary.../draft.jpg" }
+       ],
+       "officeMapUrls": {
+         "current": "https://www.google.com/maps?q=28.58,77.33",
+         "requested": "https://www.google.com/maps?q=28.60,77.35"
+       }
      }
      ```
-2. **`POST /api/advocate/profile/office-photo`:**
-   - Removed entirely. Calling it returns 404.
-3. **`POST /api/advocate/profile/submit-for-approval`:**
-   - Remove the office photo and office location requirement check.
-   - Old advocates without office details are **not blocked** from submitting.
-4. **`officeDetailsComplete`:** Kept in `getProfile` as informational only.
-5. **Admin Edit Advocate (`PATCH /api/admin/advocates/:advocateId/profile`):**
-   - Preserved and extended: Admin can edit `officeLatitude`, `officeLongitude`, and `officeAddress` directly with immediate application (no approval workflow required).
+   - Labels mapped user-friendly for all 13 approval fields.
+   - `officeMapUrls` included if `officeLatitude` / `officeLongitude` are changed or present.
+   - Never exposes Cloudinary `publicId`.
 
-### Goal 5 & 6: Advocate Office Change Request & Admin Approval
-#### Advocate Flow (`PUT /api/advocate/profile/office`)
-- Multipart endpoint (`upload.single('officePhoto')`), advocate authenticated.
-- **Fields:** `officeAddress`, `pincode`, `city`, `state`, `officeLatitude`, `officeLongitude` + `officePhoto` (live photo file required).
-- **If Advocate `approvalStatus !== 'APPROVED'` (Draft / PENDING / REJECTED):**
-  - Applied directly to live fields (`officeAddress`, `officePhotoUrl`, `officePhotoPublicId`, `officeLatitude`, `officeLongitude`, `latitude`, `longitude`, `city`, `state`, `pincode`, `officeLocationUpdatedAt = now()`).
-  - Deletes the old live office photo from Cloudinary after DB update.
-  - Response: `{ "success": true, "message": "Office details updated." }`.
-- **If Advocate `approvalStatus === 'APPROVED'`:**
-  - Old live fields remain unchanged (advocate remains approved, visible, and bookable).
-  - Uploads new photo to Cloudinary.
-  - If a previous `pendingOfficeChange` exists, its photo is deleted from Cloudinary.
-  - Updates DB:
-    - `pendingOfficeChange`: JSON object containing `{ officeAddress, pincode, city, state, officeLatitude, officeLongitude, officePhotoUrl, officePhotoPublicId }`
-    - `officeChangeStatus = "PENDING"`
-    - `officeChangeRequestedAt = new Date()`
-    - `officeChangeRejectionReason = null`
-  - Response:
-    ```json
-    {
-      "success": true,
-      "message": "Office change sent for admin approval.",
-      "officeChange": {
-        "status": "PENDING",
-        "requestedAt": "2026-...",
-        "requested": {
-          "officeAddress": "...",
-          "pincode": "...",
-          "city": "...",
-          "state": "...",
-          "officeLatitude": 28.6304,
-          "officeLongitude": 77.2177,
-          "officePhotoUrl": "https://..."
-        }
-      }
-    }
-    ```
-- **`GET /api/advocate/profile`:** Returns `officeChange` object (`status`, `requestedAt`, `reviewedAt`, `rejectionReason`, `requested` without publicId) or `null`.
+3. **`POST /api/admin/advocates/:advocateId/profile-change/approve`**
+   - Requires `profileChangeStatus === 'SUBMITTED'` and non-empty `pendingProfileChange`; otherwise `409 Conflict`: `"No submitted profile changes."`
+   - Database transaction:
+     - Copy every requested scalar value to live fields.
+     - If `officeLatitude` / `officeLongitude` changed: update `officeLatitude`, `officeLongitude`, `latitude`, `longitude`, `officeLocationUpdatedAt = now()`.
+     - If `profilePhoto` changed: update `profilePhotoUrl`, `profilePhotoPublicId`.
+     - If `officePhoto` changed: update `officePhotoUrl`, `officePhotoPublicId`.
+     - Update status:
+       - `profileChangeStatus = 'APPROVED'`
+       - `profileChangeReviewedAt = now()`
+       - `profileChangeReviewedBy = req.user.id || req.user.email || 'env-admin'`
+       - `pendingProfileChange = null`
+       - `profileChangeRejectionReason = null`
+   - After transaction commits:
+     - If `profilePhoto` was replaced and old live photo existed, delete old live photo from Cloudinary.
+     - If `officePhoto` was replaced and old live photo existed, delete old live photo from Cloudinary.
+   - Return `200 OK`: `"Profile changes approved successfully."`
 
-#### Admin Flow
-1. **`GET /api/admin/advocates/office-changes?status=PENDING|APPROVED|REJECTED&page=1&limit=20&search=...`**
-   - Permission: `advocates:edit` (or Admin bypass).
-   - Route order: placed **before** `/advocates/:advocateId` to prevent route collisions.
-   - Returns paginated list of changes with `advocate` summary (id, fullName, phone, barCouncilId, email), `requestedAt`, `status`, and `counts` for PENDING, APPROVED, REJECTED, total.
-2. **`GET /api/admin/advocates/:advocateId/office-change`**
-   - Permission: `advocates:edit` (or `advocates:view`).
-   - Returns current office side by side with requested office (each with calculated `officeMapUrl`).
-3. **`POST /api/admin/advocates/:advocateId/office-change/approve`**
-   - Permission: `advocates:edit`.
-   - If `officeChangeStatus !== 'PENDING'`: returns `409 Conflict` ("No pending office change.").
-   - In transaction:
-     - Copies requested values to live fields (`officeAddress`, `officePhotoUrl`, `officePhotoPublicId`, `officeLatitude`, `officeLongitude`, `latitude`, `longitude`, `city`, `state`, `pincode`, `officeLocationUpdatedAt = now()`).
-     - Sets `officeChangeStatus = "APPROVED"`, `officeChangeReviewedAt = now()`, `pendingOfficeChange = null`.
-     - After commit: deletes old live office photo from Cloudinary.
-4. **`POST /api/admin/advocates/:advocateId/office-change/reject`**
-   - Permission: `advocates:edit`.
-   - Body: `{ "reason": "..." }` (5-500 chars).
-   - If not PENDING: returns `409 Conflict`.
-   - Sets `officeChangeStatus = "REJECTED"`, `officeChangeRejectionReason = reason`, `officeChangeReviewedAt = now()`, `pendingOfficeChange = null`.
-   - After commit: deletes pending photo from Cloudinary. Live office remains unchanged.
+4. **`POST /api/admin/advocates/:advocateId/profile-change/reject`**
+   - Validates body `{ "reason": "..." }` with 5–500 chars string.
+   - Requires `profileChangeStatus === 'SUBMITTED'`; otherwise `409 Conflict`.
+   - Update:
+     - `profileChangeStatus = 'REJECTED'`
+     - `profileChangeRejectionReason = validated.reason`
+     - `profileChangeReviewedAt = now()`
+     - `profileChangeReviewedBy = req.user.id || req.user.email || 'env-admin'`
+     - **Keeps `pendingProfileChange` intact** so the advocate sees what was rejected, edits, and resubmits.
+     - Live fields remain untouched.
+   - Return `200 OK`: `"Profile changes rejected."`
 
-### Goal 6: Deletion & Public Detail Cleanup
-- `src/services/advocateDeletion.service.js`: In `finalizeAdvocateDeletion`, also deletes `advocate.pendingOfficeChange?.officePhotoPublicId` with error tolerance.
-- Public profile (`getAdvocateDetailsPublic`) and directory include `officeAddress` (never `pendingOfficeChange`).
-- Admin advocate detail (`getAdvocateReviewProfile`) includes `officeAddress` and `officeChange` (`status`, `requestedAt`).
+5. **Admin Advocate Details (`getAdvocateReviewProfile`):**
+   - Include `profileChange: advocate.profileChangeStatus ? { status: advocate.profileChangeStatus, submittedAt: advocate.profileChangeSubmittedAt, changedFields: advocate.pendingProfileChange ? Object.keys(advocate.pendingProfileChange) : [] } : null`.
+   - Allows the admin panel to display a "Changes pending approval" badge.
+
+6. **Admin Edit Advocate (`updateAdvocateProfileByAdmin`):**
+   - Continues direct editing. Does not interfere with any existing draft in `pendingProfileChange`.
+
+7. **Remove Old Admin Office Change Routes & Controllers:**
+   - Remove `listOfficeChangeRequests`, `getAdvocateOfficeChangeDetails`, `approveAdvocateOfficeChange`, `rejectAdvocateOfficeChange`.
 
 ---
 
-## 3. Files to Modify
+### 3.6 Response Formatting
+1. **`GET /api/advocate/profile`:**
+   - Safe advocate live values + office details (same as today).
+   - If advocate is approved and has `profileChangeStatus`:
+     ```json
+     "profileChange": {
+       "status": "DRAFT",
+       "updatedAt": "2026-10-29T18:00:00.000Z",
+       "submittedAt": null,
+       "reviewedAt": null,
+       "rejectionReason": null,
+       "changes": [
+         { "field": "about", "label": "About", "current": "Old bio...", "requested": "New bio..." }
+       ],
+       "approvalFields": [
+         "experienceYears", "about", "videoCallChargePerMinute", "voiceCallChargePerMinute",
+         "offlineVisitingFee", "profilePhoto", "officeAddress", "pincode", "city",
+         "state", "officeLatitude", "officeLongitude", "officePhoto"
+       ]
+     }
+     ```
+   - If advocate is not approved or has no draft/changes: `profileChange: null`.
+2. **Public Advocate Listing & Profile (`listAdvocates`, `getAdvocateDetailsPublic`):**
+   - Never exposes `pendingProfileChange`, `profileChange*`, or `*PublicId`.
+   - Strictly reads live fields.
+3. **Booking Endpoints (`booking-options`, `booking-quote`, `checkout`):**
+   - Strictly read live fee columns (`voiceCallChargePerMinute`, `videoCallChargePerMinute`, `offlineVisitingFee`).
+   - Price snapshots stored in paise at booking creation remain untouched.
 
-| File | Changes |
+---
+
+### 3.7 Cleanup (`src/services/advocateDeletion.service.js`)
+On permanent deletion:
+- Delete live photos (`profilePhotoPublicId`, `officePhotoPublicId`).
+- Delete draft photos if present:
+  - `advocate.pendingProfileChange?.profilePhoto?.publicId`
+  - `advocate.pendingProfileChange?.officePhoto?.publicId`
+- Retain existing `pendingOfficeChange` cleanup for legacy safety.
+
+---
+
+## 4. Files to Change (Inside Existing Flow)
+
+| File | Purpose of Change |
 |---|---|
-| `prisma/schema.prisma` | Add 5 nullable columns to `RegistrationSession` and 6 nullable columns to `Advocate`. |
-| `src/routes/advocate.auth.routes.js` | Update `POST /profile` to use `upload.single('officePhoto')`; add `POST /register/complete` endpoint. |
-| `src/controllers/advocate.auth.controller.js` | Update `completeProfile` to process address/office multipart step for registration; add `completeRegistration` handler; export `validateUploadedPhoto` from profile controller. |
-| `src/services/auth.service.js` | Add `saveAdvocateRegistrationOfficeDetails`; update `completeAdvocateRegistration` to validate & copy office details from session; update `getCurrentRegistrationSession` to return office fields. |
-| `src/validators/advocate.validator.js` | Add `advocateRegistrationAddressSchema`, `advocateOfficeChangeSchema`; update `advocateProfileUpdateSchema` to reject removed fields; export office coordinate schemas. |
-| `src/routes/advocate.profile.routes.js` | Remove `POST /office-photo`; add `PUT /office` (multipart). |
-| `src/controllers/advocate.profile.controller.js` | Export `validateUploadedPhoto`; remove `uploadOfficePhoto`; remove office check from `submitForApproval`; add `requestOfficeChange` (`PUT /office`); include `officeChange` in `getProfile`. |
-| `src/routes/admin.routes.js` | Add `/advocates/office-changes` (placed before `/:advocateId`), `/:advocateId/office-change`, `/:advocateId/office-change/approve`, `/:advocateId/office-change/reject`. |
-| `src/controllers/admin.controller.js` | Add `listOfficeChangeRequests`, `getAdvocateOfficeChangeDetails`, `approveAdvocateOfficeChange`, `rejectAdvocateOfficeChange`; update `formatAdvocateReviewData` to include `officeAddress` & `officeChange`. |
-| `src/validators/admin.validator.js` | Add `rejectOfficeChangeSchema`, update `adminAdvocateProfileUpdateSchema` to allow `officeAddress`. |
-| `src/services/advocateDeletion.service.js` | Delete `pendingOfficeChange?.officePhotoPublicId` during permanent deletion. |
-| `src/services/advocate.service.js` | Add `officeAddress` to public profile and list outputs. |
-| `README.md` | Update registration address step, rewrite Section 34, add Office Change Request section. |
+| `prisma/schema.prisma` | Add 7 nullable columns to model `Advocate` (`pendingProfileChange`, `profileChangeStatus`, `profileChangeUpdatedAt`, `profileChangeSubmittedAt`, `profileChangeReviewedAt`, `profileChangeRejectionReason`, `profileChangeReviewedBy`). |
+| `src/routes/advocate.profile.routes.js` | Add `upload.fields` on `PATCH /`; add `POST /changes/withdraw` and `DELETE /changes`; remove `PUT /office`. |
+| `src/validators/advocate.validator.js` | Remove `validateNoAddressOrOfficeFields`; restore office/address schemas to `advocateProfileUpdateSchema`; add rejection schema / coordinate pair validator; reject legacy `latitude`/`longitude`. |
+| `src/controllers/advocate.profile.controller.js` | Implement draft diffing and merging on `PATCH /`; update `submitForApproval` to handle approved advocates; implement `withdrawProfileChanges`, `discardProfileChanges`; remove `requestOfficeChange`; format `profileChange` on `getProfile`. |
+| `src/routes/admin.routes.js` | Replace 4 office-change routes with 4 profile-change routes (`/advocates/profile-changes`, `/:advocateId/profile-change`, `/:advocateId/profile-change/approve`, `/:advocateId/profile-change/reject`). |
+| `src/validators/admin.validator.js` | Add `rejectProfileChangeSchema` (5–500 chars); remove/replace `rejectOfficeChangeSchema`. |
+| `src/controllers/admin.controller.js` | Implement `listProfileChangeRequests`, `getAdvocateProfileChangeDetails`, `approveAdvocateProfileChange`, `rejectAdvocateProfileChange`; update `formatAdvocateReviewData` with `profileChange`; remove 4 office change methods. |
+| `src/services/advocateDeletion.service.js` | Cleanup draft photos in `pendingProfileChange` on permanent deletion. |
+| `README.md` | Rewrite section 34 / add section 35 with complete Postman guide, status flow diagram, examples, error table, booking fee policy, and removed endpoints. |
 
-*No new controller, service, or route files will be created.*
+*No new routes, controllers, or service files will be created.* The only new folder will be the Prisma migration directory:
+`prisma/migrations/20261029190000_advocate_profile_change_request/migration.sql`.
 
 ---
 
-## 4. Migration SQL
+## 5. Migration SQL
+Target migration folder: `prisma/migrations/20261029190000_advocate_profile_change_request/migration.sql`
 
-To be generated strictly via Prisma migration diff policy (`prisma migrate diff`):
 ```sql
--- AlterTable RegistrationSession
-ALTER TABLE "RegistrationSession" ADD COLUMN "officeAddress" TEXT;
-ALTER TABLE "RegistrationSession" ADD COLUMN "officePhotoUrl" TEXT;
-ALTER TABLE "RegistrationSession" ADD COLUMN "officePhotoPublicId" TEXT;
-ALTER TABLE "RegistrationSession" ADD COLUMN "officeLatitude" DOUBLE PRECISION;
-ALTER TABLE "RegistrationSession" ADD COLUMN "officeLongitude" DOUBLE PRECISION;
-
--- AlterTable Advocate
-ALTER TABLE "Advocate" ADD COLUMN "officeAddress" TEXT;
-ALTER TABLE "Advocate" ADD COLUMN "pendingOfficeChange" JSONB;
-ALTER TABLE "Advocate" ADD COLUMN "officeChangeStatus" TEXT;
-ALTER TABLE "Advocate" ADD COLUMN "officeChangeRequestedAt" TIMESTAMP(3);
-ALTER TABLE "Advocate" ADD COLUMN "officeChangeReviewedAt" TIMESTAMP(3);
-ALTER TABLE "Advocate" ADD COLUMN "officeChangeRejectionReason" TEXT;
+-- AlterTable
+ALTER TABLE "Advocate" ADD COLUMN     "pendingProfileChange" JSONB,
+ADD COLUMN     "profileChangeRejectionReason" TEXT,
+ADD COLUMN     "profileChangeReviewedAt" TIMESTAMP(3),
+ADD COLUMN     "profileChangeReviewedBy" TEXT,
+ADD COLUMN     "profileChangeStatus" TEXT,
+ADD COLUMN     "profileChangeSubmittedAt" TIMESTAMP(3),
+ADD COLUMN     "profileChangeUpdatedAt" TIMESTAMP(3);
 ```
-- Only adds nullable columns.
-- No existing columns dropped or renamed.
-- Safe for zero-downtime deployment.
+- Only adds 7 nullable columns.
+- Does not drop or rename any columns.
+- Will be deployed only after your approval.
 
 ---
 
-## 5. Request & Response Samples
+## 6. Request & Response Samples
 
-### 5.1 Registration Address Step: `POST /api/auth/advocate/profile`
-**Request:** `multipart/form-data`
-- `registrationId`: `c6b70f1a-b60b-411a-b9c1-8409021e5491`
-- `pincode`: `110001`
-- `city`: `New Delhi`
-- `state`: `Delhi`
-- `officeAddress`: `Chamber No. 42, Delhi High Court Complex, Sher Shah Road`
-- `officeLatitude`: `28.6139`
-- `officeLongitude`: `77.2090`
-- `officePhoto`: *(binary image file)*
+### 6.1 Advocate Edits Profile (Multipart or JSON)
+`PATCH /api/advocate/profile`
+```http
+Content-Type: multipart/form-data
+Authorization: Bearer <advocate_jwt>
 
-**Response (`200 OK`):**
+about: Experienced Supreme Court litigation advocate with 12+ years of high-stakes commercial arbitration experience across multiple high courts in India.
+videoCallChargePerMinute: 40
+officeAddress: 402, Supreme Enclave, Sector 18, Noida
+pincode: 201301
+city: Noida
+state: Uttar Pradesh
+officeLatitude: 28.5700
+officeLongitude: 77.3200
+languages: ["English", "Hindi"]
+```
+**Response (200 OK):**
 ```json
 {
   "success": true,
-  "message": "Address and office details saved.",
-  "officeAddress": "Chamber No. 42, Delhi High Court Complex, Sher Shah Road",
-  "officePhotoUrl": "https://res.cloudinary.com/dummy/image/upload/v1234/office.jpg",
-  "officeLatitude": 28.6139,
-  "officeLongitude": 77.209,
-  "city": "New Delhi",
-  "state": "Delhi",
-  "pincode": "110001"
-}
-```
-
-### 5.2 Registration Final Completion: Missing Office Check
-If registration completion is called before address step:
-**Response (`400 Bad Request`):**
-```json
-{
-  "success": false,
-  "message": "Please complete your address and office details.",
-  "missingFields": ["officeAddress", "officePhoto", "officeLocation"]
-}
-```
-
-### 5.3 Complete Profile: Removed Fields Rejected
-`PATCH /api/advocate/profile` with `{"city": "Mumbai"}`:
-**Response (`400 Bad Request`):**
-```json
-{
-  "success": false,
-  "message": "Office/address can't be changed here. Use the office change request."
-}
-```
-
-### 5.4 Advocate Office Change Request: `PUT /api/advocate/profile/office`
-**Request:** `multipart/form-data` (Advocate Bearer Token)
-- `officeAddress`: `Suite 102, Legal Enclave, Barakhamba Road`
-- `pincode`: `110001`
-- `city`: `New Delhi`
-- `state`: `Delhi`
-- `officeLatitude`: `28.6304`
-- `officeLongitude`: `77.2177`
-- `officePhoto`: *(binary live image file)*
-
-**Response (`200 OK` - Approved Advocate):**
-```json
-{
-  "success": true,
-  "message": "Office change sent for admin approval.",
-  "officeChange": {
-    "status": "PENDING",
-    "requestedAt": "2026-10-29T08:00:00.000Z",
-    "requested": {
-      "officeAddress": "Suite 102, Legal Enclave, Barakhamba Road",
-      "pincode": "110001",
-      "city": "New Delhi",
-      "state": "Delhi",
-      "officeLatitude": 28.6304,
-      "officeLongitude": 77.2177,
-      "officePhotoUrl": "https://res.cloudinary.com/dummy/image/upload/v5678/new_office.jpg"
+  "message": "Changes saved as draft. Submit for approval to publish them.",
+  "advocate": {
+    "id": "e6a2b5...",
+    "fullName": "Adv. Ramesh Sharma",
+    "about": "Old live about text...",
+    "videoCallChargePerMinute": 30,
+    "languagesSpoken": ["English", "Hindi"],
+    "profileChange": {
+      "status": "DRAFT",
+      "updatedAt": "2026-10-29T18:30:00.000Z",
+      "submittedAt": null,
+      "reviewedAt": null,
+      "rejectionReason": null,
+      "changes": [
+        { "field": "about", "label": "About", "current": "Old live about text...", "requested": "Experienced Supreme Court litigation advocate..." },
+        { "field": "videoCallChargePerMinute", "label": "Video call fee (₹/min)", "current": 30, "requested": 40 },
+        { "field": "officeAddress", "label": "Office Address", "current": "101, Old Court Rd", "requested": "402, Supreme Enclave, Sector 18, Noida" }
+      ],
+      "approvalFields": [
+        "experienceYears", "about", "videoCallChargePerMinute", "voiceCallChargePerMinute",
+        "offlineVisitingFee", "profilePhoto", "officeAddress", "pincode", "city",
+        "state", "officeLatitude", "officeLongitude", "officePhoto"
+      ]
     }
   }
 }
 ```
 
-### 5.5 Admin List Office Changes: `GET /api/admin/advocates/office-changes?status=PENDING`
-**Response (`200 OK`):**
+### 6.2 Advocate Submits Profile Changes for Approval
+`POST /api/advocate/profile/submit-for-approval`
+```json
+// Response: 200 OK
+{
+  "success": true,
+  "message": "Changes sent for admin approval."
+}
+```
+
+### 6.3 Advocate Tries to Edit while SUBMITTED (Locked)
+`PATCH /api/advocate/profile`
+```json
+// Response: 409 Conflict
+{
+  "success": false,
+  "message": "Your profile changes are waiting for admin approval. Withdraw the request to edit again."
+}
+```
+
+### 6.4 Advocate Withdraws Profile Changes
+`POST /api/advocate/profile/changes/withdraw`
+```json
+// Response: 200 OK
+{
+  "success": true,
+  "message": "Profile change request withdrawn. You can now edit your draft."
+}
+```
+
+### 6.5 Advocate Discards Draft Changes
+`DELETE /api/advocate/profile/changes`
+```json
+// Response: 200 OK
+{
+  "success": true,
+  "message": "Profile changes discarded."
+}
+```
+
+### 6.6 Admin List Profile Change Requests
+`GET /api/admin/advocates/profile-changes?status=SUBMITTED`
 ```json
 {
   "success": true,
   "data": [
     {
       "advocate": {
-        "id": "adv-123",
-        "name": "Adv. Rajesh Kumar",
-        "fullName": "Adv. Rajesh Kumar",
-        "phone": "9876543210",
-        "barCouncilId": "D/1234/2020",
-        "email": "rajesh@example.com"
+        "id": "e6a2b5...",
+        "fullName": "Adv. Ramesh Sharma",
+        "phone": "+919876543210",
+        "email": "ramesh@example.com",
+        "barCouncilId": "D/1234/2012",
+        "profileImage": "https://res.cloudinary.../photo.jpg"
       },
-      "requestedAt": "2026-10-29T08:00:00.000Z",
-      "status": "PENDING"
+      "changedFields": ["about", "videoCallChargePerMinute", "officeAddress"],
+      "submittedAt": "2026-10-29T18:35:00.000Z",
+      "status": "SUBMITTED"
     }
   ],
   "counts": {
-    "PENDING": 1,
-    "APPROVED": 4,
-    "REJECTED": 1,
-    "total": 6
+    "SUBMITTED": 1,
+    "APPROVED": 0,
+    "REJECTED": 0,
+    "total": 1
   },
-  "pagination": {
-    "page": 1,
-    "limit": 20,
-    "total": 1,
-    "totalPages": 1
-  }
+  "pagination": { "page": 1, "limit": 20, "total": 1, "totalPages": 1 }
 }
 ```
 
-### 5.6 Admin Review Office Change: `GET /api/admin/advocates/:advocateId/office-change`
-**Response (`200 OK`):**
+### 6.7 Admin Detail View (Current vs Requested)
+`GET /api/admin/advocates/:advocateId/profile-change`
 ```json
 {
   "success": true,
-  "status": "PENDING",
-  "requestedAt": "2026-10-29T08:00:00.000Z",
+  "status": "SUBMITTED",
+  "submittedAt": "2026-10-29T18:35:00.000Z",
   "reviewedAt": null,
   "rejectionReason": null,
-  "currentOffice": {
-    "officeAddress": "Chamber No. 42, Delhi High Court Complex",
-    "officePhotoUrl": "https://res.cloudinary.com/dummy/image/upload/v1234/office.jpg",
-    "officeLatitude": 28.6139,
-    "officeLongitude": 77.209,
-    "officeMapUrl": "https://www.google.com/maps?q=28.6139,77.209",
-    "city": "New Delhi",
-    "state": "Delhi",
-    "pincode": "110001",
-    "officeLocationUpdatedAt": "2026-10-15T10:00:00.000Z"
-  },
-  "requestedOffice": {
-    "officeAddress": "Suite 102, Legal Enclave, Barakhamba Road",
-    "officePhotoUrl": "https://res.cloudinary.com/dummy/image/upload/v5678/new_office.jpg",
-    "officeLatitude": 28.6304,
-    "officeLongitude": 77.2177,
-    "officeMapUrl": "https://www.google.com/maps?q=28.6304,77.2177",
-    "city": "New Delhi",
-    "state": "Delhi",
-    "pincode": "110001"
+  "changes": [
+    { "field": "videoCallChargePerMinute", "label": "Video call fee (₹/min)", "current": 30, "requested": 40 },
+    { "field": "about", "label": "About", "current": "Old live about text...", "requested": "Experienced Supreme Court litigation advocate..." },
+    { "field": "officeAddress", "label": "Office Address", "current": "101, Old Court Rd", "requested": "402, Supreme Enclave, Sector 18, Noida" }
+  ],
+  "officeMapUrls": {
+    "current": "https://www.google.com/maps?q=28.58,77.33",
+    "requested": "https://www.google.com/maps?q=28.57,77.32"
   }
+}
+```
+
+### 6.8 Admin Approves Profile Changes
+`POST /api/admin/advocates/:advocateId/profile-change/approve`
+```json
+// Response: 200 OK
+{
+  "success": true,
+  "message": "Profile changes approved successfully."
+}
+```
+
+### 6.9 Admin Rejects Profile Changes
+`POST /api/admin/advocates/:advocateId/profile-change/reject`
+```json
+{
+  "reason": "The uploaded office photo is blurry and does not show the office name board."
+}
+```
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Profile changes rejected."
 }
 ```
 
 ---
 
-## 6. Risks & Mitigation
+## 7. Risks & Mitigations
 
-1. **Route collision in Admin endpoints:**
-   - *Risk:* `/api/admin/advocates/office-changes` could be intercepted by `/api/admin/advocates/:advocateId` if defined after it.
-   - *Mitigation:* Explicitly place `router.get('/advocates/office-changes', ...)` **before** `router.get('/advocates/:advocateId', ...)`.
-2. **Cloudinary Orphaned Images:**
-   - *Risk:* Uploading a replacement office photo before DB commit could orphan images if the DB update fails; deleting old photos prematurely could cause data loss if DB rollbacks occur.
-   - *Mitigation:* Follow the established repository pattern: upload first -> update DB -> on DB success, delete old Cloudinary public ID. If DB fails, catch and delete newly uploaded image.
-3. **Old Advocates Submission Blockers:**
-   - *Risk:* Legacy advocates who completed registration before this change might not have `officePhotoUrl` or `officeLatitude`.
-   - *Mitigation:* Completely removed the office check from `submitForApproval`. Existing advocates can submit for approval without office details.
-4. **Public Exposure of Cloudinary Public IDs:**
-   - *Risk:* Returning `officePhotoPublicId` or `pendingOfficeChange.officePhotoPublicId` in responses.
-   - *Mitigation:* Destructure and omit all `*PublicId` fields in formatters and response payloads.
-
----
-
-## 7. Answers to OPEN QUESTIONS
-
-### 1. PATCH with removed address/office fields: 400 or silently ignore?
-- **Recommendation:** **Return `400 Bad Request`** with error message:
-  `"Office/address can't be changed here. Use the office change request."`
-- **Rationale:** Silently ignoring values causes frontends to believe edits were accepted when they were dropped. Returning 400 gives explicit, fail-fast feedback and directs the developer/user to the official `PUT /api/advocate/profile/office` approval flow.
-
-### 2. Pincode → city/state: where does it happen today (frontend / backend)?
-- **Finding & Recommendation:** It happens on the **frontend**. The backend currently has no pincode-to-city/state lookup endpoint. We keep this exact architecture: the frontend resolves or collects city and state from pincode and passes all three (`pincode`, `city`, `state`) to the backend, where the backend validates format and presence.
-
-### 3. During a PENDING office change, should the public profile show the old office?
-- **Recommendation:** **Yes, the old office remains visible.**
-- **Rationale:** An advocate's office is verified. Until an admin approves a change, the platform continues to present the currently verified office address, location, and photo so client bookings and nearby searches remain accurate and safe.
+1. **Risk:** An approved advocate sends a multipart request updating both direct fields (`languages`) and approval fields (`videoCallChargePerMinute`) while `profileChangeStatus === 'SUBMITTED'`.
+   - **Mitigation:** Reject the entire request with `409 Conflict`. Direct fields are not applied partially, avoiding unexpected partial state.
+2. **Risk:** Draft photos uploaded to Cloudinary become orphaned if the advocate discards their draft or replaces the photo multiple times.
+   - **Mitigation:**
+     - On photo replacement in draft: immediately delete the superseded draft photo from Cloudinary after DB commit.
+     - On `DELETE /api/advocate/profile/changes` (discard): delete draft photos from Cloudinary.
+     - On account deletion: `advocateDeletion.service.js` deletes draft photos.
+3. **Risk:** Booking quote or checkout reading draft fees instead of live fees.
+   - **Mitigation:** Booking code queries `Advocate` scalar columns directly (`voiceCallChargePerMinute`, `videoCallChargePerMinute`, `offlineVisitingFee`). `pendingProfileChange` is never inspected in any booking code. Unit test will explicitly verify this guarantee.
+4. **Risk:** Legacy `latitude` / `longitude` fields in body.
+   - **Mitigation:** Strict validation explicitly rejects them with 400 "Use officeLatitude/officeLongitude."
 
 ---
 
-## 8. Status & Next Step
-Plan is written in `proceed.md`.
-**STOPPING HERE.** Waiting for your review and explicit message typing **"approved"**.
-After approval:
-1. I will generate the migration script via Prisma diff and present the SQL for your "OK".
-2. Only after your "OK" will `migrate deploy` and code implementation proceed.
+## 8. Answers to OPEN QUESTIONS
+
+1. **In one PATCH from an approved advocate that mixes direct and approval fields while SUBMITTED: reject the whole request (409)?**
+   - **Recommendation: YES.** Rejecting the whole request keeps frontend error handling deterministic and simple. The advocate is clearly instructed: *"Your profile changes are waiting for admin approval. Withdraw the request to edit again."*
+2. **Should the advocate get any notification (email) on approve/reject?**
+   - **Recommendation: NO (Default).** Keep this task focused on the approval workflow and schema changes without introducing email delivery dependencies or templates.
+3. **Anything in the existing code that already blocks approved advocates from editing some of these fields?**
+   - **Finding:** Currently, approved advocates were ONLY blocked from editing office fields via `validateNoAddressOrOfficeFields`. Other fields (`experienceYears`, `about`, `videoCallChargePerMinute`, `voiceCallChargePerMinute`, `offlineVisitingFee`, `profilePhoto`) were NOT gated by approval status. Implementing this workflow properly gates all 13 approval fields behind admin review for approved advocates, while leaving non-approved advocates on direct updates.
+
+---
+
+## 9. Next Steps (Awaiting User Action)
+We are stopped at **STEP 0**. Please review this plan and type **`approved`** to proceed to implementation.

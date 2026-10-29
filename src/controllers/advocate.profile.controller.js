@@ -1,7 +1,45 @@
 import prisma from '../lib/prisma.js';
-import { advocateProfileUpdateSchema, advocateOfficeChangeSchema } from '../validators/advocate.validator.js';
+import { advocateProfileUpdateSchema } from '../validators/advocate.validator.js';
 import { uploadBufferToCloudinary, deleteFromCloudinary } from '../services/cloudinary.service.js';
 import { computeEffectiveOnlineStatus } from '../utils/advocateStatus.js';
+
+/**
+ * Approval-required fields for APPROVED advocates.
+ */
+export const APPROVAL_FIELDS = [
+  'experienceYears',
+  'about',
+  'videoCallChargePerMinute',
+  'voiceCallChargePerMinute',
+  'offlineVisitingFee',
+  'profilePhoto',
+  'officeAddress',
+  'pincode',
+  'city',
+  'state',
+  'officeLatitude',
+  'officeLongitude',
+  'officePhoto'
+];
+
+/**
+ * Human-readable labels for approval fields.
+ */
+export const FIELD_LABELS = {
+  experienceYears: 'Experience (years)',
+  about: 'About',
+  videoCallChargePerMinute: 'Video call fee (₹/min)',
+  voiceCallChargePerMinute: 'Voice call fee (₹/min)',
+  offlineVisitingFee: 'Offline visiting fee (₹)',
+  profilePhoto: 'Profile photo',
+  officeAddress: 'Office address',
+  pincode: 'Pincode',
+  city: 'City',
+  state: 'State',
+  officeLatitude: 'Office latitude',
+  officeLongitude: 'Office longitude',
+  officePhoto: 'Office photo'
+};
 
 /**
  * Shared validator for uploaded image files (profile photo, office photo).
@@ -50,6 +88,73 @@ export const formatOfficeDetails = (advocate) => {
 };
 
 /**
+ * Formats the pending profile change block for API responses.
+ * Never exposes Cloudinary publicIds.
+ */
+export const formatProfileChange = (advocate) => {
+  if (!advocate || advocate.approvalStatus !== 'APPROVED' || !advocate.profileChangeStatus) {
+    return null;
+  }
+  const pending = advocate.pendingProfileChange || {};
+  const changes = [];
+
+  for (const [key, reqVal] of Object.entries(pending)) {
+    if (!APPROVAL_FIELDS.includes(key)) continue;
+    const label = FIELD_LABELS[key] || key;
+    let current = null;
+    let requested = reqVal;
+
+    if (key === 'profilePhoto') {
+      current = advocate.profilePhotoUrl ?? null;
+      requested = reqVal?.url ?? reqVal;
+    } else if (key === 'officePhoto') {
+      current = advocate.officePhotoUrl ?? null;
+      requested = reqVal?.url ?? reqVal;
+    } else {
+      current = advocate[key] !== undefined && advocate[key] !== null
+        ? (typeof advocate[key] === 'object' && 'toNumber' in advocate[key] ? advocate[key].toNumber() : advocate[key])
+        : null;
+      if (typeof reqVal === 'object' && reqVal !== null && 'toNumber' in reqVal) {
+        requested = reqVal.toNumber();
+      }
+    }
+
+    changes.push({
+      field: key,
+      label,
+      current,
+      requested
+    });
+  }
+
+  return {
+    status: advocate.profileChangeStatus,
+    updatedAt: advocate.profileChangeUpdatedAt,
+    submittedAt: advocate.profileChangeSubmittedAt,
+    reviewedAt: advocate.profileChangeReviewedAt,
+    rejectionReason: advocate.profileChangeRejectionReason,
+    changes,
+    approvalFields: APPROVAL_FIELDS
+  };
+};
+
+/**
+ * Helper to check if a requested value is equal to the live advocate value.
+ */
+const isEqualValue = (field, liveVal, reqVal) => {
+  if (reqVal === undefined) return true;
+  if (liveVal === null || liveVal === undefined) {
+    return reqVal === null || reqVal === undefined || reqVal === '';
+  }
+  if (['experienceYears', 'videoCallChargePerMinute', 'voiceCallChargePerMinute', 'offlineVisitingFee', 'officeLatitude', 'officeLongitude'].includes(field)) {
+    const liveNum = typeof liveVal === 'object' && liveVal !== null && 'toNumber' in liveVal ? liveVal.toNumber() : Number(liveVal);
+    const reqNum = Number(reqVal);
+    return Math.abs(liveNum - reqNum) < 0.000001;
+  }
+  return String(liveVal).trim() === String(reqVal).trim();
+};
+
+/**
  * Get the currently authenticated advocate's profile.
  */
 export const getProfile = async (req, res, next) => {
@@ -73,26 +178,16 @@ export const getProfile = async (req, res, next) => {
     }
 
     // Exclude passwordHash, aadhaarNumber, and officePhotoPublicId
-    const { passwordHash, aadhaarNumber, officePhotoPublicId, pendingOfficeChange, ...safeAdvocate } = advocate;
+    const { passwordHash, aadhaarNumber, officePhotoPublicId, pendingOfficeChange, pendingProfileChange, ...safeAdvocate } = advocate;
     const officeDetails = formatOfficeDetails(advocate);
-
-    const officeChange = advocate.officeChangeStatus ? {
-      status: advocate.officeChangeStatus,
-      requestedAt: advocate.officeChangeRequestedAt,
-      reviewedAt: advocate.officeChangeReviewedAt,
-      rejectionReason: advocate.officeChangeRejectionReason,
-      requested: advocate.pendingOfficeChange ? (() => {
-        const { officePhotoPublicId: _oppId, ...safePending } = advocate.pendingOfficeChange;
-        return safePending;
-      })() : null
-    } : null;
+    const profileChange = formatProfileChange(advocate);
 
     return res.status(200).json({
       success: true,
       advocate: {
         ...safeAdvocate,
         ...officeDetails,
-        officeChange,
+        profileChange,
         isOnline: computeEffectiveOnlineStatus(advocate.isOnline, advocate.lastSeenAt),
         lastSeenAt: advocate.lastSeenAt,
         callAvailability: advocate.callAvailability ?? false,
@@ -129,7 +224,6 @@ export const checkIsProfileComplete = (advocate) => {
 /**
  * Submit Advocate Profile for Admin Approval.
  * POST /api/advocate/profile/submit-for-approval
- * POST /api/advocates/profile/submit-for-approval
  */
 export const submitForApproval = async (req, res, next) => {
   try {
@@ -161,15 +255,36 @@ export const submitForApproval = async (req, res, next) => {
       });
     }
 
-    // Check if already approved
+    // Advocate APPROVED -> Submit profile changes workflow
     if (advocate.approvalStatus === 'APPROVED') {
-      return res.status(400).json({
-        success: false,
-        message: 'Profile is already approved.'
+      const draft = advocate.pendingProfileChange;
+      if (
+        advocate.profileChangeStatus !== 'DRAFT' ||
+        !draft ||
+        typeof draft !== 'object' ||
+        Object.keys(draft).length === 0
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: 'No changes to submit.'
+        });
+      }
+
+      await prisma.advocate.update({
+        where: { id: advocateId },
+        data: {
+          profileChangeStatus: 'SUBMITTED',
+          profileChangeSubmittedAt: new Date()
+        }
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Changes sent for admin approval.'
       });
     }
 
-    // Check profile completion (base details)
+    // Advocate NOT approved -> Standard initial profile verification submission
     if (!checkIsProfileComplete(advocate)) {
       return res.status(400).json({
         success: false,
@@ -177,7 +292,6 @@ export const submitForApproval = async (req, res, next) => {
       });
     }
 
-    // Submit / Resubmit for approval -> PENDING
     await prisma.advocate.update({
       where: { id: advocateId },
       data: {
@@ -197,7 +311,128 @@ export const submitForApproval = async (req, res, next) => {
 };
 
 /**
+ * Withdraw submitted profile changes (SUBMITTED -> DRAFT).
+ * POST /api/advocate/profile/changes/withdraw
+ */
+export const withdrawProfileChanges = async (req, res, next) => {
+  try {
+    if (!req.user || req.user.type !== 'advocate') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access forbidden. Advocate role required.'
+      });
+    }
+
+    const advocate = await prisma.advocate.findUnique({
+      where: { id: req.user.id }
+    });
+
+    if (!advocate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Advocate profile not found.'
+      });
+    }
+
+    if (advocate.profileChangeStatus !== 'SUBMITTED') {
+      return res.status(409).json({
+        success: false,
+        message: 'No submitted changes to withdraw.'
+      });
+    }
+
+    await prisma.advocate.update({
+      where: { id: req.user.id },
+      data: {
+        profileChangeStatus: 'DRAFT'
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Profile change request withdrawn. You can now edit your draft.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Discard draft profile changes (DRAFT / REJECTED -> cleared).
+ * DELETE /api/advocate/profile/changes
+ */
+export const discardProfileChanges = async (req, res, next) => {
+  try {
+    if (!req.user || req.user.type !== 'advocate') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access forbidden. Advocate role required.'
+      });
+    }
+
+    const advocate = await prisma.advocate.findUnique({
+      where: { id: req.user.id }
+    });
+
+    if (!advocate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Advocate profile not found.'
+      });
+    }
+
+    if (advocate.profileChangeStatus === 'SUBMITTED') {
+      return res.status(409).json({
+        success: false,
+        message: 'Withdraw first.'
+      });
+    }
+
+    if (!advocate.pendingProfileChange && !advocate.profileChangeStatus) {
+      return res.status(400).json({
+        success: false,
+        message: 'No changes to discard.'
+      });
+    }
+
+    const draft = advocate.pendingProfileChange || {};
+    const draftProfilePublicId = draft.profilePhoto?.publicId;
+    const draftOfficePublicId = draft.officePhoto?.publicId;
+
+    await prisma.advocate.update({
+      where: { id: req.user.id },
+      data: {
+        pendingProfileChange: null,
+        profileChangeStatus: null,
+        profileChangeUpdatedAt: null,
+        profileChangeSubmittedAt: null,
+        profileChangeReviewedAt: null,
+        profileChangeRejectionReason: null,
+        profileChangeReviewedBy: null
+      }
+    });
+
+    // Clean up draft photos from Cloudinary
+    if (draftProfilePublicId) {
+      await deleteFromCloudinary(draftProfilePublicId).catch(() => {});
+    }
+    if (draftOfficePublicId) {
+      await deleteFromCloudinary(draftOfficePublicId).catch(() => {});
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Profile changes discarded.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Update the currently authenticated advocate's profile.
+ * PATCH /api/advocate/profile
+ * Accepts JSON or multipart/form-data.
  */
 export const updateProfile = async (req, res, next) => {
   try {
@@ -210,70 +445,233 @@ export const updateProfile = async (req, res, next) => {
 
     const validated = advocateProfileUpdateSchema.parse(req.body);
 
-    const updateData = {};
+    const advocate = await prisma.advocate.findUnique({
+      where: { id: req.user.id }
+    });
 
-    const allowedScalars = [
-      'fullName', 'gender', 'barCouncilId', 'aadhaarNumber', 'email', 'about',
-      'completeAddress', 'offlineVisitingFee', 'casesHandled',
-      'bestPracticeArea', 'topCourtPractised', 'practiceAreas'
+    if (!advocate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Advocate profile not found.'
+      });
+    }
+
+    // Extract uploaded files
+    const profilePhotoFile = req.files?.profilePhoto?.[0] || (req.file?.fieldname === 'profilePhoto' ? req.file : null);
+    const officePhotoFile = req.files?.officePhoto?.[0] || (req.file?.fieldname === 'officePhoto' ? req.file : null);
+
+    if (profilePhotoFile) {
+      const v = validateUploadedPhoto(profilePhotoFile);
+      if (!v.valid) return res.status(v.status).json({ success: false, message: v.message });
+    }
+    if (officePhotoFile) {
+      const v = validateUploadedPhoto(officePhotoFile);
+      if (!v.valid) return res.status(v.status).json({ success: false, message: v.message });
+    }
+
+    // Normalize payload with aliases
+    const normalized = { ...validated };
+    if (normalized.bio !== undefined) normalized.about = normalized.bio;
+    if (normalized.experience !== undefined) normalized.experienceYears = normalized.experience;
+    if (normalized.videoChargePerMinute !== undefined) normalized.videoCallChargePerMinute = normalized.videoChargePerMinute;
+    if (normalized.voiceChargePerMinute !== undefined) normalized.voiceCallChargePerMinute = normalized.voiceChargePerMinute;
+    if (normalized.languages !== undefined) normalized.languagesSpoken = normalized.languages;
+
+    const directFieldKeys = [
+      'fullName', 'gender', 'casesHandled', 'practiceAreas', 'practiceAreaIds',
+      'bestPracticeArea', 'topCourtPractised', 'courtPractice', 'languagesSpoken',
+      'completeAddress'
+    ];
+    const approvalScalarKeys = [
+      'experienceYears', 'about', 'videoCallChargePerMinute', 'voiceCallChargePerMinute',
+      'offlineVisitingFee', 'officeAddress', 'pincode', 'city', 'state',
+      'officeLatitude', 'officeLongitude'
     ];
 
-    for (const field of allowedScalars) {
-      if (validated[field] !== undefined) {
-        updateData[field] = validated[field];
+    // ==========================================
+    // CASE A: Advocate is NOT APPROVED
+    // ==========================================
+    if (advocate.approvalStatus !== 'APPROVED') {
+      const updateData = {};
+      const oldLivePhotosToDelete = [];
+
+      // Direct fields
+      for (const field of directFieldKeys) {
+        if (normalized[field] !== undefined) {
+          if (field === 'practiceAreaIds') {
+            updateData.practiceAreas = normalized[field];
+          } else {
+            updateData[field] = normalized[field];
+          }
+        }
+      }
+
+      // Approval scalar fields (apply directly to live record)
+      for (const field of approvalScalarKeys) {
+        if (normalized[field] !== undefined) {
+          updateData[field] = normalized[field];
+        }
+      }
+
+      // Office coordinates mapping to live latitude/longitude
+      if (normalized.officeLatitude !== undefined && normalized.officeLongitude !== undefined) {
+        updateData.latitude = normalized.officeLatitude;
+        updateData.longitude = normalized.officeLongitude;
+        updateData.officeLocationUpdatedAt = new Date();
+      }
+
+      // Upload profile photo directly if provided
+      if (profilePhotoFile) {
+        const { url, publicId } = await uploadBufferToCloudinary(profilePhotoFile.buffer);
+        updateData.profilePhotoUrl = url;
+        updateData.profilePhotoPublicId = publicId;
+        if (advocate.profilePhotoPublicId) {
+          oldLivePhotosToDelete.push(advocate.profilePhotoPublicId);
+        }
+      }
+
+      // Upload office photo directly if provided
+      if (officePhotoFile) {
+        const { url, publicId } = await uploadBufferToCloudinary(officePhotoFile.buffer);
+        updateData.officePhotoUrl = url;
+        updateData.officePhotoPublicId = publicId;
+        if (advocate.officePhotoPublicId) {
+          oldLivePhotosToDelete.push(advocate.officePhotoPublicId);
+        }
+      }
+
+      const updatedAdvocate = await prisma.advocate.update({
+        where: { id: req.user.id },
+        data: updateData
+      });
+
+      // Cleanup replaced live photos
+      for (const pId of oldLivePhotosToDelete) {
+        await deleteFromCloudinary(pId).catch(() => {});
+      }
+
+      const { passwordHash, aadhaarNumber, officePhotoPublicId: _opId, pendingOfficeChange: _poc, pendingProfileChange: _ppc, ...safeAdvocate } = updatedAdvocate;
+      const officeDetails = formatOfficeDetails(updatedAdvocate);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Profile updated successfully',
+        advocate: {
+          ...safeAdvocate,
+          ...officeDetails,
+          profileChange: null,
+          type: 'advocate'
+        }
+      });
+    }
+
+    // ==========================================
+    // CASE B: Advocate IS APPROVED
+    // ==========================================
+    if (advocate.profileChangeStatus === 'SUBMITTED') {
+      return res.status(409).json({
+        success: false,
+        message: 'Your profile changes are waiting for admin approval. Withdraw the request to edit again.'
+      });
+    }
+
+    // Start with existing draft (or rejected values if restarting after rejection)
+    const draft = { ...(advocate.pendingProfileChange || {}) };
+    const draftPhotosToDelete = [];
+    let touchedApprovalFields = false;
+
+    // Process photo uploads into draft
+    if (profilePhotoFile) {
+      touchedApprovalFields = true;
+      const { url, publicId } = await uploadBufferToCloudinary(profilePhotoFile.buffer);
+      if (draft.profilePhoto?.publicId) {
+        draftPhotosToDelete.push(draft.profilePhoto.publicId);
+      }
+      draft.profilePhoto = { url, publicId };
+    }
+
+    if (officePhotoFile) {
+      touchedApprovalFields = true;
+      const { url, publicId } = await uploadBufferToCloudinary(officePhotoFile.buffer);
+      if (draft.officePhoto?.publicId) {
+        draftPhotosToDelete.push(draft.officePhoto.publicId);
+      }
+      draft.officePhoto = { url, publicId };
+    }
+
+    // Process approval scalar fields
+    for (const key of approvalScalarKeys) {
+      if (normalized[key] !== undefined) {
+        touchedApprovalFields = true;
+        const reqVal = normalized[key];
+        const isSame = isEqualValue(key, advocate[key], reqVal);
+        if (isSame) {
+          // If value equals live value, drop from draft
+          delete draft[key];
+        } else {
+          draft[key] = reqVal;
+        }
       }
     }
 
-    // Map aliases
-    if (validated.bio !== undefined) {
-      updateData.about = validated.bio;
-    } else if (validated.about !== undefined) {
-      updateData.about = validated.about;
+    // Direct fields (applied directly to live fields)
+    const liveUpdateData = {};
+    let touchedDirectFields = false;
+    for (const field of directFieldKeys) {
+      if (normalized[field] !== undefined) {
+        touchedDirectFields = true;
+        if (field === 'practiceAreaIds') {
+          liveUpdateData.practiceAreas = normalized[field];
+        } else {
+          liveUpdateData[field] = normalized[field];
+        }
+      }
     }
 
-    if (validated.experience !== undefined) {
-      updateData.experienceYears = validated.experience;
-    } else if (validated.experienceYears !== undefined) {
-      updateData.experienceYears = validated.experienceYears;
-    }
+    const hasDraftChanges = Object.keys(draft).length > 0;
+    const dbUpdateData = { ...liveUpdateData };
 
-    if (validated.videoChargePerMinute !== undefined) {
-      updateData.videoCallChargePerMinute = validated.videoChargePerMinute;
-    } else if (validated.videoCallChargePerMinute !== undefined) {
-      updateData.videoCallChargePerMinute = validated.videoCallChargePerMinute;
-    }
-
-    if (validated.voiceChargePerMinute !== undefined) {
-      updateData.voiceCallChargePerMinute = validated.voiceChargePerMinute;
-    } else if (validated.voiceCallChargePerMinute !== undefined) {
-      updateData.voiceCallChargePerMinute = validated.voiceCallChargePerMinute;
-    }
-
-    if (validated.languages !== undefined) {
-      updateData.languagesSpoken = validated.languages;
-    } else if (validated.languagesSpoken !== undefined) {
-      updateData.languagesSpoken = validated.languagesSpoken;
-    }
-
-    if (validated.courtPractice !== undefined) {
-      updateData.courtPractice = validated.courtPractice;
+    if (hasDraftChanges) {
+      dbUpdateData.pendingProfileChange = draft;
+      dbUpdateData.profileChangeStatus = 'DRAFT';
+      dbUpdateData.profileChangeUpdatedAt = new Date();
+      dbUpdateData.profileChangeRejectionReason = null;
+    } else {
+      // Draft has become completely empty
+      if (advocate.pendingProfileChange || advocate.profileChangeStatus) {
+        dbUpdateData.pendingProfileChange = null;
+        dbUpdateData.profileChangeStatus = null;
+        dbUpdateData.profileChangeUpdatedAt = null;
+        dbUpdateData.profileChangeRejectionReason = null;
+      }
     }
 
     const updatedAdvocate = await prisma.advocate.update({
       where: { id: req.user.id },
-      data: updateData
+      data: dbUpdateData
     });
 
-    // Exclude passwordHash, aadhaarNumber, and officePhotoPublicId
-    const { passwordHash, aadhaarNumber, officePhotoPublicId, ...safeAdvocate } = updatedAdvocate;
+    // Delete superseded draft photos
+    for (const pId of draftPhotosToDelete) {
+      await deleteFromCloudinary(pId).catch(() => {});
+    }
+
+    const { passwordHash, aadhaarNumber, officePhotoPublicId: _opId, pendingOfficeChange: _poc, pendingProfileChange: _ppc, ...safeAdvocate } = updatedAdvocate;
     const officeDetails = formatOfficeDetails(updatedAdvocate);
+    const profileChange = formatProfileChange(updatedAdvocate);
+
+    let message = 'Profile updated.';
+    if (touchedApprovalFields && hasDraftChanges) {
+      message = 'Changes saved as draft. Submit for approval to publish them.';
+    }
 
     return res.status(200).json({
       success: true,
-      message: 'Profile updated successfully',
+      message,
       advocate: {
         ...safeAdvocate,
         ...officeDetails,
+        profileChange,
         type: 'advocate'
       }
     });
@@ -283,7 +681,8 @@ export const updateProfile = async (req, res, next) => {
 };
 
 /**
- * Upload profile photo for advocate and cleanup old Cloudinary image.
+ * Upload profile photo for advocate (POST /api/advocate/profile/photo).
+ * Compatible alias of PATCH /api/advocate/profile with profilePhoto.
  */
 export const uploadProfilePhoto = async (req, res, next) => {
   try {
@@ -313,13 +712,56 @@ export const uploadProfilePhoto = async (req, res, next) => {
       });
     }
 
-    const oldPublicId = advocate.profilePhotoPublicId;
+    // Approved advocate: save photo to draft pendingProfileChange
+    if (advocate.approvalStatus === 'APPROVED') {
+      if (advocate.profileChangeStatus === 'SUBMITTED') {
+        return res.status(409).json({
+          success: false,
+          message: 'Your profile changes are waiting for admin approval. Withdraw the request to edit again.'
+        });
+      }
 
-    // Upload new image to Cloudinary
+      const { url, publicId } = await uploadBufferToCloudinary(req.file.buffer);
+      const draft = { ...(advocate.pendingProfileChange || {}) };
+      const oldDraftPublicId = draft.profilePhoto?.publicId;
+
+      draft.profilePhoto = { url, publicId };
+
+      const updatedAdvocate = await prisma.advocate.update({
+        where: { id: req.user.id },
+        data: {
+          pendingProfileChange: draft,
+          profileChangeStatus: 'DRAFT',
+          profileChangeUpdatedAt: new Date(),
+          profileChangeRejectionReason: null
+        }
+      });
+
+      if (oldDraftPublicId) {
+        await deleteFromCloudinary(oldDraftPublicId).catch(() => {});
+      }
+
+      const { passwordHash, aadhaarNumber, officePhotoPublicId: _opId, pendingOfficeChange: _poc, pendingProfileChange: _ppc, ...safeAdvocate } = updatedAdvocate;
+      const officeDetails = formatOfficeDetails(updatedAdvocate);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Changes saved as draft. Submit for approval to publish them.',
+        profilePhotoUrl: url,
+        advocate: {
+          ...safeAdvocate,
+          ...officeDetails,
+          profileChange: formatProfileChange(updatedAdvocate),
+          type: 'advocate'
+        }
+      });
+    }
+
+    // Non-approved advocate: direct live update
+    const oldPublicId = advocate.profilePhotoPublicId;
     const { url, publicId } = await uploadBufferToCloudinary(req.file.buffer);
 
     try {
-      // Update DB with new photo
       const updatedAdvocate = await prisma.advocate.update({
         where: { id: req.user.id },
         data: {
@@ -328,12 +770,11 @@ export const uploadProfilePhoto = async (req, res, next) => {
         }
       });
 
-      // DB update succeeded, delete old Cloudinary image if it exists
       if (oldPublicId) {
-        await deleteFromCloudinary(oldPublicId);
+        await deleteFromCloudinary(oldPublicId).catch(() => {});
       }
 
-      const { passwordHash, aadhaarNumber, officePhotoPublicId, ...safeAdvocate } = updatedAdvocate;
+      const { passwordHash, aadhaarNumber, officePhotoPublicId: _opId, pendingOfficeChange: _poc, pendingProfileChange: _ppc, ...safeAdvocate } = updatedAdvocate;
       const officeDetails = formatOfficeDetails(updatedAdvocate);
 
       return res.status(200).json({
@@ -343,143 +784,11 @@ export const uploadProfilePhoto = async (req, res, next) => {
         advocate: {
           ...safeAdvocate,
           ...officeDetails,
+          profileChange: null,
           type: 'advocate'
         }
       });
     } catch (dbError) {
-      // Clean up orphaned new image from Cloudinary
-      await deleteFromCloudinary(publicId);
-      throw dbError;
-    }
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
-/**
- * Request office details change for advocate (PUT /api/advocate/profile/office).
- * - Non-approved advocate: applied directly to live fields.
- * - Approved advocate: sent for admin approval via pendingOfficeChange.
- */
-export const requestOfficeChange = async (req, res, next) => {
-  try {
-    if (!req.user || req.user.type !== 'advocate') {
-      return res.status(403).json({
-        success: false,
-        message: 'Access forbidden. Advocate role required.'
-      });
-    }
-
-    const validation = validateUploadedPhoto(req.file);
-    if (!validation.valid) {
-      return res.status(validation.status).json({
-        success: false,
-        message: validation.message
-      });
-    }
-
-    const validated = advocateOfficeChangeSchema.parse(req.body);
-
-    const advocate = await prisma.advocate.findUnique({
-      where: { id: req.user.id }
-    });
-
-    if (!advocate) {
-      return res.status(404).json({
-        success: false,
-        message: 'Advocate profile not found.'
-      });
-    }
-
-    // Upload new live office photo to Cloudinary
-    const { url, publicId } = await uploadBufferToCloudinary(req.file.buffer);
-
-    try {
-      if (advocate.approvalStatus !== 'APPROVED') {
-        // Non-approved advocate (draft / PENDING / REJECTED): apply directly to live fields
-        const oldPublicId = advocate.officePhotoPublicId;
-
-        const updatedAdvocate = await prisma.advocate.update({
-          where: { id: req.user.id },
-          data: {
-            officeAddress: validated.officeAddress,
-            officePhotoUrl: url,
-            officePhotoPublicId: publicId,
-            officeLatitude: validated.officeLatitude,
-            officeLongitude: validated.officeLongitude,
-            latitude: validated.officeLatitude,
-            longitude: validated.officeLongitude,
-            city: validated.city,
-            state: validated.state,
-            pincode: validated.pincode,
-            officeLocationUpdatedAt: new Date()
-          }
-        });
-
-        // Delete old live photo after DB commit
-        if (oldPublicId) {
-          await deleteFromCloudinary(oldPublicId).catch(() => {});
-        }
-
-        const { passwordHash, aadhaarNumber, officePhotoPublicId: _opId, pendingOfficeChange: _poc, ...safeAdvocate } = updatedAdvocate;
-        const officeDetails = formatOfficeDetails(updatedAdvocate);
-
-        return res.status(200).json({
-          success: true,
-          message: 'Office details updated.',
-          office: officeDetails.office,
-          advocate: {
-            ...safeAdvocate,
-            ...officeDetails,
-            type: 'advocate'
-          }
-        });
-      } else {
-        // Approved advocate: save to pendingOfficeChange for admin approval
-        const oldPendingPublicId = advocate.pendingOfficeChange?.officePhotoPublicId;
-
-        const requestedAt = new Date();
-        const pendingData = {
-          officeAddress: validated.officeAddress,
-          pincode: validated.pincode,
-          city: validated.city,
-          state: validated.state,
-          officeLatitude: validated.officeLatitude,
-          officeLongitude: validated.officeLongitude,
-          officePhotoUrl: url,
-          officePhotoPublicId: publicId
-        };
-
-        await prisma.advocate.update({
-          where: { id: req.user.id },
-          data: {
-            pendingOfficeChange: pendingData,
-            officeChangeStatus: 'PENDING',
-            officeChangeRequestedAt: requestedAt,
-            officeChangeRejectionReason: null
-          }
-        });
-
-        // Delete previous pending photo if one existed
-        if (oldPendingPublicId) {
-          await deleteFromCloudinary(oldPendingPublicId).catch(() => {});
-        }
-
-        const { officePhotoPublicId: _pId, ...safeRequested } = pendingData;
-
-        return res.status(200).json({
-          success: true,
-          message: 'Office change sent for admin approval.',
-          officeChange: {
-            status: 'PENDING',
-            requestedAt: requestedAt.toISOString(),
-            requested: safeRequested
-          }
-        });
-      }
-    } catch (dbError) {
-      // Clean up newly uploaded image from Cloudinary if DB update failed
       await deleteFromCloudinary(publicId).catch(() => {});
       throw dbError;
     }
@@ -574,7 +883,6 @@ export const getVerificationStatus = async (req, res, next) => {
     }
 
     // 3. PENDING State vs NOT_SUBMITTED State
-    // If profile has never been submitted for approval (submittedForApprovalAt is null), return NOT_SUBMITTED
     if (!advocate.submittedForApprovalAt) {
       return res.status(200).json({
         success: true,
@@ -583,7 +891,6 @@ export const getVerificationStatus = async (req, res, next) => {
       });
     }
 
-    // Otherwise, profile is submitted and currently under admin review
     const pendingResponse = {
       success: true,
       status: 'PENDING',
@@ -598,4 +905,3 @@ export const getVerificationStatus = async (req, res, next) => {
     next(error);
   }
 };
-

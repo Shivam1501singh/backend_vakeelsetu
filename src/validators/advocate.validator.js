@@ -180,46 +180,114 @@ export const validateOfficeCoordinates = (data, ctx) => {
   }
 };
 
-// Profile update validation schema (Base object before refinement)
-export const advocateProfileUpdateBaseSchema = z.object({
-  experienceYears: z.number().int().min(0, { message: 'Experience must be a non-negative number.' }).max(80, { message: 'Experience cannot exceed 80 years.' }).optional().nullable(),
-  casesHandled: z.number().int().min(0, { message: 'Cases handled must be a non-negative number.' }).max(100000, { message: 'Cases handled cannot exceed 100,000.' }).optional().nullable(),
-  practiceAreaIds: z.array(z.string()).min(1, { message: 'Select at least one practice area.' }).optional().nullable(),
-  bestPracticeArea: z.string().trim().max(100, { message: 'Best Practice Area cannot exceed 100 characters.' }).optional().nullable(),
-  about: bioSchema,
-  bio: bioSchema,
-  courtPractice: z.array(z.string().trim()).optional().nullable(),
-  completeAddress: z.string().trim().max(500, { message: 'Address cannot exceed 500 characters.' }).optional().nullable(),
-  videoCallChargePerMinute: z.number().min(0, { message: 'Video call charge must be a non-negative number.' }).max(100000, { message: 'Video call charge cannot exceed 100,000.' }).optional().nullable(),
-  voiceCallChargePerMinute: z.number().min(0, { message: 'Voice call charge must be a non-negative number.' }).max(100000, { message: 'Voice call charge cannot exceed 100,000.' }).optional().nullable(),
-  offlineVisitingFee: z.number().min(0, { message: 'Offline visiting fee must be a non-negative number.' }).max(1000000, { message: 'Offline visiting fee cannot exceed 1,000,000.' }).optional().nullable(),
-  state: z.string().trim().min(2, { message: 'State must be at least 2 characters.' }).max(100).optional(),
-  city: z.string().trim().min(2, { message: 'City must be at least 2 characters.' }).max(100).optional(),
-  pincode: pincodeSchema.optional().nullable(),
+// Helper to parse integers that may arrive as strings in multipart/form-data
+export const parseOptionalInt = (min, max, label) => z.preprocess((val) => {
+  if (val === undefined || val === null || val === '') return val === '' ? null : val;
+  if (typeof val === 'number') return Math.floor(val);
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (trimmed === '') return null;
+    if (!/^-?\d+$/.test(trimmed)) return NaN;
+    return parseInt(trimmed, 10);
+  }
+  return NaN;
+}, z.number({ invalid_type_error: `${label} must be a valid integer.` })
+  .int({ message: `${label} must be an integer.` })
+  .min(min, { message: `${label} must be a non-negative number.` })
+  .max(max, { message: `${label} cannot exceed ${max}.` })
+  .optional()
+  .nullable()
+);
 
-  // New direct fields
-  practiceAreas: z.array(z.string().trim().min(1, { message: 'Practice Area cannot be empty.' }))
-    .min(1, { message: 'Select at least one practice area.' })
-    .max(20, { message: 'You can select a maximum of 20 practice areas.' })
-    .optional()
-    .nullable(),
-  topCourtPractised: z.string().trim().max(100, { message: 'Top Court Practised name cannot exceed 100 characters.' }).optional().nullable(),
+// Helper to parse numbers/floats that may arrive as strings in multipart/form-data
+export const parseOptionalFloat = (min, max, label) => z.preprocess((val) => {
+  if (val === undefined || val === null || val === '') return val === '' ? null : val;
+  if (typeof val === 'number') return val;
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (trimmed === '') return null;
+    if (!/^-?\d+(\.\d+)?$/.test(trimmed)) return NaN;
+    return parseFloat(trimmed);
+  }
+  return NaN;
+}, z.number({ invalid_type_error: `${label} must be a valid number.` })
+  .min(min, { message: `${label} must be a non-negative number.` })
+  .max(max, { message: `${label} cannot exceed ${max}.` })
+  .refine((n) => !Number.isNaN(n) && Number.isFinite(n), { message: `${label} must be a valid finite number.` })
+  .optional()
+  .nullable()
+);
 
-  // Aliases (Section 10 request payload support)
-  experience: z.number().int().min(0, { message: 'Experience must be a non-negative number.' }).max(80, { message: 'Experience cannot exceed 80 years.' }).optional().nullable(),
-  videoChargePerMinute: z.number().min(0, { message: 'Video charge must be a non-negative number.' }).optional().nullable(),
-  voiceChargePerMinute: z.number().min(0, { message: 'Voice charge must be a non-negative number.' }).optional().nullable(),
-  languages: z.array(z.string().trim().min(1)).optional().nullable(),
-
-  // Office location coordinates collected at profile completion
-  officeLatitude: officeLatitudeSchema,
-  officeLongitude: officeLongitudeSchema
-});
+// Helper to parse arrays that may arrive as JSON strings in multipart/form-data
+export const parseOptionalArray = (itemSchema, maxItems) => z.preprocess((val) => {
+  if (val === undefined || val === null || val === '') return val === '' ? null : val;
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (trimmed === '') return null;
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return [trimmed];
+      }
+    }
+    return [trimmed];
+  }
+  return val;
+}, maxItems
+  ? z.array(itemSchema).max(maxItems, { message: `Maximum of ${maxItems} items allowed.` }).optional().nullable()
+  : z.array(itemSchema).optional().nullable()
+);
 
 export const officeAddressSchema = z.string({ required_error: 'Office address is required.' })
   .trim()
   .min(10, { message: 'Office address must be at least 10 characters.' })
   .max(500, { message: 'Office address cannot exceed 500 characters.' });
+
+// Profile update validation schema (Base object before refinement)
+export const advocateProfileUpdateBaseSchema = z.object({
+  fullName: z.string().trim().min(2, { message: 'Full Name must be at least 2 characters.' }).max(100).optional(),
+  gender: genderSchema.optional().nullable(),
+  barCouncilId: barCouncilIdSchema.optional(),
+  aadhaarNumber: aadhaarSchema.optional().nullable(),
+  email: z.string().trim().email().toLowerCase().optional(),
+
+  experienceYears: parseOptionalInt(0, 80, 'Experience'),
+  casesHandled: parseOptionalInt(0, 100000, 'Cases handled'),
+  practiceAreaIds: parseOptionalArray(z.string().min(1)),
+  bestPracticeArea: z.string().trim().max(100, { message: 'Best Practice Area cannot exceed 100 characters.' }).optional().nullable(),
+  about: bioSchema,
+  bio: bioSchema,
+  courtPractice: parseOptionalArray(z.string().trim().min(1)),
+  completeAddress: z.string().trim().max(500, { message: 'Address cannot exceed 500 characters.' }).optional().nullable(),
+  videoCallChargePerMinute: parseOptionalFloat(0, 100000, 'Video call charge'),
+  voiceCallChargePerMinute: parseOptionalFloat(0, 100000, 'Voice call charge'),
+  offlineVisitingFee: parseOptionalFloat(0, 1000000, 'Offline visiting fee'),
+  officeAddress: officeAddressSchema.optional().nullable(),
+  state: z.string().trim().min(2, { message: 'State must be at least 2 characters.' }).max(100).optional().nullable(),
+  city: z.string().trim().min(2, { message: 'City must be at least 2 characters.' }).max(100).optional().nullable(),
+  pincode: pincodeSchema.optional().nullable(),
+
+  // Direct professional fields
+  practiceAreas: parseOptionalArray(z.string().trim().min(1, { message: 'Practice Area cannot be empty.' }), 20),
+  topCourtPractised: z.string().trim().max(100, { message: 'Top Court Practised name cannot exceed 100 characters.' }).optional().nullable(),
+
+  // Aliases (Section 10 request payload support)
+  experience: parseOptionalInt(0, 80, 'Experience'),
+  videoChargePerMinute: parseOptionalFloat(0, 100000, 'Video charge'),
+  voiceChargePerMinute: parseOptionalFloat(0, 100000, 'Voice charge'),
+  languages: parseOptionalArray(z.string().trim().min(1)),
+  languagesSpoken: parseOptionalArray(z.string().trim().min(1)),
+
+  // Office location coordinates collected at profile completion
+  officeLatitude: officeLatitudeSchema,
+  officeLongitude: officeLongitudeSchema,
+
+  // Legacy lat/lng fields to intercept and reject with 400
+  latitude: z.any().optional(),
+  longitude: z.any().optional()
+});
 
 export const requiredOfficeLatitudeSchema = z.preprocess((val) => {
   if (val === undefined || val === null) return val;
@@ -261,31 +329,55 @@ export const advocateRegistrationAddressSchema = z.object({
   officeLongitude: requiredOfficeLongitudeSchema
 });
 
-export const advocateOfficeChangeSchema = z.object({
-  officeAddress: officeAddressSchema,
-  pincode: pincodeSchema,
-  city: z.string({ required_error: 'City is required.' }).trim().min(2, { message: 'City must be at least 2 characters.' }).max(100),
-  state: z.string({ required_error: 'State is required.' }).trim().min(2, { message: 'State must be at least 2 characters.' }).max(100),
-  officeLatitude: requiredOfficeLatitudeSchema,
-  officeLongitude: requiredOfficeLongitudeSchema
-});
+// Location and coordinate pairs refinement
+export const validateLocationPairs = (data, ctx) => {
+  // 1. Old latitude / longitude in the body: reject with 400 "Use officeLatitude/officeLongitude."
+  if (data.latitude !== undefined || data.longitude !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Use officeLatitude/officeLongitude.',
+      path: [data.latitude !== undefined ? 'latitude' : 'longitude']
+    });
+  }
 
-export const validateNoAddressOrOfficeFields = (data, ctx) => {
-  const disallowed = ['officeLatitude', 'officeLongitude', 'city', 'state', 'pincode', 'latitude', 'longitude'];
-  for (const field of disallowed) {
-    if (data[field] !== undefined) {
+  // 2. officeLatitude + officeLongitude must come together
+  const hasLat = data.officeLatitude !== undefined;
+  const hasLng = data.officeLongitude !== undefined;
+  if (hasLat !== hasLng) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'officeLatitude and officeLongitude must be sent together.',
+      path: ['officeLatitude']
+    });
+  } else if (hasLat && hasLng) {
+    const latIsNull = data.officeLatitude === null;
+    const lngIsNull = data.officeLongitude === null;
+    if (latIsNull !== lngIsNull) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "Office/address can't be changed here. Use the office change request.",
-        path: [field]
+        message: 'officeLatitude and officeLongitude must be sent together.',
+        path: ['officeLatitude']
       });
     }
+  }
+
+  // 3. pincode + city + state must come together
+  const hasPincode = data.pincode !== undefined && data.pincode !== null && data.pincode !== '';
+  const hasCity = data.city !== undefined && data.city !== null && data.city !== '';
+  const hasState = data.state !== undefined && data.state !== null && data.state !== '';
+  const anyLocation = hasPincode || hasCity || hasState;
+  const allLocation = hasPincode && hasCity && hasState;
+  if (anyLocation && !allLocation) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'pincode, city, and state must be sent together.',
+      path: [!hasPincode ? 'pincode' : !hasCity ? 'city' : 'state']
+    });
   }
 };
 
 export const advocateProfileUpdateSchema = advocateProfileUpdateBaseSchema.strict()
-  .superRefine(validateNoAddressOrOfficeFields)
-  .superRefine(validateOfficeCoordinates);
+  .superRefine(validateLocationPairs);
 
 export const initiateAadhaarSchema = z.object({
   registrationId: z.string().uuid({ message: 'Invalid registration session ID.' }),

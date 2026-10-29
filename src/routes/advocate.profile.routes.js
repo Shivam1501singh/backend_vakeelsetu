@@ -12,9 +12,18 @@ router.use(requireAuth);
 
 router.get('/', generalLimiter, advocateProfileController.getProfile);
 router.get('/verification-status', generalLimiter, advocateProfileController.getVerificationStatus);
-router.patch('/', generalLimiter, advocateProfileController.updateProfile);
+router.patch(
+  '/',
+  generalLimiter,
+  upload.fields([
+    { name: 'profilePhoto', maxCount: 1 },
+    { name: 'officePhoto', maxCount: 1 }
+  ]),
+  advocateProfileController.updateProfile
+);
 router.post('/photo', generalLimiter, upload.single('profilePhoto'), advocateProfileController.uploadProfilePhoto);
-router.put('/office', generalLimiter, upload.single('officePhoto'), advocateProfileController.requestOfficeChange);
 router.post('/submit-for-approval', generalLimiter, advocateProfileController.submitForApproval);
+router.post('/changes/withdraw', generalLimiter, advocateProfileController.withdrawProfileChanges);
+router.delete('/changes', generalLimiter, advocateProfileController.discardProfileChanges);
 
 export default router;

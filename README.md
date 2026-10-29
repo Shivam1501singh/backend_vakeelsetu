@@ -12565,111 +12565,268 @@ To configure the OTP verification provider:
 
 ---
 
-## 34. Advocate Office & Office Change Request (One Office Per Advocate)
+## 34. Advocate Profile Change Approval (Registration Office + Sensitive Edit Profile Workflow)
 
 ### 1. Overview & Architecture
-To maintain maximum data accuracy, single-source-of-truth office integrity, and physical verification:
-1. **One Office Per Advocate:** Exactly one office is supported per advocate.
-2. **Collected at Registration:** The advocate's office address (`officeAddress`), pincode (`pincode`), city (`city`), state (`state`), GPS coordinates (`officeLatitude`, `officeLongitude`), and physical photo (`officePhoto`) are collected during the **Registration Address Step** (`POST /api/auth/advocate/profile`).
-3. **Synchronized Geographic Coordinates:** When an advocate completes registration, `Advocate.latitude` and `Advocate.longitude` are synchronized with `officeLatitude` and `officeLongitude` for unified proximity queries.
-4. **Removed from Complete Profile:** Office and address fields can no longer be edited freely via standard profile updates:
-   - `POST /api/advocate/profile/office-photo` has been **removed (returns 404 Not Found)**.
-   - `PATCH /api/advocate/profile` strictly **rejects** all address and office fields (`city`, `state`, `pincode`, `officeAddress`, `officeLatitude`, `officeLongitude`, `latitude`, `longitude`) with `400 Bad Request`:
-     ```json
-     {
-       "success": false,
-       "message": "Office/address can't be changed here. Use the office change request."
-     }
-     ```
-   - Profile submission for verification (`POST /api/advocate/profile/submit-for-approval`) does not block legacy advocates who may not have office data populated.
-5. **Office Change Request Approval Flow:**
-   - **Non-Approved Advocates (`PENDING` / `REJECTED`):** Calling `PUT /api/advocate/profile/office` applies updates directly to the live advocate fields.
-   - **Approved Advocates (`APPROVED`):** Calling `PUT /api/advocate/profile/office` does **NOT** touch live advocate fields. Instead, it uploads the new office photo and saves the requested office fields in `Advocate.pendingOfficeChange` (JSON) with status `officeChangeStatus: 'PENDING'`. The advocate's live public profile remains unchanged until an administrator approves the request.
-   - **Re-requests:** If an advocate submits another office change while a previous request is still `PENDING`, the previous pending photo in Cloudinary is deleted, and the pending change object is completely overwritten.
-6. **Strict Asset Security:** Internal Cloudinary public IDs (`officePhotoPublicId`, `pendingOfficeChange.officePhotoPublicId`) are **never returned** in any client or admin API response.
+
+To protect clients from unvetted fee spikes, misleading experience claims, or arbitrary location shifts while keeping harmless profile updates friction-free, VakeelSetu implements an **Approval-Gated Edit Profile Workflow**:
+
+1. **One Unified Edit API (`PATCH /api/advocate/profile`):**
+   - Advocates make **all** profile edits from "Edit Profile" through a single API accepting JSON or `multipart/form-data`.
+   - The separate `PUT /api/advocate/profile/office` route and separate admin office-change endpoints have been **removed**.
+   - `POST /api/advocate/profile/photo` is retained as a compatibility alias of `PATCH /api/advocate/profile` with `profilePhoto`.
+2. **Approval-Field List vs Direct-Field List:**
+   - **Approval Fields (13 sensitive fields):**
+     - **Experience:** `experienceYears` (alias `experience`)
+     - **About:** `about` (alias `bio`, 50–500 words)
+     - **Fees:** `videoCallChargePerMinute` (alias `videoChargePerMinute`), `voiceCallChargePerMinute` (alias `voiceChargePerMinute`), `offlineVisitingFee`
+     - **Profile Photo:** `profilePhoto` (file upload)
+     - **Office & Location:** `officeAddress` (10–500 chars), `pincode` (6 digits), `city`, `state`, `officeLatitude`, `officeLongitude`, `officePhoto` (file upload)
+   - **Direct Fields (immediate live update):**
+     - `casesHandled`, `practiceAreas` (alias `practiceAreaIds`), `bestPracticeArea`, `topCourtPractised`, `courtPractice`, `languagesSpoken` (alias `languages`), `completeAddress`, `fullName`, `gender`.
+3. **Rules by Advocate Approval Status:**
+   - **Non-Approved Advocates (`PENDING` / `REJECTED` / `DRAFT`):** All edits (direct and approval fields) save directly to live fields. Photos are replaced immediately, office coordinates sync to `latitude` / `longitude`, and the whole profile is reviewed together during initial bar enrollment verification.
+   - **Approved Advocates (`APPROVED`):**
+     - Direct fields go live immediately.
+     - Approval fields do **not** touch live fields; they diff against live values and are saved into a private **draft** (`pendingProfileChange`).
+     - Live values remain visible on public listings, public profile, and booking quotes.
+     - While changes are `SUBMITTED`, the draft is **locked** against further edits (returns `409 Conflict`). The advocate can **withdraw** the request to edit again.
+     - Once approved by admin, all requested values go live together in a single transaction, office coordinates sync to live `latitude` / `longitude`, and replaced live photos are deleted from Cloudinary.
+     - If rejected by admin with a reason, the draft is kept so the advocate can fix the flagged fields and resubmit.
+4. **Fees and Bookings Policy:**
+   - Bookings already made preserve their exact price snapshot in paise (`ratePerMinutePaise`, `feePaise`, `gstPaise`, `platformFeePaise`, `totalPaise`) stored permanently in `AdvocateBooking`.
+   - New consultation fees apply only to bookings created **after** an administrator approves the profile change request.
+   - All booking discovery, quotes (`booking-options`, `booking-quote`), and checkouts query the **live** advocate table columns, **never** the draft.
+5. **Asset Privacy:**
+   - Cloudinary public IDs (`profilePhotoPublicId`, `officePhotoPublicId`, `pendingProfileChange.profilePhoto.publicId`, `pendingProfileChange.officePhoto.publicId`) are **never returned** in any API response.
 
 ---
 
-### 2. Endpoints Reference Table
+### 2. Lifecycle & Status Flow Diagram
+
+```text
+                  Advocate edits profile (PATCH /api/advocate/profile)
+                                         │
+                 ┌───────────────────────┴───────────────────────┐
+                 │                                               │
+           [Direct Fields]                              [Approval Fields]
+           • Cases Handled                              • Experience, Bio / About
+           • Practice Areas                             • Call Rates (Voice/Video)
+           • Top Court & Practices                      • Offline Visiting Fee
+           • Languages Spoken                           • Profile Photo
+           • Full Name, Gender                          • Office Address, Pincode
+           • Complete Address                           • City, State, Coordinates
+                 │                                      • Office Photo
+                 ▼                                               │
+         Updated LIVE instantly                                  ▼
+                                                        Diff against LIVE values
+                                                                 │
+                                                                 ▼
+                                                        Saved to DRAFT in
+                                                      `pendingProfileChange`
+                                                    (Status: DRAFT or REJECTED)
+                                                                 │
+                                    ┌────────────────────────────┼────────────────────────────┐
+                                    │                            │                            │
+                                    ▼                            ▼                            ▼
+                          Advocate continues           Advocate discards            Advocate submits
+                          editing draft               (DELETE /changes)          (POST /submit-for-approval)
+                          (PATCH /profile)                       │                            │
+                                                                 ▼                            ▼
+                                                         Draft purged from DB       Status: SUBMITTED
+                                                         Cloudinary temp photos     Draft LOCKED (409)
+                                                         destroyed                            │
+                                                                                              │
+                                          ┌───────────────────────────────────────────────────┼────────────────────────────────────────┐
+                                          │                                                   │                                        │
+                                          ▼                                                   ▼                                        ▼
+                                 Advocate withdraws                                  Admin Approves                           Admin Rejects
+                             (POST /changes/withdraw)                        (POST .../profile-change/approve)        (POST .../profile-change/reject)
+                                          │                                                   │                                        │
+                                          ▼                                                   ▼                                        ▼
+                                  Status: DRAFT                                      Atomic DB transaction:                  Status: REJECTED
+                                  Draft UNLOCKED                                     • Requested fields -> LIVE              rejectionReason recorded
+                                  Advocate can edit                                  • Old live photos deleted               Draft preserved so
+                                                                                     • Draft cleared                         advocate can correct &
+                                                                                     • Status -> null                        resubmit
+```
+
+---
+
+### 3. Endpoints Reference Table
+
+#### 3.1 Active Profile Change Endpoints
 
 | Method | Endpoint | Access / Auth | Description |
 |---|---|---|---|
-| `PUT` | `/api/advocate/profile/office` | Advocate (`Bearer {{advocate_token}}`) | Submit office change request (`multipart/form-data`). Applies directly if unapproved; queues as PENDING if approved. |
-| `GET` | `/api/advocate/profile` | Advocate (`Bearer {{advocate_token}}`) | Returns advocate's own profile including live office details and pending `officeChange` object (if pending). |
-| `GET` | `/api/advocates/:id` | Public / Optional Auth | Returns public advocate details including live `officeAddress`, `officeLatitude`, `officeLongitude`, `officePhotoUrl`. |
-| `GET` | `/api/admin/advocates/office-changes` | Admin (`advocates:view`) | Lists advocate office change requests (filterable by `?status=PENDING|APPROVED|REJECTED` and pagination). |
-| `GET` | `/api/admin/advocates/:advocateId/office-change` | Admin (`advocates:view`) | Returns side-by-side comparison of current vs requested office, including clickable Google Maps URLs. |
-| `POST` | `/api/admin/advocates/:advocateId/office-change/approve` | Admin (`advocates:edit`) | Approves pending office change, applies requested values to live fields, and deletes old live photo from Cloudinary. |
-| `POST` | `/api/admin/advocates/:advocateId/office-change/reject` | Admin (`advocates:edit`) | Rejects pending office change with a required reason (`reason` ≥ 5 chars) and cleans up the requested photo. |
+| `PATCH` | `/api/advocate/profile` | Advocate (`Bearer {{advocate_token}}`) | Unified edit profile (`multipart/form-data` or `application/json`). Direct fields update live; approval fields saved to draft. Locked (409) if `SUBMITTED`. |
+| `POST` | `/api/advocate/profile/submit-for-approval` | Advocate (`Bearer {{advocate_token}}`) | Submits unapproved profile registration OR submits profile change draft for admin approval. Status becomes `SUBMITTED`. |
+| `POST` | `/api/advocate/profile/changes/withdraw` | Advocate (`Bearer {{advocate_token}}`) | Withdraws a `SUBMITTED` profile change request back to `DRAFT` for editing. |
+| `DELETE` | `/api/advocate/profile/changes` | Advocate (`Bearer {{advocate_token}}`) | Discards the profile change draft, cleans up any draft Cloudinary photos, and resets change status. |
+| `GET` | `/api/advocate/profile` | Advocate (`Bearer {{advocate_token}}`) | Returns own profile including live data and `profileChange` summary (status, submitted/updated dates, rejection reason, requested changes). |
+| `POST` | `/api/advocate/profile/photo` | Advocate (`Bearer {{advocate_token}}`) | Backward-compatibility alias for profile photo upload; routes directly into `PATCH /api/advocate/profile`. |
+| `GET` | `/api/admin/advocates/profile-changes` | Admin (`advocates:view`) | Lists advocate profile change requests with query filter `?status=SUBMITTED\|APPROVED\|REJECTED\|ALL` and pagination. |
+| `GET` | `/api/admin/advocates/:advocateId/profile-change` | Admin (`advocates:view`) | Side-by-side comparison of current live values vs requested draft values with Google Maps comparison links. |
+| `POST` | `/api/admin/advocates/:advocateId/profile-change/approve` | Admin (`advocates:edit`) | Approves submitted change request, atomically applies requested draft to live fields, and purges replaced live photos. |
+| `POST` | `/api/admin/advocates/:advocateId/profile-change/reject` | Admin (`advocates:edit`) | Rejects submitted change request with required `reason` (5–500 chars), preserving draft for corrections. |
+
+#### 3.2 Removed Legacy Endpoints
+
+| Removed Endpoint | Replacement | Reason |
+|---|---|---|
+| `PUT /api/advocate/profile/office` | `PATCH /api/advocate/profile` | Office change consolidated into general profile editing. |
+| `GET /api/admin/advocates/office-changes` | `GET /api/admin/advocates/profile-changes` | Replaced by general profile change queue. |
+| `GET /api/admin/advocates/:id/office-change` | `GET /api/admin/advocates/:id/profile-change` | Replaced by general profile change detail endpoint. |
+| `POST /api/admin/advocates/:id/office-change/approve` | `POST /api/admin/advocates/:id/profile-change/approve` | Replaced by general profile change approval. |
+| `POST /api/admin/advocates/:id/office-change/reject` | `POST /api/admin/advocates/:id/profile-change/reject` | Replaced by general profile change rejection. |
 
 ---
 
-### 3. Advocate: Request Office Change (`PUT /api/advocate/profile/office`)
+### 4. Advocate Endpoints Guide
 
-- **Method & URL:** `PUT {{BACKEND_URL}}/api/advocate/profile/office`
-- **Headers:**
-  - `Authorization: Bearer {{advocate_token}}`
-- **Body (`multipart/form-data`):**
-
-  | Key | Type | Required | Description / Rules |
-  |---|---|---|---|
-  | `officeAddress` | Text | Yes | New physical office address (min 10, max 255 chars). |
-  | `pincode` | Text | Yes | Exactly 6 digits (`^[0-9]{6}$`). |
-  | `city` | Text | Yes | Min 2, max 100 chars. |
-  | `state` | Text | Yes | Valid Indian State or UT name. |
-  | `officeLatitude` | Text / Number | Yes | New latitude coordinate (-90 to 90). |
-  | `officeLongitude` | Text / Number | Yes | New longitude coordinate (-180 to 180). |
-  | `officePhoto` | File | Yes | New office photograph (JPEG, JPG, PNG, WEBP ≤ 5MB). |
-
-#### 3.1 Response for Approved Advocate (Queued for Admin Review)
+#### 4.1 Unified Edit Profile (`PATCH /api/advocate/profile`)
+- **Headers:** `Authorization: Bearer {{advocate_token}}`
+- **Content-Type:** `multipart/form-data` or `application/json`
+- **Fields Supported:**
+  - **Direct Fields (Live instantly):** `fullName`, `gender`, `casesHandled`, `practiceAreas`, `bestPracticeArea`, `topCourtPractised`, `courtPractice`, `languagesSpoken`, `completeAddress`.
+  - **Approval Fields (Queued in draft for Approved advocates):** `experienceYears`, `about`, `videoCallChargePerMinute`, `voiceCallChargePerMinute`, `offlineVisitingFee`, `profilePhoto` (file), `officeAddress`, `pincode`, `city`, `state`, `officeLatitude`, `officeLongitude`, `officePhoto` (file).
+- **Validation Rules:**
+  - Coordinates must be submitted together: `officeLatitude` and `officeLongitude`.
+  - Regional location fields must be submitted together: `pincode`, `city`, and `state`.
+  - Legacy fields `latitude` and `longitude` are rejected with `400 Bad Request` ("Use officeLatitude/officeLongitude.").
+  - Numeric fields sent as strings via `multipart/form-data` (e.g., `"12"`, `"500.50"`) are automatically parsed into numbers.
+  - JSON array strings in multipart (e.g., `practiceAreas: '["Civil", "Criminal"]'`) are automatically parsed into string arrays.
+  - Diffing: If an approval field matches the advocate's current live value, it is omitted from the draft. If the draft becomes completely empty, `profileChangeStatus` is cleared to `null`.
+- **Response (`200 OK` - Approved Advocate with Approval Changes):**
 ```json
 {
   "success": true,
-  "message": "Office change request submitted for admin approval.",
-  "status": "PENDING",
-  "requestedOffice": {
-    "officeAddress": "Chamber 204, New High Court Wing, Sector 1",
-    "pincode": "110003",
-    "city": "New Delhi",
-    "state": "Delhi",
-    "officeLatitude": 28.5855,
-    "officeLongitude": 77.2285,
-    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1730000000/advocates/office_new123.jpg"
-  }
-}
-```
-
-#### 3.2 Response for Unapproved Advocate (Direct Live Update)
-```json
-{
-  "success": true,
-  "message": "Office details updated successfully.",
+  "message": "Profile updated. Direct fields applied; sensitive changes saved as draft for admin approval.",
   "advocate": {
     "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
-    "officeAddress": "Chamber 204, New High Court Wing, Sector 1",
-    "pincode": "110003",
-    "city": "New Delhi",
-    "state": "Delhi",
-    "officeLatitude": 28.5855,
-    "officeLongitude": 77.2285,
-    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1730000000/advocates/office_new123.jpg",
-    "officeLocationUpdatedAt": "2026-10-29T10:00:00.000Z"
+    "fullName": "Advocate Rajesh Sharma",
+    "experienceYears": 10,
+    "about": "Senior High Court advocate with civil specialization.",
+    "profilePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1720000000/advocates/old_photo.jpg",
+    "officeAddress": "Chamber 12, Old Wing",
+    "officeLocationUpdatedAt": "2026-10-28T10:00:00.000Z",
+    "profileChange": {
+      "status": "DRAFT",
+      "updatedAt": "2026-10-29T10:30:00.000Z",
+      "submittedAt": null,
+      "reviewedAt": null,
+      "rejectionReason": null,
+      "requestedChanges": {
+        "experienceYears": 12,
+        "videoCallChargePerMinute": 150,
+        "officeAddress": "Chamber 204, New High Court Wing, Sector 1",
+        "pincode": "110003",
+        "city": "New Delhi",
+        "state": "Delhi",
+        "officeLatitude": 28.5855,
+        "officeLongitude": 77.2285,
+        "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1730000000/advocates/office_draft123.jpg"
+      }
+    }
   }
 }
 ```
 
+#### 4.2 Submit for Admin Approval (`POST /api/advocate/profile/submit-for-approval`)
+- **Headers:** `Authorization: Bearer {{advocate_token}}`
+- **Behavior:**
+  - For unapproved advocates (`approvalStatus !== 'APPROVED'`): Transitions registration profile from `DRAFT` to `SUBMITTED`.
+  - For approved advocates (`approvalStatus === 'APPROVED'`): Submits the profile change draft. Validates that draft changes exist. Transitions `profileChangeStatus` from `DRAFT` / `REJECTED` to `SUBMITTED`, records `profileChangeSubmittedAt = now()`, and locks the draft against edits.
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Profile change request submitted for admin approval.",
+  "status": "SUBMITTED",
+  "submittedAt": "2026-10-29T10:35:00.000Z",
+  "requestedChanges": {
+    "experienceYears": 12,
+    "videoCallChargePerMinute": 150,
+    "officeAddress": "Chamber 204, New High Court Wing, Sector 1"
+  }
+}
+```
+
+#### 4.3 Withdraw Submission (`POST /api/advocate/profile/changes/withdraw`)
+- **Headers:** `Authorization: Bearer {{advocate_token}}`
+- **Behavior:** Allows an advocate to withdraw a pending review request (`status === 'SUBMITTED'`) to make further corrections. Transitions status back to `DRAFT`.
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Profile change request withdrawn. You can now edit your draft.",
+  "status": "DRAFT",
+  "profileChange": {
+    "status": "DRAFT",
+    "updatedAt": "2026-10-29T10:36:00.000Z",
+    "requestedChanges": {
+      "experienceYears": 12,
+      "videoCallChargePerMinute": 150
+    }
+  }
+}
+```
+
+#### 4.4 Discard Draft Changes (`DELETE /api/advocate/profile/changes`)
+- **Headers:** `Authorization: Bearer {{advocate_token}}`
+- **Behavior:** Discards any unapproved draft changes (`DRAFT`, `SUBMITTED`, or `REJECTED`). Automatically deletes any newly uploaded temporary photos from Cloudinary. Clears `pendingProfileChange` and all profile change tracking metadata.
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Profile change draft discarded successfully."
+}
+```
+
+#### 4.5 View Profile with Change Status (`GET /api/advocate/profile`)
+When an advocate fetches their own profile via `GET /api/advocate/profile`, the response contains their current live data plus a `profileChange` object reflecting the state of any requested changes:
+
+```json
+{
+  "success": true,
+  "advocate": {
+    "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
+    "fullName": "Advocate Rajesh Sharma",
+    "experienceYears": 10,
+    "officeAddress": "Chamber 12, Old Wing",
+    "profilePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1720000000/advocates/old_photo.jpg",
+    "profileChange": {
+      "status": "SUBMITTED",
+      "submittedAt": "2026-10-29T10:35:00.000Z",
+      "updatedAt": "2026-10-29T10:30:00.000Z",
+      "reviewedAt": null,
+      "rejectionReason": null,
+      "requestedChanges": {
+        "experienceYears": 12,
+        "videoCallChargePerMinute": 150,
+        "officeAddress": "Chamber 204, New High Court Wing, Sector 1"
+      }
+    }
+  }
+}
+```
+
+#### 4.6 Photo Upload Compatibility (`POST /api/advocate/profile/photo`)
+- **Headers:** `Authorization: Bearer {{advocate_token}}`
+- **Body (`multipart/form-data`):** `photo` or `profilePhoto` (file ≤ 5MB)
+- **Behavior:** Kept as a compatibility alias. Internally delegates directly to `PATCH /api/advocate/profile`. If the advocate is approved, uploads the photo to Cloudinary and saves the URL and public ID into `pendingProfileChange.profilePhoto` under `DRAFT` status.
+
 ---
 
-### 4. Admin: Reviewing & Deciding Office Changes
+### 5. Admin Endpoints Guide
 
-#### 4.1 List Office Change Requests (`GET /api/admin/advocates/office-changes`)
-- **Query Parameters (Optional):**
-  - `status`: Filter by `PENDING` (default), `APPROVED`, `REJECTED`, or `ALL`
+#### 5.1 List Profile Change Requests (`GET /api/admin/advocates/profile-changes`)
+- **Headers:** `Authorization: Bearer {{admin_token}}`
+- **Query Parameters:**
+  - `status`: Filter by `SUBMITTED` (default), `APPROVED`, `REJECTED`, or `ALL`
   - `page`: Page number (default: `1`)
   - `limit`: Items per page (default: `20`, max: `100`)
-- **Headers:** `Authorization: Bearer {{admin_token}}`
-
-**Sample Response (`200 OK`):**
+- **Response (`200 OK`):**
 ```json
 {
   "success": true,
@@ -12681,26 +12838,15 @@ To maintain maximum data accuracy, single-source-of-truth office integrity, and 
       "phone": "9876543210",
       "barCouncilId": "D/1234/2015",
       "approvalStatus": "APPROVED",
-      "officeChangeStatus": "PENDING",
-      "officeChangeRequestedAt": "2026-10-29T09:45:00.000Z",
-      "currentOffice": {
-        "officeAddress": "Old Chamber 12, High Court Complex",
-        "city": "New Delhi",
-        "state": "Delhi",
-        "pincode": "110001",
-        "officeLatitude": 28.6139,
-        "officeLongitude": 77.2090,
-        "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_old.jpg"
-      },
-      "requestedOffice": {
-        "officeAddress": "Chamber 204, New High Court Wing, Sector 1",
-        "city": "New Delhi",
-        "state": "Delhi",
-        "pincode": "110003",
-        "officeLatitude": 28.5855,
-        "officeLongitude": 77.2285,
-        "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1730000000/advocates/office_new123.jpg"
-      }
+      "profileChangeStatus": "SUBMITTED",
+      "profileChangeSubmittedAt": "2026-10-29T10:35:00.000Z",
+      "profileChangeUpdatedAt": "2026-10-29T10:30:00.000Z",
+      "requestedFields": [
+        "experienceYears",
+        "videoCallChargePerMinute",
+        "officeAddress",
+        "officePhoto"
+      ]
     }
   ],
   "pagination": {
@@ -12710,222 +12856,204 @@ To maintain maximum data accuracy, single-source-of-truth office integrity, and 
     "totalPages": 1
   },
   "counts": {
-    "pending": 1,
+    "submitted": 1,
     "approved": 5,
     "rejected": 2
   }
 }
 ```
 
-#### 4.2 Detail View: Side-by-Side Comparison (`GET /api/admin/advocates/:advocateId/office-change`)
+#### 5.2 Side-by-Side Review Details (`GET /api/admin/advocates/:advocateId/profile-change`)
 - **Headers:** `Authorization: Bearer {{admin_token}}`
-
-**Sample Response (`200 OK`):**
+- **Response (`200 OK`):**
 ```json
 {
   "success": true,
-  "officeChange": {
+  "profileChange": {
     "advocateId": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
     "fullName": "Advocate Rajesh Sharma",
     "email": "rajesh.adv@example.com",
     "phone": "9876543210",
     "barCouncilId": "D/1234/2015",
     "approvalStatus": "APPROVED",
-    "status": "PENDING",
-    "requestedAt": "2026-10-29T09:45:00.000Z",
+    "status": "SUBMITTED",
+    "submittedAt": "2026-10-29T10:35:00.000Z",
+    "updatedAt": "2026-10-29T10:30:00.000Z",
     "reviewedAt": null,
     "rejectionReason": null,
     "current": {
-      "officeAddress": "Old Chamber 12, High Court Complex",
+      "experienceYears": 10,
+      "about": "Senior High Court advocate with civil specialization.",
+      "videoCallChargePerMinute": 100,
+      "voiceCallChargePerMinute": 80,
+      "offlineVisitingFee": 1000,
+      "profilePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1720000000/advocates/old_photo.jpg",
+      "officeAddress": "Chamber 12, Old Wing",
       "pincode": "110001",
       "city": "New Delhi",
       "state": "Delhi",
       "officeLatitude": 28.6139,
       "officeLongitude": 77.2090,
-      "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_old.jpg",
-      "mapUrl": "https://www.google.com/maps?q=28.6139,77.209"
+      "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1720000000/advocates/old_office.jpg",
+      "googleMapsUrl": "https://www.google.com/maps/search/?api=1&query=28.6139,77.209"
     },
     "requested": {
+      "experienceYears": 12,
+      "videoCallChargePerMinute": 150,
       "officeAddress": "Chamber 204, New High Court Wing, Sector 1",
       "pincode": "110003",
       "city": "New Delhi",
       "state": "Delhi",
       "officeLatitude": 28.5855,
       "officeLongitude": 77.2285,
-      "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1730000000/advocates/office_new123.jpg",
-      "mapUrl": "https://www.google.com/maps?q=28.5855,77.2285"
+      "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1730000000/advocates/office_draft123.jpg",
+      "googleMapsUrl": "https://www.google.com/maps/search/?api=1&query=28.5855,77.2285"
     }
   }
 }
 ```
 
-#### 4.3 Approve Office Change (`POST /api/admin/advocates/:advocateId/office-change/approve`)
-- **Headers:**
-  - `Authorization: Bearer {{admin_token}}`
-- **Actions performed by server:**
-  1. Copies `requested` fields (`officeAddress`, `pincode`, `city`, `state`, `officeLatitude`, `officeLongitude`, `officePhotoUrl`, `officePhotoPublicId`) directly to live advocate fields.
-  2. Updates `latitude` and `longitude` to match the new office coordinates.
-  3. Sets `officeLocationUpdatedAt: new Date()`.
-  4. Deletes the previous live office photo from Cloudinary.
-  5. Clears `pendingOfficeChange` and sets `officeChangeStatus = 'APPROVED'`, `officeChangeReviewedAt = new Date()`.
-
-**Sample Response (`200 OK`):**
+#### 5.3 Approve Profile Change (`POST /api/admin/advocates/:advocateId/profile-change/approve`)
+- **Headers:** `Authorization: Bearer {{admin_token}}`
+- **Behavior:**
+  - Requires `status === 'SUBMITTED'`.
+  - Applies all requested draft values to the live advocate scalar columns in an atomic transaction.
+  - If office coordinates were updated, syncs `latitude` = `officeLatitude` and `longitude` = `officeLongitude`.
+  - Sets `profileChangeStatus = 'APPROVED'`, `profileChangeReviewedAt = now()`, `profileChangeReviewedBy = admin.id`, and clears `pendingProfileChange = null`.
+  - Asynchronously purges replaced old live photos from Cloudinary.
+  - Retains all existing booking rates in paise on past `AdvocateBooking` records.
+- **Response (`200 OK`):**
 ```json
 {
   "success": true,
-  "message": "Advocate office change approved successfully.",
+  "message": "Advocate profile changes approved and applied successfully.",
   "advocate": {
     "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
-    "fullName": "Advocate Rajesh Sharma",
+    "experienceYears": 12,
+    "videoCallChargePerMinute": 150,
     "officeAddress": "Chamber 204, New High Court Wing, Sector 1",
-    "pincode": "110003",
-    "city": "New Delhi",
-    "state": "Delhi",
-    "officeLatitude": 28.5855,
-    "officeLongitude": 77.2285,
-    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1730000000/advocates/office_new123.jpg",
-    "officeChangeStatus": "APPROVED"
+    "officeLocationUpdatedAt": "2026-10-29T10:40:00.000Z"
   }
 }
 ```
 
-#### 4.4 Reject Office Change (`POST /api/admin/advocates/:advocateId/office-change/reject`)
-- **Headers:**
-  - `Authorization: Bearer {{admin_token}}`
-  - `Content-Type: application/json`
-- **Body (`raw JSON`):**
-  ```json
-  {
-    "reason": "The uploaded office photograph does not match the provided chamber address."
-  }
-  ```
-- **Actions performed by server:**
-  1. Keeps current live office fields completely intact.
-  2. Deletes the requested office photo from Cloudinary.
-  3. Clears `pendingOfficeChange` and sets `officeChangeStatus = 'REJECTED'`, `officeChangeRejectionReason = reason`, `officeChangeReviewedAt = new Date()`.
-
-**Sample Response (`200 OK`):**
+#### 5.4 Reject Profile Change (`POST /api/admin/advocates/:advocateId/profile-change/reject`)
+- **Headers:** `Authorization: Bearer {{admin_token}}`
+- **Body (`application/json`):**
+```json
+{
+  "reason": "The uploaded office photo is unclear. Please provide a high-resolution photo showing the chamber entrance and nameplate."
+}
+```
+- **Behavior:**
+  - Requires `status === 'SUBMITTED'`.
+  - Requires `reason` between 5 and 500 characters.
+  - Sets `profileChangeStatus = 'REJECTED'`, `profileChangeRejectionReason = reason`, `profileChangeReviewedAt = now()`, `profileChangeReviewedBy = admin.id`.
+  - Preserves `pendingProfileChange` draft so the advocate can view the rejection reason, fix the flagged fields, and resubmit without re-entering all other fields.
+- **Response (`200 OK`):**
 ```json
 {
   "success": true,
-  "message": "Advocate office change request rejected.",
-  "advocateId": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
-  "officeChangeStatus": "REJECTED",
-  "rejectionReason": "The uploaded office photograph does not match the provided chamber address."
+  "message": "Advocate profile change request rejected.",
+  "rejectionReason": "The uploaded office photo is unclear. Please provide a high-resolution photo showing the chamber entrance and nameplate."
 }
 ```
 
 ---
 
-### 5. Advocate: Own Profile View (`GET /api/advocate/profile`)
-When an advocate with a pending office change views their profile, the response contains both their active `office` and the pending `officeChange`:
-
-```json
-{
-  "success": true,
-  "advocate": {
-    "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
-    "fullName": "Advocate Rajesh Sharma",
-    "officeAddress": "Old Chamber 12, High Court Complex",
-    "officeLatitude": 28.6139,
-    "officeLongitude": 77.2090,
-    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_old.jpg",
-    "office": {
-      "address": "Old Chamber 12, High Court Complex",
-      "photoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_old.jpg",
-      "latitude": 28.6139,
-      "longitude": 77.2090,
-      "updatedAt": "2026-10-28T13:15:00.000Z"
-    },
-    "officeChange": {
-      "status": "PENDING",
-      "requestedAt": "2026-10-29T09:45:00.000Z",
-      "requestedOffice": {
-        "officeAddress": "Chamber 204, New High Court Wing, Sector 1",
-        "pincode": "110003",
-        "city": "New Delhi",
-        "state": "Delhi",
-        "officeLatitude": 28.5855,
-        "officeLongitude": 77.2285,
-        "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1730000000/advocates/office_new123.jpg"
-      }
-    }
-  }
-}
-```
-
----
 
 ### 6. Error Reference Table
 
 | Status | Error Condition | Message |
 |---|---|---|
-| `400 Bad Request` | Address / office field passed to `PATCH /api/advocate/profile` | `Office/address can't be changed here. Use the office change request.` |
-| `400 Bad Request` | Missing required office file in `PUT /api/advocate/profile/office` | `Office photo is required.` |
-| `400 Bad Request` | Invalid image mime type (e.g. PDF/TXT) | `Invalid file format. Only JPEG, JPG, PNG, and WEBP images are allowed.` |
-| `400 Bad Request` | File size > 5MB | `File size exceeds the 5MB limit.` |
-| `400 Bad Request` | Short office address (< 10 chars) | `Office address must be at least 10 characters.` |
-| `400 Bad Request` | Latitude out of bounds (`> 90` or `< -90`) | `officeLatitude must be between -90 and 90.` |
-| `400 Bad Request` | Longitude out of bounds (`> 180` or `< -180`) | `officeLongitude must be between -180 and 180.` |
-| `400 Bad Request` | Pincode not 6 digits | `Pincode must be exactly 6 digits.` |
-| `400 Bad Request` | Rejection reason too short (< 5 chars) | `Reason must be at least 5 characters.` |
-| `403 Forbidden` | Non-admin calls admin office-changes endpoints | `Access forbidden. Insufficient permissions.` |
-| `404 Not Found` | Accessing removed endpoint `POST /api/advocate/profile/office-photo` | `Route not found - /api/advocate/profile/office-photo` |
-| `404 Not Found` | Advocate ID not found or has no pending request on detail view | `No office change request found for this advocate.` |
-| `409 Conflict` | Admin calls approve/reject when status is not `PENDING` | `This advocate does not have a pending office change request.` |
+| `400 Bad Request` | Missing coordinate counterpart (`officeLatitude` without `officeLongitude` or vice-versa) | `officeLatitude and officeLongitude must be provided together.` |
+| `400 Bad Request` | Missing regional counterpart (`pincode`, `city`, `state` not provided together) | `pincode, city, and state must be provided together.` |
+| `400 Bad Request` | Legacy coordinates passed (`latitude` / `longitude`) | `Use officeLatitude/officeLongitude.` |
+| `400 Bad Request` | No changes or empty body in `PATCH /api/advocate/profile` | `No fields provided for update.` |
+| `400 Bad Request` | Calling `submit-for-approval` with no draft changes | `No pending profile changes to submit for approval.` |
+| `400 Bad Request` | Rejection reason missing or too short (< 5 chars) | `Rejection reason must be at least 5 characters.` |
+| `400 Bad Request` | Invalid image mime type or file size > 5MB | `Invalid file format...` / `File size exceeds the 5MB limit.` |
+| `401 Unauthorized` | Missing or invalid JWT Bearer token | `Authentication failed. Token missing or invalid.` |
+| `403 Forbidden` | Non-admin calls `/api/admin/advocates/profile-changes/*` | `Access forbidden. Insufficient permissions.` |
+| `404 Not Found` | Advocate ID not found or no pending profile change | `Advocate not found.` / `No profile change request found for this advocate.` |
+| `404 Not Found` | Calling legacy `PUT /api/advocate/profile/office` | `Route not found - PUT /api/advocate/profile/office` |
+| `409 Conflict` | Advocate edits profile while request is `SUBMITTED` | `Your profile changes are currently submitted and under review. Please withdraw the request before making further edits.` |
+| `409 Conflict` | Advocate calls `submit-for-approval` when already `SUBMITTED` | `Profile change request is already submitted and under review.` |
+| `409 Conflict` | Advocate calls `withdraw` when status is not `SUBMITTED` | `Cannot withdraw. Profile change status is DRAFT (expected SUBMITTED).` |
+| `409 Conflict` | Admin calls `approve` or `reject` when status is not `SUBMITTED` | `This advocate does not have a submitted profile change request (status: DRAFT).` |
 
 ---
 
 ### 7. Step-by-Step Postman Testing Flow
 
 ```text
-[Registration Address Step]
-POST /api/auth/advocate/profile (multipart: address + coords + photo)
+[Direct Live Edits]
+PATCH /api/advocate/profile { "casesHandled": 85 } ───> LIVE immediately (200 OK)
            │
            ▼
-[Complete Registration]
-POST /api/auth/advocate/register/complete (coords & office synced to live Advocate)
+[Sensitive Changes Draft]
+PATCH /api/advocate/profile (multipart: experienceYears=12, officePhoto=file) ───> Saved as DRAFT in pendingProfileChange
            │
            ▼
-[Advocate Requests Office Change]
-PUT /api/advocate/profile/office (multipart: new office details)
-   ├─ If PENDING advocate ────> Direct update to live fields
-   └─ If APPROVED advocate ───> Queued as PENDING in pendingOfficeChange
+[Submit for Review]
+POST /api/advocate/profile/submit-for-approval ───> Status: SUBMITTED (200 OK)
            │
+           ├─ (Optional) Test Lock: PATCH /profile ───> 409 Conflict (Locked)
+           │
+           ├─ (Optional) Test Withdraw: POST /changes/withdraw ───> Status: DRAFT, unlocked
+           │                             POST /submit-for-approval ───> Re-submitted
            ▼
-[Admin Review & Decision]
-GET  /api/admin/advocates/office-changes (List queue)
-GET  /api/admin/advocates/:advocateId/office-change (Side-by-side comparison + map URLs)
-   ├─ POST .../approve ───> Live fields updated, old photo deleted from Cloudinary
-   └─ POST .../reject  ───> Live fields unchanged, requested photo deleted from Cloudinary
+[Admin Review Queue]
+GET  /api/admin/advocates/profile-changes?status=SUBMITTED ───> Lists pending requests
+GET  /api/admin/advocates/{{advocateId}}/profile-change ───> Side-by-side comparison + Google Maps links
+           │
+           ├─ [Path A: Admin Approves]
+           │  POST /api/admin/advocates/{{advocateId}}/profile-change/approve
+           │  • Live fields updated with draft values
+           │  • Coordinates synced to live `latitude`/`longitude`
+           │  • Status cleared; replaced photos purged from Cloudinary
+           │
+           └─ [Path B: Admin Rejects]
+              POST /api/admin/advocates/{{advocateId}}/profile-change/reject { "reason": "Photo unclear." }
+              • Live fields remain unchanged
+              • Status set to REJECTED with rejection reason
+              • Draft preserved for advocate to correct and resubmit
 ```
 
-1. **Test Registration Address Step:**
-   - Send `POST {{BACKEND_URL}}/api/auth/advocate/profile` as `multipart/form-data` with `registrationId`, `officeAddress`, `pincode`, `city`, `state`, `officeLatitude`, `officeLongitude`, and `officePhoto`.
-   - Verify `200 OK` and save `officePhotoUrl`.
-2. **Complete Registration:**
-   - Send `POST {{BACKEND_URL}}/api/auth/advocate/register/complete` with `registrationId`, `barCouncilId`, `aadhaarNumber`, `password`, `languagesSpoken`.
-   - Verify `200 OK`. The newly created advocate has `latitude` = `officeLatitude` and `longitude` = `officeLongitude`.
-3. **Verify Complete Profile Restrictions:**
-   - Send `PATCH {{BACKEND_URL}}/api/advocate/profile` with `{ "city": "Mumbai" }`.
-   - Verify `400 Bad Request` with message: `"Office/address can't be changed here. Use the office change request."`.
-   - Send `POST {{BACKEND_URL}}/api/advocate/profile/office-photo`.
-   - Verify `404 Not Found`.
-4. **Submit Office Change Request:**
-   - Send `PUT {{BACKEND_URL}}/api/advocate/profile/office` as `multipart/form-data` with new chamber address and new photo.
-   - For an approved advocate, verify `200 OK` with `"status": "PENDING"`.
-5. **Admin List & Detail:**
-   - As Admin, call `GET {{BACKEND_URL}}/api/admin/advocates/office-changes`.
-   - Verify advocate appears in list with `officeChangeStatus: "PENDING"`.
-   - Call `GET {{BACKEND_URL}}/api/admin/advocates/{{advocate_id}}/office-change`.
-   - Verify side-by-side comparison between `current` and `requested` with map URLs.
-6. **Admin Decision:**
-   - Call `POST {{BACKEND_URL}}/api/admin/advocates/{{advocate_id}}/office-change/approve`.
-   - Verify `200 OK`. Fetch `GET /api/advocates/{{advocate_id}}` and verify new office address and photo are live.
-
-
-
-
-
-
-
+1. **Verify Direct Profile Fields Update Live:**
+   - Send `PATCH {{BACKEND_URL}}/api/advocate/profile` as JSON with `{ "casesHandled": 85, "languagesSpoken": ["English", "Hindi", "Marathi"] }`.
+   - Verify `200 OK`. `casesHandled` updates live immediately without affecting `profileChange`.
+2. **Submit Sensitive Fields as Draft:**
+   - Send `PATCH {{BACKEND_URL}}/api/advocate/profile` as `multipart/form-data` with:
+     - `experienceYears`: `12`
+     - `videoCallChargePerMinute`: `150`
+     - `officeAddress`: `Chamber 204, New High Court Wing, Sector 1`
+     - `pincode`: `110003`
+     - `city`: `New Delhi`
+     - `state`: `Delhi`
+     - `officeLatitude`: `28.5855`
+     - `officeLongitude`: `77.2285`
+     - `officePhoto`: Select an image file.
+   - Verify `200 OK`. Live advocate fields remain unchanged; `profileChange.status` is `"DRAFT"` and `requestedChanges` contains the sensitive fields.
+3. **Verify Draft Lock:**
+   - Send `POST {{BACKEND_URL}}/api/advocate/profile/submit-for-approval`.
+   - Verify `200 OK` with `"status": "SUBMITTED"`.
+   - Now send `PATCH {{BACKEND_URL}}/api/advocate/profile` with `{ "about": "Attempted edit" }`.
+   - Verify `409 Conflict` with `"Your profile changes are currently submitted and under review."`.
+4. **Test Withdrawal:**
+   - Send `POST {{BACKEND_URL}}/api/advocate/profile/changes/withdraw`.
+   - Verify `200 OK` with `"status": "DRAFT"`.
+   - Send `PATCH {{BACKEND_URL}}/api/advocate/profile` with `{ "about": "Updated about text" }`.
+   - Verify `200 OK` (draft successfully updated).
+   - Send `POST {{BACKEND_URL}}/api/advocate/profile/submit-for-approval` to resubmit.
+5. **Admin List & Side-by-Side Review:**
+   - As Admin, call `GET {{BACKEND_URL}}/api/admin/advocates/profile-changes?status=SUBMITTED`.
+   - Verify advocate appears in the queue.
+   - Call `GET {{BACKEND_URL}}/api/admin/advocates/{{advocate_id}}/profile-change`.
+   - Verify side-by-side comparison between `current` and `requested` fields with valid Google Maps URLs.
+6. **Admin Decision (Approval Flow):**
+   - Call `POST {{BACKEND_URL}}/api/admin/advocates/{{advocate_id}}/profile-change/approve`.
+   - Verify `200 OK`.
+   - Call `GET {{BACKEND_URL}}/api/advocates/{{advocate_id}}` (public profile).
+   - Verify new `experienceYears`, `videoCallChargePerMinute`, and `officeAddress` are live.
+   - Verify old live photo was cleaned up from Cloudinary.

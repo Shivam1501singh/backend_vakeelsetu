@@ -8,12 +8,14 @@ import {
   officeAddressSchema
 } from './advocate.validator.js';
 
-export const rejectOfficeChangeSchema = z.object({
+export const rejectProfileChangeSchema = z.object({
   reason: z.string({ required_error: 'Rejection reason is required.' })
     .trim()
     .min(5, { message: 'Reason must be at least 5 characters.' })
     .max(500, { message: 'Reason cannot exceed 500 characters.' })
 }).strict();
+
+export const rejectOfficeChangeSchema = rejectProfileChangeSchema;
 
 export const adminApproveAdvocateSchema = z.object({
   approvalStatus: z.enum(['APPROVED', 'REJECTED']).optional(),

@@ -19,12 +19,12 @@ router.put('/content-creators/:id/roles', requireAuth, requirePermission('roles:
 router.get('/advocates/deletion-requests', requireAuth, requirePermission('advocates:view'), generalLimiter, adminController.listPendingAdvocateDeletionRequests);
 router.get('/advocates/pending', requireAuth, requirePermission('advocates:view'), generalLimiter, adminController.listPendingAdvocates);
 router.get('/advocates/rejected', requireAuth, requirePermission('advocates:view'), generalLimiter, adminController.listRejectedAdvocates);
-router.get('/advocates/office-changes', requireAuth, requirePermission('advocates:edit'), generalLimiter, adminController.listOfficeChangeRequests);
+router.get('/advocates/profile-changes', requireAuth, requirePermission('advocates:edit'), generalLimiter, adminController.listProfileChangeRequests);
 router.get('/advocates', requireAuth, requirePermission('advocates:view'), generalLimiter, adminController.listAdvocates);
 router.get('/advocates/:advocateId', requireAuth, requirePermission('advocates:view'), generalLimiter, adminController.getAdvocateReviewProfile);
-router.get('/advocates/:advocateId/office-change', requireAuth, requirePermission('advocates:edit'), generalLimiter, adminController.getAdvocateOfficeChangeDetails);
-router.post('/advocates/:advocateId/office-change/approve', requireAuth, requirePermission('advocates:edit'), generalLimiter, adminController.approveAdvocateOfficeChange);
-router.post('/advocates/:advocateId/office-change/reject', requireAuth, requirePermission('advocates:edit'), generalLimiter, adminController.rejectAdvocateOfficeChange);
+router.get('/advocates/:advocateId/profile-change', requireAuth, requirePermission('advocates:edit'), generalLimiter, adminController.getAdvocateProfileChangeDetails);
+router.post('/advocates/:advocateId/profile-change/approve', requireAuth, requirePermission('advocates:edit'), generalLimiter, adminController.approveAdvocateProfileChange);
+router.post('/advocates/:advocateId/profile-change/reject', requireAuth, requirePermission('advocates:edit'), generalLimiter, adminController.rejectAdvocateProfileChange);
 router.patch('/advocates/:advocateId/profile', requireAuth, requirePermission('advocates:edit'), generalLimiter, adminController.updateAdvocateProfileByAdmin);
 router.patch('/advocates/:advocateId/approve', requireAuth, requirePermission('advocates:approve'), generalLimiter, adminController.approveAdvocate);
 router.patch('/advocates/:advocateId/reject', requireAuth, requirePermission('advocates:reject'), generalLimiter, adminController.rejectAdvocate);

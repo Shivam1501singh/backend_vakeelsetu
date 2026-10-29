@@ -169,6 +169,24 @@ export const finalizeAdvocateDeletion = async (advocateId) => {
         console.error(`Failed to delete pending office photo ${advocate.pendingOfficeChange.officePhotoPublicId} from Cloudinary:`, err.message);
       }
     }
+    if (advocate.pendingProfileChange) {
+      const draftProfilePhoto = advocate.pendingProfileChange.profilePhoto?.publicId;
+      if (draftProfilePhoto) {
+        try {
+          await deleteFromCloudinary(draftProfilePhoto);
+        } catch (err) {
+          console.error(`Failed to delete draft profile photo ${draftProfilePhoto} from Cloudinary:`, err.message);
+        }
+      }
+      const draftOfficePhoto = advocate.pendingProfileChange.officePhoto?.publicId;
+      if (draftOfficePhoto) {
+        try {
+          await deleteFromCloudinary(draftOfficePhoto);
+        } catch (err) {
+          console.error(`Failed to delete draft office photo ${draftOfficePhoto} from Cloudinary:`, err.message);
+        }
+      }
+    }
 
     return deletedRecord;
   });
