@@ -1,6 +1,7 @@
 import prisma from '../lib/prisma.js';
 import { createOtp, verifyOtp } from './otp.service.js';
 import { sendOtpSms } from './sms.service.js';
+import { deleteFromCloudinary } from './cloudinary.service.js';
 
 /**
  * Request OTP for Advocate account deletion
@@ -129,6 +130,7 @@ export const finalizeAdvocateDeletion = async (advocateId) => {
         totalReviews: advocate.totalReviews,
         profileData: {
           profilePhotoUrl: advocate.profilePhotoUrl,
+          officePhotoUrl: advocate.officePhotoUrl,
           phoneVerified: advocate.phoneVerified,
           emailVerified: advocate.emailVerified,
           topCourtPractised: advocate.topCourtPractised,
@@ -144,6 +146,22 @@ export const finalizeAdvocateDeletion = async (advocateId) => {
     await tx.advocate.delete({
       where: { id: advocateId }
     });
+
+    // Safely cleanup Cloudinary images if they exist
+    if (advocate.profilePhotoPublicId) {
+      try {
+        await deleteFromCloudinary(advocate.profilePhotoPublicId);
+      } catch (err) {
+        console.error(`Failed to delete profile photo ${advocate.profilePhotoPublicId} from Cloudinary:`, err.message);
+      }
+    }
+    if (advocate.officePhotoPublicId) {
+      try {
+        await deleteFromCloudinary(advocate.officePhotoPublicId);
+      } catch (err) {
+        console.error(`Failed to delete office photo ${advocate.officePhotoPublicId} from Cloudinary:`, err.message);
+      }
+    }
 
     return deletedRecord;
   });

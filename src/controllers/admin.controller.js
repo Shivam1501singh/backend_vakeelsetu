@@ -669,6 +669,16 @@ export const listPendingAdvocates = async (req, res, next) => {
       city: adv.city,
       state: adv.state,
       pincode: adv.pincode,
+      officePhotoUrl: adv.officePhotoUrl ?? null,
+      officeLatitude: adv.officeLatitude ?? null,
+      officeLongitude: adv.officeLongitude ?? null,
+      officeLocationUpdatedAt: adv.officeLocationUpdatedAt ?? null,
+      office: {
+        photoUrl: adv.officePhotoUrl ?? null,
+        latitude: adv.officeLatitude ?? null,
+        longitude: adv.officeLongitude ?? null,
+        updatedAt: adv.officeLocationUpdatedAt ?? null
+      },
       profileCompleted: true,
       approvalStatus: adv.approvalStatus,
       callAvailability: adv.callAvailability ?? false,
@@ -688,11 +698,19 @@ export const listPendingAdvocates = async (req, res, next) => {
 
 /**
  * Shared formatter for advocate review / detail responses
- * Ensures passwordHash and aadhaarNumber are never leaked
+ * Ensures passwordHash, aadhaarNumber, and officePhotoPublicId are never leaked
  */
 export const formatAdvocateReviewData = (advocate) => {
   if (!advocate) return null;
-  const { passwordHash, aadhaarNumber, ...safeAdvocate } = advocate;
+  const { passwordHash, aadhaarNumber, officePhotoPublicId, ...safeAdvocate } = advocate;
+
+  const officeLatitude = advocate.officeLatitude ?? null;
+  const officeLongitude = advocate.officeLongitude ?? null;
+  const officePhotoUrl = advocate.officePhotoUrl ?? null;
+  const officeLocationUpdatedAt = advocate.officeLocationUpdatedAt ?? null;
+  const officeMapUrl = (officeLatitude !== null && officeLongitude !== null)
+    ? `https://www.google.com/maps?q=${officeLatitude},${officeLongitude}`
+    : null;
 
   return {
     ...safeAdvocate,
@@ -703,7 +721,18 @@ export const formatAdvocateReviewData = (advocate) => {
     experience: advocate.experienceYears,
     accountStatus: advocate.status,
     callAvailability: advocate.callAvailability ?? false,
-    likeCount: advocate._count?.likes ?? 0
+    likeCount: advocate._count?.likes ?? 0,
+    officeLatitude,
+    officeLongitude,
+    officePhotoUrl,
+    officeLocationUpdatedAt,
+    officeMapUrl,
+    office: {
+      photoUrl: officePhotoUrl,
+      latitude: officeLatitude,
+      longitude: officeLongitude,
+      updatedAt: officeLocationUpdatedAt
+    }
   };
 };
 
@@ -757,6 +786,16 @@ export const listRejectedAdvocates = async (req, res, next) => {
       city: adv.city,
       state: adv.state,
       pincode: adv.pincode,
+      officePhotoUrl: adv.officePhotoUrl ?? null,
+      officeLatitude: adv.officeLatitude ?? null,
+      officeLongitude: adv.officeLongitude ?? null,
+      officeLocationUpdatedAt: adv.officeLocationUpdatedAt ?? null,
+      office: {
+        photoUrl: adv.officePhotoUrl ?? null,
+        latitude: adv.officeLatitude ?? null,
+        longitude: adv.officeLongitude ?? null,
+        updatedAt: adv.officeLocationUpdatedAt ?? null
+      },
       approvalStatus: adv.approvalStatus,
       rejectionReason: adv.rejectionReason,
       rejectedAt: adv.rejectedAt,
@@ -910,12 +949,20 @@ export const updateAdvocateProfileByAdmin = async (req, res, next) => {
       updateData.languagesSpoken = validated.languagesSpoken;
     }
 
+    // Office location update by admin
+    if (validated.officeLatitude !== undefined && validated.officeLongitude !== undefined) {
+      updateData.officeLatitude = validated.officeLatitude;
+      updateData.officeLongitude = validated.officeLongitude;
+      updateData.officeLocationUpdatedAt = (validated.officeLatitude !== null && validated.officeLongitude !== null) ? new Date() : null;
+    }
+
     // Compute changedFields
     const changedFields = [];
-    const decimalFields = ['videoCallChargePerMinute', 'voiceCallChargePerMinute', 'offlineVisitingFee'];
+    const decimalFields = ['videoCallChargePerMinute', 'voiceCallChargePerMinute', 'offlineVisitingFee', 'officeLatitude', 'officeLongitude'];
     const arrayFields = ['languagesSpoken', 'courtPractice', 'practiceAreas'];
 
     for (const key of Object.keys(updateData)) {
+      if (key === 'officeLocationUpdatedAt') continue;
       if (decimalFields.includes(key)) {
         const oldNum = advocate[key] !== null && advocate[key] !== undefined ? Number(advocate[key]) : null;
         const newNum = updateData[key] !== null && updateData[key] !== undefined ? Number(updateData[key]) : null;

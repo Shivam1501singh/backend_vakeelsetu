@@ -1,304 +1,390 @@
-# Plan: Switch Aadhaar OTP Provider from Sandbox to IDSPay (Auto-Verification)
+# Implementation Plan: Advocate Office Photo & Office Location at Profile Completion
 
-This document provides the full implementation plan to transition the advocate Aadhaar OTP generation and verification flow from the discontinued Sandbox OKYC endpoint (`/kyc/aadhaar/okyc/otp`) to the IDSPay "auto-verification" API (`/srv2/digital-kyc/aadhar/auto-verification`), while preserving 100% of the frontend contract.
+## 0. Database Safety & Connection Notice
+> [!IMPORTANT]
+> **Connected Database Host:** `ep-weathered-hat-b47xszyr-pooler.c-6.us-east-2.aws.neon.tech` (Neon cloud PostgreSQL)  
+> **Database Name:** `neondb`  
+> **Status:** Read-only planning phase. No migrations, seeds, Cloudinary uploads, or database writes have been executed. All schema diffs were generated using safe, read-only Prisma inspection.
 
 ---
 
 ## 1. Current Behaviour Analysis
 
-### 1.1 Fields Saved After Successful Verification
+### 1.1 Existing Routes & Middleware (`src/routes/advocate.profile.routes.js`)
+- Mounted at `/api/advocate/profile` and protected by `requireAuth`.
+- Endpoints:
+  - `GET /`: Returns authenticated advocate profile.
+  - `GET /verification-status`: Returns approval preview or status.
+  - `PATCH /`: Updates allowed scalar and aliased profile fields.
+  - `POST /photo`: Uploads profile avatar photo via multer (`upload.single('profilePhoto')`) to Cloudinary.
+  - `POST /submit-for-approval`: Validates profile completeness and marks approval status as `PENDING`. (Also mounted at `/api/advocates/profile/submit-for-approval` in `advocate.routes.js`).
 
-| Field | Saved in OTP Flow (`verifyAadhaarOtpService`) | Saved in DigiLocker Flow (`verifyAadhaarStatusService`) | Final Advocate Profile Creation (`completeProfile`) |
-|---|---|---|---|
-| `aadhaarVerified` | `true` | `true` | Copied from `session.aadhaarVerified` |
-| `aadhaarVerifiedAt` | `new Date()` | `new Date()` | Copied from `session.aadhaarVerifiedAt` |
-| `aadhaarVerificationMethod` | `'OTP'` | `'DIGILOCKER'` | Copied from `session.aadhaarVerificationMethod` |
-| `aadhaarVerificationId` | `reference_id` (from generate OTP) | `clientId` (from initiate) | Copied from `session.aadhaarVerificationId` |
-| `aadhaarVerificationAttempts` | Reset to `0` | Reset to `0` | Copied from `session.aadhaarVerificationAttempts` |
-| `aadhaarBlockedUntil` | Reset to `null` | Reset to `null` | Copied from `session.aadhaarBlockedUntil` |
-| `aadhaarNumber` | Set during OTP generate (`cleanAadhaar`) | Set during initiate (`cleanAadhaar`) | Copied from `session.aadhaarNumber` |
-| Name / DOB / Gender / Address / Photo | **Not stored** in session or Advocate table | **Not stored** in session or Advocate table | Basic details entered by advocate in Step 2 are used |
+### 1.2 Current Advocate Profile Controller (`src/controllers/advocate.profile.controller.js`)
+- **`getProfile`**: Queries `prisma.advocate.findUnique`, omits `passwordHash` and `aadhaarNumber`, attaches effective `isOnline`, `bio`, and returns `{ success: true, advocate: { ... } }`. Does not currently return any office photo or office coordinates.
+- **`updateProfile`**: Validates `req.body` against `advocateProfileUpdateSchema`. Only handles existing profile scalars (experience, bio, charges, practice areas, address, etc.).
+- **`uploadProfilePhoto`**: Validates MIME type (`image/jpeg`, `image/jpg`, `image/png`, `image/webp`) and size (<= 5MB). Calls `uploadBufferToCloudinary(req.file.buffer)`. On success, updates `profilePhotoUrl` and `profilePhotoPublicId`, and cleans up `oldPublicId` using `deleteFromCloudinary`. On error, removes the newly uploaded asset.
+- **`checkIsProfileComplete`**: Checks 10 basic fields (`fullName`, `phone`, `barCouncilId`, `profilePhotoUrl`, `practiceAreas`/`bestPracticeArea`, `experienceYears`, `about`, `city`, `state`, `pincode`).
+- **`submitForApproval`**: Verifies that status is not `BLOCKED`, `approvalStatus` is not `APPROVED`, and `checkIsProfileComplete(advocate)` passes. Sets `approvalStatus = 'PENDING'`, `submittedForApprovalAt = now()`.
 
-### 1.2 Full Aadhaar Number Storage
-- **Current Status:** The code currently stores the **full 12-digit clean Aadhaar number** (e.g., `266809098341`) in:
-  1. `RegistrationSession.aadhaarNumber`
-  2. `Advocate.aadhaarNumber`
-- It is also checked in `checkDuplicateAadhaarNumber` via `prisma.advocate.findFirst({ where: { aadhaarNumber: cleanAadhaar } })`.
-- **Compliance Risk:** UIDAI regulations prohibit storing plain 12-digit Aadhaar numbers in non-vault databases. See Open Question 1.
+### 1.3 Validators (`src/validators/advocate.validator.js` & `src/validators/admin.validator.js`)
+- `advocateProfileUpdateSchema` is `.strict()`. It currently validates profile fields and aliases.
+- Registration coordinates (`latitude`, `longitude`) are only defined on `completeAdvocateRegistrationSchema`.
+- `adminAdvocateProfileUpdateSchema` in `admin.validator.js` extends `advocateProfileUpdateSchema`.
 
-### 1.3 Where `reference_id` is Stored
-- During `POST /aadhaar/otp/generate`, the provider's `reference_id` (or `request_id`) is stored in `RegistrationSession.aadhaarVerificationId`.
-- During `POST /aadhaar/otp/verify`, the incoming `reference_id` is strictly compared with `session.aadhaarVerificationId`:
+### 1.4 Public Advocate APIs (`src/services/advocate.service.js`)
+- `listAdvocates`: Used by `GET /api/advocates`. Explicitly excludes `latitude`, `longitude`, and `pincode` from the response for privacy, returning only calculated `distance` (km) via Haversine.
+- `getAdvocateDetailsPublic`: Used by `GET /api/advocates/:id`. Excludes sensitive fields and returns public profile attributes.
+
+### 1.5 Admin Panel Advocate APIs (`src/controllers/admin.controller.js`)
+- `listPendingAdvocates`: `GET /api/admin/advocates/pending` returns mapped list of advocates with `approvalStatus: 'PENDING'`.
+- `listRejectedAdvocates`: `GET /api/admin/advocates/rejected` returns mapped list of advocates with `approvalStatus: 'REJECTED'`.
+- `getAdvocateReviewProfile`: `GET /api/admin/advocates/:advocateId` uses `formatAdvocateReviewData(advocate)` to return detailed profile for admin review.
+- `updateAdvocateProfileByAdmin`: `PATCH /api/admin/advocates/:advocateId/profile` uses `adminAdvocateProfileUpdateSchema` to validate and update advocate data, detecting diffs in `changedFields`.
+
+### 1.6 Account Deletion Services
+- `src/services/advocateDeletion.service.js`: Contains `finalizeAdvocateDeletion(advocateId)` which archives the record into `DeletedAdvocate` and deletes the `Advocate` row. Cloudinary images (`profilePhotoPublicId`) were not previously cleaned up during this purge.
+
+---
+
+## 2. Adapted Design & Architecture
+
+### 2.1 Schema Definition (`prisma/schema.prisma`)
+Add 5 nullable fields to `model Advocate` directly after existing `longitude`:
+```prisma
+model Advocate {
+  // ... existing fields ...
+  latitude                 Float?
+  longitude                Float?
+  
+  // Office location and photo collected at profile completion
+  officePhotoUrl           String?
+  officePhotoPublicId      String?
+  officeLatitude           Float?
+  officeLongitude          Float?
+  officeLocationUpdatedAt  DateTime?
+  // ... relations ...
+}
+```
+*Note: All fields are nullable so existing advocates default to `NULL` without data breakage.*
+
+### 2.2 Office Photo Upload (`POST /api/advocate/profile/office-photo`)
+- **Route:** Add to `src/routes/advocate.profile.routes.js`:
   ```javascript
-  if (session.aadhaarVerificationId !== reference_id) {
-    const err = new Error('Invalid reference ID. Please initiate OTP generation first.');
-    err.statusCode = 400;
-    throw err;
-  }
+  router.post('/office-photo', generalLimiter, upload.single('officePhoto'), advocateProfileController.uploadOfficePhoto);
   ```
+- **Controller Helper (`validatePhotoUpload`):** Refactor the photo format (JPEG, JPG, PNG, WEBP) and size (<= 5MB) validation inside `src/controllers/advocate.profile.controller.js` to avoid duplicating boilerplate.
+- **Controller Handler (`uploadOfficePhoto`):**
+  - Requires advocate token.
+  - Validates `req.file` with `validatePhotoUpload`.
+  - Retains existing `uploadBufferToCloudinary` without modifying `cloudinary.service.js`.
+  - Updates DB with `officePhotoUrl` and `officePhotoPublicId`.
+  - Deletes old `officePhotoPublicId` from Cloudinary via `deleteFromCloudinary` upon successful DB update.
+  - In case of DB update failure, cleans up the orphaned newly-uploaded Cloudinary image.
+  - Returns `officePhotoUrl` (never returns `officePhotoPublicId`).
 
----
+### 2.3 Office Coordinates Validation & Update (`PATCH /api/advocate/profile`)
+- **Validation (`src/validators/advocate.validator.js`):**
+  - Define custom coordinate schemas that safely handle numeric inputs or numeric strings without bare `parseFloat` (which converts `"abc"` to `NaN`):
+    - Rejects empty strings, `NaN`, and `Infinity`.
+    - Bounds: `officeLatitude` in `[-90, 90]`, `officeLongitude` in `[-180, 180]`.
+  - Add to `advocateProfileUpdateSchema`:
+    ```javascript
+    officeLatitude: officeLatitudeSchema.optional().nullable(),
+    officeLongitude: officeLongitudeSchema.optional().nullable(),
+    ```
+  - Add refinement for "Both or neither":
+    - If only one coordinate is provided or one is null while the other is a number, trigger validation error: `"officeLatitude and officeLongitude must be sent together."`
+    - Both `null` is accepted to clear location (allowed only for advocates not yet approved; see Open Question 3).
+- **Controller (`updateProfile` in `advocate.profile.controller.js`):**
+  - When numbers are passed: updates `officeLatitude`, `officeLongitude`, and sets `officeLocationUpdatedAt = new Date()`.
+  - When both are `null`: clears `officeLatitude = null`, `officeLongitude = null`, and `officeLocationUpdatedAt = null`.
 
-## 2. Existing IDSPay Environment Variables
-
-### 2.1 Existing Variable Names in `.env` / `.env.example`
-- `IDSPAY_BASE_URL`: Can be reused directly (`https://javabackend.idspay.in/api/v1/prod`).
-- `IDSPAY_CLIENT_ID`: Existing DigiLocker config. In `idspay.service.js`, this was passed as both `client_id` and `api_id`.
-- `IDSPAY_CLIENT_SECRET`: Used in DigiLocker flow; not needed for auto-verification request body.
-- `IDSPAY_API_KEY`: Can be reused directly for the auto-verification payload if using the same credentials.
-- `IDSPAY_AADHAAR_INITIATE_PATH`: Specific to DigiLocker (`/srv2/validation/digilocker-digital-kyc`). **Do NOT touch or rename**.
-- `IDSPAY_AADHAAR_STATUS_PATH`: Specific to DigiLocker (`/srv2/validation/digilocker-digital-kyc`). **Do NOT touch or rename**.
-
-### 2.2 Variables Needed for IDSPay Auto-Verification
-- `IDSPAY_BASE_URL`: (Reuse existing)
-- `IDSPAY_API_ID`: Will support explicit `IDSPAY_API_ID` with fallback to `IDSPAY_CLIENT_ID`.
-- `IDSPAY_API_KEY`: (Reuse existing or override)
-- `IDSPAY_TOKEN_ID`: **New** (required by auto-verification endpoint).
-- `IDSPAY_AADHAAR_OTP_PATH`: **New** (default `/srv2/digital-kyc/aadhar/auto-verification`).
-- `AADHAAR_OTP_PROVIDER`: **New** (options: `idspay` | `sandbox` | `mock`, default `idspay`).
-- `AADHAAR_OTP_TIMEOUT_MS`: **New** (default `20000`).
-
-### 2.3 Variables to Set in Vercel (Production & Preview)
-1. `IDSPAY_BASE_URL`
-2. `IDSPAY_API_ID` (or `IDSPAY_CLIENT_ID`)
-3. `IDSPAY_API_KEY`
-4. `IDSPAY_TOKEN_ID`
-5. `IDSPAY_AADHAAR_OTP_PATH`
-6. `AADHAAR_OTP_PROVIDER=idspay`
-7. `AADHAAR_OTP_TIMEOUT_MS=20000`
-
----
-
-## 3. Architecture & Modular Adapter Design
-
-```
-+-------------------------------------------------------------------------------------------------+
-|                                 Advocate Auth Controller                                        |
-|             (POST /aadhaar/otp/generate  &  POST /aadhaar/otp/verify)                           |
-+-------------------------------------------------------------------------------------------------+
-                                                |
-                                                v
-+-------------------------------------------------------------------------------------------------+
-|                                  auth.service.js                                                |
-|   - 24h block & attempt check (max 3 attempts)                                                  |
-|   - 60s resend cooldown per registrationId                                                      |
-|   - Reference ID session binding                                                                |
-|   - Aadhaar last 4 cross-check on verify                                                        |
-+-------------------------------------------------------------------------------------------------+
-                                                |
-                                                v
-+-------------------------------------------------------------------------------------------------+
-|                              src/services/aadhaarOtp/index.js                                   |
-|   - Provider switch (AADHAAR_OTP_PROVIDER = 'idspay' | 'sandbox' | 'mock')                      |
-|   - Production safety guard (blocks 'mock' in NODE_ENV === 'production' with 503)               |
-+-------------------------------------------------------------------------------------------------+
-                 |                                      |                                  |
-                 v                                      v                                  v
-+---------------------------------+  +---------------------------------+  +-------------------------------+
-|      idspay.provider.js         |  |      sandbox.provider.js        |  |       mock.provider.js        |
-|  - Real IDSPay Auto-Verify      |  |  - Legacy Sandbox OKYC          |  |  - Mock test numbers          |
-|  - HTTP timeout 20s             |  |  - Marked @deprecated           |  |    (123456789012, etc.)       |
-|  - No mock bypass in live path  |  |  - Kept for rollback            |  |  - Test OTP 123456            |
-+---------------------------------+  +---------------------------------+  +-------------------------------+
-```
-
-### 3.1 Normalized Provider Interface
-Regardless of the active provider, `src/services/aadhaarOtp/index.js` returns uniform shapes:
-
-**Generate OTP:**
-```typescript
-type GenerateOtpResult = 
-  | { ok: true; referenceId: string }
-  | { ok: false; reason: 'INVALID_AADHAAR' | 'NO_MOBILE_LINKED' | 'RATE_LIMITED' | 'PROVIDER_ERROR'; providerMessage?: string }
-```
-
-**Verify OTP:**
-```typescript
-type VerifyOtpResult = 
-  | { 
-      ok: true; 
-      kyc: { 
-        fullName: string; 
-        dob: string; 
-        gender: string; 
-        aadhaarLast4: string; 
-        address: Record<string, any>; 
-        zip: string; 
-      } 
+### 2.4 Profile Completion & Submission Check (`submitForApproval`)
+- To prevent locking out existing APPROVED advocates, **keep `checkIsProfileComplete()` unchanged**.
+- In `submitForApproval` in `advocate.profile.controller.js`:
+  - Run standard `checkIsProfileComplete(advocate)`.
+  - Add strict office requirements:
+    ```javascript
+    const missingFields = [];
+    if (!advocate.officePhotoUrl || !advocate.officePhotoUrl.trim()) {
+      missingFields.push('officePhoto');
     }
-  | { ok: false; reason: 'INVALID_OTP' | 'OTP_EXPIRED' | 'PROVIDER_ERROR'; providerMessage?: string }
-```
-
-### 3.2 IDSPay Provider Details (`idspay.provider.js`)
-- **Missing env check:** If any required env var (`IDSPAY_BASE_URL`, `IDSPAY_API_ID` / `IDSPAY_CLIENT_ID`, `IDSPAY_API_KEY`, `IDSPAY_TOKEN_ID`) is missing at request time, log error naming the missing var (name only) and return `{ ok: false, reason: 'PROVIDER_ERROR', providerMessage: 'Configuration missing' }` which maps to HTTP 503.
-- **Generate OTP:**
-  - POST to `{IDSPAY_BASE_URL}{IDSPAY_AADHAAR_OTP_PATH}`
-  - Payload: `{ api_id, api_key, token_id, methodName: 'getotp', aadhaar_no: aadhaarNumber }`
-  - Success condition: HTTP 200 AND `status.type === "success"` AND `data.data.otp_sent === true` AND `data.request_id` is present.
-  - Returns: `{ ok: true, referenceId: String(data.request_id) }`
-  - If `valid_aadhaar === false` -> `reason: 'INVALID_AADHAAR'`
-  - If `if_number === false` -> `reason: 'NO_MOBILE_LINKED'`
-  - Otherwise -> `reason: 'PROVIDER_ERROR'` (with `// TODO: refine with real failure samples`).
-- **Verify OTP:**
-  - POST to `{IDSPAY_BASE_URL}{IDSPAY_AADHAAR_OTP_PATH}`
-  - Payload: `{ api_id, api_key, token_id, methodName: 'validateotp', request_id: String(referenceId), otp: String(otp) }`
-  - Success condition: HTTP 200 AND `status.type === "success"` AND `data.full_name` is present.
-  - Returns: `{ ok: true, kyc: { fullName: data.full_name, dob: data.dob, gender: data.gender, aadhaarLast4: data.aadhaar_number?.slice(-4) || '', address: data.address || {}, zip: data.zip || '' } }`
-  - If not successful: Network/5xx/unparseable -> `reason: 'PROVIDER_ERROR'`. Other -> `reason: 'INVALID_OTP'` (with `// TODO: refine with real failure samples`).
-- **Timeout:** 20,000ms via Axios timeout. No automatic retries.
-
-### 3.3 Mock Safety & Complete Removal from Live Path
-- **Remove mock bypass from live code:** In `idspay.provider.js`, there is NO check for `123456789012`. All requests to `idspay.provider.js` proceed strictly through HTTP.
-- **Mock isolated in `mock.provider.js`:** Mock numbers live exclusively in `mock.provider.js`, triggered only when `AADHAAR_OTP_PROVIDER=mock`.
-- **Production Guard:** If `NODE_ENV === 'production'` and `AADHAAR_OTP_PROVIDER === 'mock'`, the adapter logs an alert at startup and immediately rejects any OTP call with HTTP 503 "Aadhaar mock verification is disabled in production."
-
-### 3.4 Resend Cooldown (60s)
-- Implemented in `auth.service.js` using an in-memory TTL map: `aadhaarOtpCooldowns = new Map<string, number>()`.
-- If `generateAadhaarOtpService` is invoked for the same `registrationId` within 60 seconds of the previous generation:
-  - Returns `HTTP 429` with:
-    ```json
-    {
-      "success": false,
-      "message": "Please wait before requesting another OTP.",
-      "retryAfterSeconds": 48
+    if (
+      advocate.officeLatitude === null || advocate.officeLatitude === undefined ||
+      advocate.officeLongitude === null || advocate.officeLongitude === undefined
+    ) {
+      missingFields.push('officeLocation');
+    }
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please complete your office photo and office location before submitting for approval.',
+        missingFields
+      });
     }
     ```
-- This prevents spamming IDSPay and saves per-SMS costs.
+
+### 2.5 Exposing Office Data Across Endpoints
+1. **Own Profile (`GET /api/advocate/profile` & `GET /api/advocate/profile/verification-status`):**
+   - Provide structured `office` object:
+     ```json
+     "office": {
+       "photoUrl": "https://res.cloudinary.com/...",
+       "latitude": 28.6304,
+       "longitude": 77.2177,
+       "updatedAt": "2026-10-28T18:00:00.000Z"
+     }
+     ```
+   - Provide flat attributes matching existing style: `officePhotoUrl`, `officeLatitude`, `officeLongitude`, `officeLocationUpdatedAt`.
+   - Provide boolean status flag: `officeDetailsComplete: Boolean(advocate.officePhotoUrl && advocate.officeLatitude !== null && advocate.officeLongitude !== null)`.
+   - Ensure `officePhotoPublicId` is strictly omitted.
+2. **Public Advocate Profile (`GET /api/advocates/:id`):**
+   - Add `officeLatitude`, `officeLongitude`, and `officePhotoUrl` to the response object in `getAdvocateDetailsPublic`.
+   - Public directory list (`GET /api/advocates`) remains coordinate-free for privacy.
+3. **Admin Panel Endpoints (`src/controllers/admin.controller.js`):**
+   - `listPendingAdvocates` (`GET /api/admin/advocates/pending`): Include `officePhotoUrl`, `officeLatitude`, `officeLongitude`, and `office` object.
+   - `listRejectedAdvocates` (`GET /api/admin/advocates/rejected`): Include the same office fields.
+   - `formatAdvocateReviewData` (`GET /api/admin/advocates/:advocateId`):
+     - Include `officePhotoUrl`, `officeLatitude`, `officeLongitude`, `officeLocationUpdatedAt`, and `office` object.
+     - Add `officeMapUrl`: `https://www.google.com/maps?q=${advocate.officeLatitude},${advocate.officeLongitude}` (or `null` if coordinates are not set).
+   - `updateAdvocateProfileByAdmin` (`PATCH /api/admin/advocates/:advocateId/profile`):
+     - Automatically validates `officeLatitude` and `officeLongitude` via extended schema.
+     - Saves coordinates and updates `officeLocationUpdatedAt = new Date()`.
+     - Tracks changes in `changedFields`.
+
+### 2.6 Account Deletion Cleanup
+- In `src/services/advocateDeletion.service.js` within `finalizeAdvocateDeletion`:
+  - When an advocate is permanently purged, safely invoke `deleteFromCloudinary` for both `advocate.profilePhotoPublicId` and `advocate.officePhotoPublicId` inside try-catch blocks to prevent orphaned Cloudinary storage.
+  - Also add corresponding defensive check in `accountDeletion.service.js` if advocate records ever route through it.
 
 ---
 
-## 4. Error Mapping to API (Frontend Contract)
+## 3. Files to Change (No New Route/Controller/Service Files)
 
-| Normalized reason | HTTP | Response Message | Counts as failed attempt? | Session Blocked? |
-|---|---|---|---|---|
-| `INVALID_AADHAAR` | 400 | Invalid Aadhaar Number or Aadhaar not registered. | **No** | No |
-| `NO_MOBILE_LINKED` | 400 | No mobile number is linked with this Aadhaar. Please use DigiLocker verification. | **No** | No |
-| `RATE_LIMITED` / Cooldown | 429 | Please wait before requesting another OTP. (+ `retryAfterSeconds`) | **No** | No |
-| `INVALID_OTP` | 400 | Invalid OTP. (+ `remainingAttempts`, `blocked`, `blockedUntil`) | **Yes** (increments `attempts`) | Yes if attempts >= 3 (24h block) |
-| `OTP_EXPIRED` | 400 | OTP expired. Please request a new OTP. | **No** | No |
-| `PROVIDER_ERROR` | 502 | Aadhaar verification service is temporarily unavailable. Please try again. | **No** | No |
-| Missing Env / Provider Config | 503 | Aadhaar verification is temporarily unavailable. | **No** | No |
-
----
-
-## 5. Files to Change
-
-1. **`src/services/aadhaarOtp/index.js`** (NEW): Provider selection, normalized contract, production safety guard.
-2. **`src/services/aadhaarOtp/idspay.provider.js`** (NEW): IDSPay auto-verification HTTP requests with defensive parsing.
-3. **`src/services/aadhaarOtp/sandbox.provider.js`** (NEW): Legacy Sandbox implementation moved and marked `@deprecated`.
-4. **`src/services/aadhaarOtp/mock.provider.js`** (NEW): Mock test numbers and OTP logic isolated here.
-5. **`src/services/auth.service.js`** (MODIFIED):
-   - Replace Sandbox calls in `generateAadhaarOtpService` and `verifyAadhaarOtpService` with calls to `aadhaarOtp` adapter.
-   - Add 60s cooldown check.
-   - Cross-check Aadhaar last 4 on verify.
-   - Map normalized error reasons to existing HTTP response schema.
-6. **`src/services/sandboxAadhaar.service.js`** (MODIFIED): Marked deprecated, re-exports from `src/services/aadhaarOtp` to avoid breaking any loose imports.
-7. **`.env.example`** (MODIFIED): Add placeholders for `IDSPAY_API_ID`, `IDSPAY_TOKEN_ID`, `IDSPAY_AADHAAR_OTP_PATH`, `AADHAAR_OTP_PROVIDER`, `AADHAAR_OTP_TIMEOUT_MS`.
-8. **`README.md`** (MODIFIED): Add **`## 33. Aadhaar OTP Verification (IDSPay) — Postman Guide`**.
-9. **Tests:**
-   - Unit tests for `idspay.provider.js` with stubbed Axios (no live calls).
-   - Service layer unit tests for `auth.service.js` (cooldown, error mapping, attempt counter, last 4 cross-check).
+| File | Change Summary |
+|---|---|
+| `prisma/schema.prisma` | Add 5 nullable office fields to `Advocate` model. |
+| `src/routes/advocate.profile.routes.js` | Add `POST /office-photo` route with multer memory upload. |
+| `src/validators/advocate.validator.js` | Add numeric coordinate validation and both-or-neither refine rule to `advocateProfileUpdateSchema`. |
+| `src/controllers/advocate.profile.controller.js` | Implement `uploadOfficePhoto`, handle office coordinates in `updateProfile`, enforce office requirements in `submitForApproval`, and return `office` / flat office fields in `getProfile` and `getVerificationStatus`. |
+| `src/services/advocate.service.js` | Add `officeLatitude`, `officeLongitude`, `officePhotoUrl` to public detail response in `getAdvocateDetailsPublic`. |
+| `src/controllers/admin.controller.js` | Add office fields and `officeMapUrl` to admin review profile, pending queue, rejected queue, and allow admin coordinate updates. |
+| `src/services/advocateDeletion.service.js` | Clean up `officePhotoPublicId` from Cloudinary during permanent deletion. |
+| `README.md` | Add Section 34 ("Advocate Office Photo & Office Location — Postman Guide") with full API documentation and testing instructions. |
+| `prisma/migrations/<timestamp>_add_advocate_office_location/migration.sql` | The generated migration SQL script. |
 
 ---
 
-## 6. Request & Response Samples
+## 4. Prisma Migration SQL
 
-### 1. Generate Aadhaar OTP
-**`POST /api/auth/advocate/aadhaar/otp/generate`**
-```json
-{
-  "registrationId": "0536adf1-b64f-4f3d-bfb9-676d8f964486",
-  "aadhaar_number": "123456789012"
-}
+Generated using:
+```bash
+npx prisma migrate diff \
+  --from-schema-datasource prisma/schema.prisma \
+  --to-schema-datamodel prisma/schema.prisma \
+  --script
 ```
-**Success Response (`200 OK`):**
+
+Target Migration File: `prisma/migrations/20261028133000_add_advocate_office_location/migration.sql`
+
+```sql
+-- AlterTable
+ALTER TABLE "Advocate" ADD COLUMN     "officeLatitude" DOUBLE PRECISION,
+ADD COLUMN     "officeLocationUpdatedAt" TIMESTAMP(3),
+ADD COLUMN     "officeLongitude" DOUBLE PRECISION,
+ADD COLUMN     "officePhotoPublicId" TEXT,
+ADD COLUMN     "officePhotoUrl" TEXT;
+```
+
+**Verification against policy:**
+- Strict `ALTER TABLE ADD COLUMN` only.
+- All columns nullable.
+- Zero `DROP`, zero rename, zero data deletion.
+- Applied only with `npx prisma migrate deploy` after explicit approval.
+
+---
+
+## 5. Request & Response Samples
+
+### 5.1 Office Photo Upload
+**`POST /api/advocate/profile/office-photo`**  
+Header: `Authorization: Bearer {{advocate_token}}`  
+Body: `multipart/form-data` with field `officePhoto` (file, JPEG/PNG <= 5MB)
+
+**Response (`200 OK`):**
 ```json
 {
   "success": true,
-  "message": "Aadhaar verification OTP sent successfully.",
-  "reference_id": "16746854"
-}
-```
-**Resend Within 60s (`429 Too Many Requests`):**
-```json
-{
-  "success": false,
-  "message": "Please wait before requesting another OTP.",
-  "retryAfterSeconds": 52
+  "message": "Office photo updated successfully",
+  "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_abc123.jpg"
 }
 ```
 
-### 2. Verify Aadhaar OTP
-**`POST /api/auth/advocate/aadhaar/otp/verify`**
+### 5.2 Office Location Update
+**`PATCH /api/advocate/profile`**  
+Header: `Authorization: Bearer {{advocate_token}}`  
+Content-Type: `application/json`
+
+**Request Body:**
 ```json
 {
-  "registrationId": "0536adf1-b64f-4f3d-bfb9-676d8f964486",
-  "reference_id": "16746854",
-  "otp": "123456"
+  "officeLatitude": 28.6304,
+  "officeLongitude": 77.2177
 }
 ```
-**Success Response (`200 OK`):**
+
+**Response (`200 OK`):**
 ```json
 {
   "success": true,
-  "aadhaarVerified": true,
-  "message": "Aadhaar verified successfully."
+  "message": "Profile updated successfully",
+  "advocate": {
+    "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
+    "fullName": "Advocate Rajesh Sharma",
+    "email": "rajesh.adv@example.com",
+    "phone": "9876543210",
+    "officeLatitude": 28.6304,
+    "officeLongitude": 77.2177,
+    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_abc123.jpg",
+    "officeLocationUpdatedAt": "2026-10-28T13:15:00.000Z",
+    "office": {
+      "photoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_abc123.jpg",
+      "latitude": 28.6304,
+      "longitude": 77.2177,
+      "updatedAt": "2026-10-28T13:15:00.000Z"
+    },
+    "officeDetailsComplete": true,
+    "type": "advocate"
+  }
 }
 ```
-**Invalid OTP Response (`400 Bad Request`):**
+
+### 5.3 Fetch Own Profile
+**`GET /api/advocate/profile`**  
+Header: `Authorization: Bearer {{advocate_token}}`
+
+**Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "advocate": {
+    "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
+    "fullName": "Advocate Rajesh Sharma",
+    "barCouncilId": "D/1234/2015",
+    "city": "New Delhi",
+    "state": "Delhi",
+    "pincode": "110001",
+    "profilePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/profile_123.jpg",
+    "officeLatitude": 28.6304,
+    "officeLongitude": 77.2177,
+    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_abc123.jpg",
+    "officeLocationUpdatedAt": "2026-10-28T13:15:00.000Z",
+    "office": {
+      "photoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_abc123.jpg",
+      "latitude": 28.6304,
+      "longitude": 77.2177,
+      "updatedAt": "2026-10-28T13:15:00.000Z"
+    },
+    "officeDetailsComplete": true,
+    "approvalStatus": "PENDING",
+    "accountStatus": "ACTIVE",
+    "type": "advocate"
+  }
+}
+```
+
+### 5.4 Submit for Approval — Incomplete Error
+**`POST /api/advocate/profile/submit-for-approval`**  
+Header: `Authorization: Bearer {{advocate_token}}`
+
+**Error Response (`400 Bad Request`):**
 ```json
 {
   "success": false,
-  "message": "Invalid OTP.",
-  "remainingAttempts": 2,
-  "blocked": false,
-  "blockedUntil": null
+  "message": "Please complete your office photo and office location before submitting for approval.",
+  "missingFields": ["officePhoto", "officeLocation"]
+}
+```
+
+### 5.5 Public Advocate Detail
+**`GET /api/advocates/c1f7b024-4f9e-4b42-8924-1b1574a23b32`**
+
+**Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "advocate": {
+    "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
+    "fullName": "Advocate Rajesh Sharma",
+    "profilePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/profile_123.jpg",
+    "officeLatitude": 28.6304,
+    "officeLongitude": 77.2177,
+    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_abc123.jpg",
+    "city": "New Delhi",
+    "state": "Delhi",
+    "experienceYears": 9,
+    "approvalStatus": "APPROVED"
+  }
+}
+```
+
+### 5.6 Admin Review Profile
+**`GET /api/admin/advocates/c1f7b024-4f9e-4b42-8924-1b1574a23b32`**  
+Header: `Authorization: Bearer {{admin_token}}`
+
+**Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "advocate": {
+    "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
+    "fullName": "Advocate Rajesh Sharma",
+    "barCouncilId": "D/1234/2015",
+    "approvalStatus": "PENDING",
+    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_abc123.jpg",
+    "officeLatitude": 28.6304,
+    "officeLongitude": 77.2177,
+    "officeLocationUpdatedAt": "2026-10-28T13:15:00.000Z",
+    "officeMapUrl": "https://www.google.com/maps?q=28.6304,77.2177",
+    "office": {
+      "photoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_abc123.jpg",
+      "latitude": 28.6304,
+      "longitude": 77.2177,
+      "updatedAt": "2026-10-28T13:15:00.000Z"
+    }
+  }
 }
 ```
 
 ---
 
-## 7. Risks & Mitigations
+## 6. Risks & Mitigations
 
-1. **Failure Shapes Unknown:**
-   - *Risk:* IDSPay's failure response JSON structures for invalid OTP, expired OTP, and server errors are not yet documented.
-   - *Mitigation:* We code defensively. A response is treated as a success *only* when explicit HTTP 200, `status.type === "success"`, and the required payload keys exist. All non-successes map cleanly to `INVALID_OTP` (for verify) or `PROVIDER_ERROR` (for generate) until Postman failure samples are captured and refined.
-2. **PII & Logging Compliance:**
-   - *Risk:* Leaking plain Aadhaar numbers, OTPs, or customer names in server logs.
-   - *Mitigation:* Never log raw request/response bodies. Mask Aadhaar numbers as `XXXXXXXX1234`. Log only metadata: provider name, HTTP status, `status.type`, and `request_id`.
-3. **No Unintended Side Effects on DigiLocker Flow:**
-   - *Risk:* Touching `idspay.service.js` could break the DigiLocker redirect flow (`/aadhaar/initiate` and `/aadhaar/verify`).
-   - *Mitigation:* The DigiLocker flow in `idspay.service.js` remains 100% untouched. The new OTP code is housed in its own clean directory `src/services/aadhaarOtp/`.
-
----
-
-## 8. Answers to Open Questions & Recommendations
-
-### Question 1: Aadhaar number storage — full or masked (last 4)?
-- **Current Behavior:** Full 12 digits stored in `RegistrationSession.aadhaarNumber` and `Advocate.aadhaarNumber`.
-- **Recommendation:**
-  - In Indian law (UIDAI Aadhaar Act regulations), storing full unencrypted 12-digit Aadhaar numbers without a licensed Aadhaar Data Vault is illegal.
-  - **Recommended Action:** Store masked format `XXXXXXXX1234` in `aadhaarNumber`. For uniqueness checks, store a one-way `SHA-256` hash of the 12 digits.
-  - **Decision:** Awaiting your confirmation. If you want zero database schema changes right now, we can continue saving the clean 12 digits in the existing text column, or mask it as `XXXXXXXX1234`.
-
-### Question 2: Name match — compare Aadhaar `full_name` with registered advocate name?
-- **Recommendation:** Do **not** block the registration flow automatically on a name mismatch. Legal names in India frequently differ in spelling or initials (e.g. "R. Sharma" vs "Rajesh Sharma").
-- Instead, simply calculate a similarity score (or log a warning) and store or surface it for the admin in the advocate approval panel (`AdvocateApprovalStatus`).
-
-### Question 3: Sandbox provider — keep or delete?
-- **Recommendation:** **Keep `sandbox.provider.js` marked `@deprecated`**.
-- It provides immediate fallback and reference without cluttering the active codebase, easily switchable via `AADHAAR_OTP_PROVIDER=sandbox`.
-
-### Question 4: Do existing IDSPay env vars belong to the same account/credentials as this new endpoint?
-- In `.env`, `IDSPAY_CLIENT_ID`, `IDSPAY_CLIENT_SECRET`, and `IDSPAY_API_KEY` are currently configured.
-- The new auto-verification endpoint requires `api_id`, `api_key`, and `token_id`.
-- If `api_id` matches `IDSPAY_CLIENT_ID` and `api_key` matches `IDSPAY_API_KEY`, they can be reused. However, `IDSPAY_TOKEN_ID` is new and must be provided in `.env`.
-- We will support explicit `IDSPAY_API_ID` with automatic fallback to `IDSPAY_CLIENT_ID`.
+1. **Risk:** Overwriting or modifying registration `latitude` and `longitude`.
+   - **Mitigation:** The existing `latitude` and `longitude` fields in `Advocate` are left completely untouched. All distance calculation, nearby sorting, and registration flows continue using the original fields.
+2. **Risk:** Accidentally exposing `officePhotoPublicId` to public or mobile clients.
+   - **Mitigation:** Sanitizers in both `advocate.profile.controller.js` (`getProfile`, `updateProfile`), `advocate.service.js` (`getAdvocateDetailsPublic`), and `admin.controller.js` (`formatAdvocateReviewData`) explicitly omit or destructure out `officePhotoPublicId`.
+3. **Risk:** String coordinates passed via form-data or JSON causing silent `NaN` parsing with bare `parseFloat`.
+   - **Mitigation:** Custom Zod schema ensures strict numeric check (number or valid numeric string matching regex `/^-?\d+(\.\d+)?$/`), strictly bounds within `[-90, 90]` and `[-180, 180]`, and throws clear 400 validation messages for invalid inputs like `"abc"`, `""`, or out-of-range coordinates.
+4. **Risk:** Broken profile completion checks for already-approved advocates.
+   - **Mitigation:** `checkIsProfileComplete` is left unchanged. Office photo and location checks are isolated specifically to `submitForApproval`.
 
 ---
 
-## 9. Current Database Host Notice
+## 7. Answers to OPEN QUESTIONS
 
-Per instructions:
-> **Database Host:** `ep-weathered-hat-b47xszyr-pooler.c-6.us-east-2.aws.neon.tech` (Neon AWS Cloud PostgreSQL)
-> **Notice:** No live database modifications or test data will be created in this database. No live calls to IDSPay will be made prior to explicit approval.
+### Question 1: Public profile: return only office lat/lng, or also `officePhotoUrl`?
+- **Recommendation:** Return `officeLatitude`, `officeLongitude`, AND `officePhotoUrl`.  
+- **Rationale:** When users browse advocate profiles to book in-person consultations, seeing both the map pin and a legitimate photo of the advocate's law office establishes high trust and authenticity.
+
+### Question 2: Already-APPROVED advocates with no office data: leave them as they are (not forced)?
+- **Recommendation:** Yes, leave existing approved advocates untouched.  
+- **Rationale:** Retroactively requiring office details on already-approved advocates would disrupt live accounts and break client bookings. The requirement is enforced exclusively on new submissions and resubmissions.
+
+### Question 3: After APPROVAL, can the advocate change the office photo/location freely, or does that need admin re-approval?
+- **Current Behaviour in Codebase:** In the current system, `updateProfile` and `uploadProfilePhoto` allow approved advocates to update profile data (address, practice areas, bio, profile photo) freely without resetting `approvalStatus` to `PENDING`. Only `submitForApproval` transitions an account to `PENDING`.
+- **Recommendation:** Follow the existing pattern: allow approved advocates to update their office photo and office coordinates freely. However, disallow clearing (`null`) office coordinates once the account has achieved `APPROVED` status.
+
+### Question 4: Map links: should the public profile also get `officeMapUrl`?
+- **Recommendation:** Admin only.  
+- **Rationale:** Frontend clients (React web and React Native mobile) consume raw coordinates (`officeLatitude`, `officeLongitude`) to render interactive map components (e.g. Google Maps SDK, Leaflet, Mapbox) with custom markers. The admin panel specifically benefits from a direct one-click outbound Google Maps link (`officeMapUrl`).

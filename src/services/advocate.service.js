@@ -435,6 +435,15 @@ export const getAdvocateDetailsPublic = async (id, currentUserId) => {
     totalReviews: advocate.totalReviews,
     status: advocate.status,
     approvalStatus: advocate.approvalStatus,
+    officeLatitude: advocate.officeLatitude ?? null,
+    officeLongitude: advocate.officeLongitude ?? null,
+    officePhotoUrl: advocate.officePhotoUrl ?? null,
+    office: {
+      photoUrl: advocate.officePhotoUrl ?? null,
+      latitude: advocate.officeLatitude ?? null,
+      longitude: advocate.officeLongitude ?? null,
+      updatedAt: advocate.officeLocationUpdatedAt ?? null
+    },
     bookable: isAdvocateBookable(advocate),
     bookingModes: isAdvocateBookable(advocate) ? getBookableModes(advocate).map((m) => m.mode) : [],
     callAvailability: advocate.callAvailability ?? false,

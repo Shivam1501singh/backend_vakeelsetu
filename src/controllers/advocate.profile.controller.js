@@ -4,6 +4,49 @@ import { uploadBufferToCloudinary, deleteFromCloudinary } from '../services/clou
 import { computeEffectiveOnlineStatus } from '../utils/advocateStatus.js';
 
 /**
+ * Shared validator for uploaded image files (profile photo, office photo).
+ */
+const validateUploadedPhoto = (file) => {
+  if (!file) {
+    return { valid: false, status: 400, message: 'No photo file provided.' };
+  }
+  const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+  if (!allowedMimeTypes.includes(file.mimetype)) {
+    return { valid: false, status: 400, message: 'Invalid file format. Only JPEG, JPG, PNG, and WEBP images are allowed.' };
+  }
+  const maxSize = 5 * 1024 * 1024;
+  if (file.size > maxSize) {
+    return { valid: false, status: 400, message: 'File size exceeds the 5MB limit.' };
+  }
+  return { valid: true };
+};
+
+/**
+ * Shared formatter for advocate office details.
+ * Ensures officePhotoPublicId is NEVER exposed.
+ */
+export const formatOfficeDetails = (advocate) => {
+  const photoUrl = advocate.officePhotoUrl ?? null;
+  const latitude = advocate.officeLatitude ?? null;
+  const longitude = advocate.officeLongitude ?? null;
+  const updatedAt = advocate.officeLocationUpdatedAt ?? null;
+
+  return {
+    office: {
+      photoUrl,
+      latitude,
+      longitude,
+      updatedAt
+    },
+    officePhotoUrl: photoUrl,
+    officeLatitude: latitude,
+    officeLongitude: longitude,
+    officeLocationUpdatedAt: updatedAt,
+    officeDetailsComplete: Boolean(photoUrl && latitude !== null && longitude !== null)
+  };
+};
+
+/**
  * Get the currently authenticated advocate's profile.
  */
 export const getProfile = async (req, res, next) => {
@@ -26,13 +69,15 @@ export const getProfile = async (req, res, next) => {
       });
     }
 
-    // Exclude passwordHash and aadhaarNumber
-    const { passwordHash, aadhaarNumber, ...safeAdvocate } = advocate;
+    // Exclude passwordHash, aadhaarNumber, and officePhotoPublicId
+    const { passwordHash, aadhaarNumber, officePhotoPublicId, ...safeAdvocate } = advocate;
+    const officeDetails = formatOfficeDetails(advocate);
 
     return res.status(200).json({
       success: true,
       advocate: {
         ...safeAdvocate,
+        ...officeDetails,
         isOnline: computeEffectiveOnlineStatus(advocate.isOnline, advocate.lastSeenAt),
         lastSeenAt: advocate.lastSeenAt,
         callAvailability: advocate.callAvailability ?? false,
@@ -109,11 +154,30 @@ export const submitForApproval = async (req, res, next) => {
       });
     }
 
-    // Check profile completion
+    // Check profile completion (base details)
     if (!checkIsProfileComplete(advocate)) {
       return res.status(400).json({
         success: false,
         message: 'Please complete your Advocate profile before submitting it for approval'
+      });
+    }
+
+    // Check office details (office photo and office location required for submission)
+    const missingFields = [];
+    if (!advocate.officePhotoUrl || !advocate.officePhotoUrl.trim()) {
+      missingFields.push('officePhoto');
+    }
+    if (
+      advocate.officeLatitude === null || advocate.officeLatitude === undefined ||
+      advocate.officeLongitude === null || advocate.officeLongitude === undefined
+    ) {
+      missingFields.push('officeLocation');
+    }
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please complete your office photo and office location before submitting for approval.',
+        missingFields
       });
     }
 
@@ -199,19 +263,45 @@ export const updateProfile = async (req, res, next) => {
       updateData.courtPractice = validated.courtPractice;
     }
 
+    // Office location update (both sent together or both null to clear)
+    if (validated.officeLatitude !== undefined && validated.officeLongitude !== undefined) {
+      if (validated.officeLatitude === null && validated.officeLongitude === null) {
+        // Disallow clearing office location if already APPROVED
+        const currentAdvocate = await prisma.advocate.findUnique({
+          where: { id: req.user.id },
+          select: { approvalStatus: true }
+        });
+        if (currentAdvocate && currentAdvocate.approvalStatus === 'APPROVED') {
+          return res.status(400).json({
+            success: false,
+            message: 'Office location cannot be cleared once your profile is approved.'
+          });
+        }
+        updateData.officeLatitude = null;
+        updateData.officeLongitude = null;
+        updateData.officeLocationUpdatedAt = null;
+      } else {
+        updateData.officeLatitude = validated.officeLatitude;
+        updateData.officeLongitude = validated.officeLongitude;
+        updateData.officeLocationUpdatedAt = new Date();
+      }
+    }
+
     const updatedAdvocate = await prisma.advocate.update({
       where: { id: req.user.id },
       data: updateData
     });
 
-    // Exclude passwordHash and aadhaarNumber
-    const { passwordHash, aadhaarNumber, ...safeAdvocate } = updatedAdvocate;
+    // Exclude passwordHash, aadhaarNumber, and officePhotoPublicId
+    const { passwordHash, aadhaarNumber, officePhotoPublicId, ...safeAdvocate } = updatedAdvocate;
+    const officeDetails = formatOfficeDetails(updatedAdvocate);
 
     return res.status(200).json({
       success: true,
       message: 'Profile updated successfully',
       advocate: {
         ...safeAdvocate,
+        ...officeDetails,
         type: 'advocate'
       }
     });
@@ -232,28 +322,11 @@ export const uploadProfilePhoto = async (req, res, next) => {
       });
     }
 
-    if (!req.file) {
-      return res.status(400).json({
+    const validation = validateUploadedPhoto(req.file);
+    if (!validation.valid) {
+      return res.status(validation.status).json({
         success: false,
-        message: 'No photo file provided.'
-      });
-    }
-
-    // Accept common image formats: JPEG, JPG, PNG, WEBP
-    const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    if (!allowedMimeTypes.includes(req.file.mimetype)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid file format. Only JPEG, JPG, PNG, and WEBP images are allowed.'
-      });
-    }
-
-    // Maximum file size: 5MB
-    const maxSize = 5 * 1024 * 1024;
-    if (req.file.size > maxSize) {
-      return res.status(400).json({
-        success: false,
-        message: 'File size exceeds the 5MB limit.'
+        message: validation.message
       });
     }
 
@@ -288,7 +361,8 @@ export const uploadProfilePhoto = async (req, res, next) => {
         await deleteFromCloudinary(oldPublicId);
       }
 
-      const { passwordHash, aadhaarNumber, ...safeAdvocate } = updatedAdvocate;
+      const { passwordHash, aadhaarNumber, officePhotoPublicId, ...safeAdvocate } = updatedAdvocate;
+      const officeDetails = formatOfficeDetails(updatedAdvocate);
 
       return res.status(200).json({
         success: true,
@@ -296,6 +370,82 @@ export const uploadProfilePhoto = async (req, res, next) => {
         profilePhotoUrl: url,
         advocate: {
           ...safeAdvocate,
+          ...officeDetails,
+          type: 'advocate'
+        }
+      });
+    } catch (dbError) {
+      // Clean up orphaned new image from Cloudinary
+      await deleteFromCloudinary(publicId);
+      throw dbError;
+    }
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Upload office photo for advocate and cleanup old Cloudinary office image.
+ * POST /api/advocate/profile/office-photo
+ */
+export const uploadOfficePhoto = async (req, res, next) => {
+  try {
+    if (!req.user || req.user.type !== 'advocate') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access forbidden. Advocate role required.'
+      });
+    }
+
+    const validation = validateUploadedPhoto(req.file);
+    if (!validation.valid) {
+      return res.status(validation.status).json({
+        success: false,
+        message: validation.message
+      });
+    }
+
+    const advocate = await prisma.advocate.findUnique({
+      where: { id: req.user.id }
+    });
+
+    if (!advocate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Advocate profile not found.'
+      });
+    }
+
+    const oldPublicId = advocate.officePhotoPublicId;
+
+    // Upload new office photo to Cloudinary
+    const { url, publicId } = await uploadBufferToCloudinary(req.file.buffer);
+
+    try {
+      // Update DB with new office photo
+      const updatedAdvocate = await prisma.advocate.update({
+        where: { id: req.user.id },
+        data: {
+          officePhotoUrl: url,
+          officePhotoPublicId: publicId
+        }
+      });
+
+      // DB update succeeded, delete old Cloudinary office image if it exists
+      if (oldPublicId) {
+        await deleteFromCloudinary(oldPublicId);
+      }
+
+      const { passwordHash, aadhaarNumber, officePhotoPublicId: _opId, ...safeAdvocate } = updatedAdvocate;
+      const officeDetails = formatOfficeDetails(updatedAdvocate);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Office photo updated successfully',
+        officePhotoUrl: url,
+        advocate: {
+          ...safeAdvocate,
+          ...officeDetails,
           type: 'advocate'
         }
       });
@@ -335,6 +485,7 @@ export const getVerificationStatus = async (req, res, next) => {
 
     // 1. APPROVED State
     if (advocate.approvalStatus === 'APPROVED') {
+      const officeDetails = formatOfficeDetails(advocate);
       const profilePreview = {
         id: advocate.id,
         fullName: advocate.fullName,
@@ -368,7 +519,8 @@ export const getVerificationStatus = async (req, res, next) => {
         totalReviews: advocate.totalReviews,
         status: advocate.status,
         accountStatus: advocate.status,
-        approvalStatus: advocate.approvalStatus
+        approvalStatus: advocate.approvalStatus,
+        ...officeDetails
       };
 
       return res.status(200).json({

@@ -265,6 +265,14 @@ model Advocate {
   topCourtPractised        String?
   latitude                 Float?
   longitude                Float?
+
+  // Office location and photo collected at profile completion
+  officePhotoUrl           String?
+  officePhotoPublicId      String?
+  officeLatitude           Float?
+  officeLongitude          Float?
+  officeLocationUpdatedAt  DateTime?
+
   savedBy                  SavedLawyer[]
   likes                    AdvocateLike[]
 

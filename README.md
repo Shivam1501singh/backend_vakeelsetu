@@ -12517,6 +12517,230 @@ To configure the OTP verification provider:
    - Call `POST /api/auth/advocate/aadhaar/otp/verify` with correct OTP.
    - Verify `200 OK` with `{ "success": true, "aadhaarVerified": true }`.
 
+---
+
+## 34. Advocate Office Photo & Office Location — Postman Guide
+
+### 1. Overview & Architecture
+To support physical office verification and high-trust offline client appointments, advocates submit:
+1. An **Office Photo** (`officePhotoUrl`) — a clear photograph of their physical law office.
+2. An **Office Location** (`officeLatitude`, `officeLongitude`) — GPS coordinates or map pin where the advocate's office is physically located.
+
+> [!IMPORTANT]
+> **Office Location vs. Registration Location:**
+> - `latitude` and `longitude` (collected during registration Step 3) represent the advocate's residence / general practice region used for distance calculation and nearby directory sorting. They remain completely untouched.
+> - `officeLatitude` and `officeLongitude` are **new, dedicated fields** specifically marking the advocate's physical consultation chamber / office.
+> - Office data is collected at **profile completion**, after registration is finished and before the advocate clicks **"Submit for verification"**.
+> - Office data is shown to administrators in the approval verification panel.
+> - `officePhotoPublicId` is strictly internal and **never returned** in any client response.
+
+---
+
+### 2. Endpoints Reference Table
+
+| Method | Endpoint | Access / Auth | Description |
+|---|---|---|---|
+| `POST` | `/api/advocate/profile/office-photo` | Advocate (`Bearer {{advocate_token}}`) | Uploads office photo (JPEG/PNG/WEBP <= 5MB) to Cloudinary. |
+| `PATCH` | `/api/advocate/profile` | Advocate (`Bearer {{advocate_token}}`) | Sets or updates `officeLatitude` & `officeLongitude` (both together). |
+| `GET` | `/api/advocate/profile` | Advocate (`Bearer {{advocate_token}}`) | Returns advocate's own profile including `office` object and flat office fields. |
+| `GET` | `/api/advocate/profile/verification-status` | Advocate (`Bearer {{advocate_token}}`) | Returns verification status / preview with office details. |
+| `POST` | `/api/advocate/profile/submit-for-approval` | Advocate (`Bearer {{advocate_token}}`) | Submits profile for admin review; requires `officePhoto` and `officeLocation`. |
+| `GET` | `/api/advocates/:id` | Public / Optional Auth | Returns public advocate details including `officeLatitude`, `officeLongitude`, and `officePhotoUrl`. |
+| `GET` | `/api/admin/advocates/pending` | Admin (`advocates:view`) | Lists pending advocates awaiting approval with office photo and coordinates. |
+| `GET` | `/api/admin/advocates/rejected` | Admin (`advocates:view`) | Lists rejected advocate applications with office data. |
+| `GET` | `/api/admin/advocates/:advocateId` | Admin (`advocates:view`) | Returns advocate review details including office data, timestamp, and clickable `officeMapUrl`. |
+| `PATCH` | `/api/admin/advocates/:advocateId/profile` | Admin (`advocates:edit`) | Allows administrators to edit `officeLatitude` and `officeLongitude`. |
+
+---
+
+### 3. Postman Configuration: Office Photo Upload
+- **Method & URL:** `POST {{BACKEND_URL}}/api/advocate/profile/office-photo`
+- **Headers:**
+  - `Authorization: Bearer {{advocate_token}}`
+- **Body:** Select **form-data**
+  - Key: `officePhoto` (change dropdown from `Text` to **`File`**)
+  - Value: Select a local JPG, JPEG, PNG, or WEBP image file (size ≤ 5MB)
+
+**Success Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Office photo updated successfully",
+  "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_abc123.jpg"
+}
+```
+
+---
+
+### 4. Postman Configuration: Office Coordinates (Location)
+- **Method & URL:** `PATCH {{BACKEND_URL}}/api/advocate/profile`
+- **Headers:**
+  - `Authorization: Bearer {{advocate_token}}`
+  - `Content-Type: application/json`
+- **Body:** Select **raw (JSON)**
+```json
+{
+  "officeLatitude": 28.6304,
+  "officeLongitude": 77.2177
+}
+```
+
+> [!NOTE]
+> Numeric strings (e.g. `"28.6304"`, `"77.2177"`) from mobile device form-data are automatically parsed. Both coordinates must be sent together.
+
+**Success Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "Profile updated successfully",
+  "advocate": {
+    "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
+    "fullName": "Advocate Rajesh Sharma",
+    "officeLatitude": 28.6304,
+    "officeLongitude": 77.2177,
+    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_abc123.jpg",
+    "officeLocationUpdatedAt": "2026-10-28T13:15:00.000Z",
+    "office": {
+      "photoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_abc123.jpg",
+      "latitude": 28.6304,
+      "longitude": 77.2177,
+      "updatedAt": "2026-10-28T13:15:00.000Z"
+    },
+    "officeDetailsComplete": true,
+    "type": "advocate"
+  }
+}
+```
+
+---
+
+### 5. Sample Responses
+
+#### 5.1 Own Profile (`GET /api/advocate/profile`)
+```json
+{
+  "success": true,
+  "advocate": {
+    "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
+    "fullName": "Advocate Rajesh Sharma",
+    "email": "rajesh.adv@example.com",
+    "phone": "9876543210",
+    "barCouncilId": "D/1234/2015",
+    "profilePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/profile_avatar.jpg",
+    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_law_chamber.jpg",
+    "officeLatitude": 28.6304,
+    "officeLongitude": 77.2177,
+    "officeLocationUpdatedAt": "2026-10-28T13:15:00.000Z",
+    "office": {
+      "photoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_law_chamber.jpg",
+      "latitude": 28.6304,
+      "longitude": 77.2177,
+      "updatedAt": "2026-10-28T13:15:00.000Z"
+    },
+    "officeDetailsComplete": true,
+    "approvalStatus": "PENDING",
+    "accountStatus": "ACTIVE",
+    "type": "advocate"
+  }
+}
+```
+
+#### 5.2 Public Profile (`GET /api/advocates/:id`)
+```json
+{
+  "success": true,
+  "advocate": {
+    "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
+    "fullName": "Advocate Rajesh Sharma",
+    "profilePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/profile_avatar.jpg",
+    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_law_chamber.jpg",
+    "officeLatitude": 28.6304,
+    "officeLongitude": 77.2177,
+    "office": {
+      "photoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_law_chamber.jpg",
+      "latitude": 28.6304,
+      "longitude": 77.2177,
+      "updatedAt": "2026-10-28T13:15:00.000Z"
+    },
+    "city": "New Delhi",
+    "state": "Delhi",
+    "experienceYears": 9,
+    "approvalStatus": "APPROVED"
+  }
+}
+```
+
+#### 5.3 Admin Review Profile (`GET /api/admin/advocates/:advocateId`)
+```json
+{
+  "success": true,
+  "advocate": {
+    "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
+    "fullName": "Advocate Rajesh Sharma",
+    "barCouncilId": "D/1234/2015",
+    "approvalStatus": "PENDING",
+    "officePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_law_chamber.jpg",
+    "officeLatitude": 28.6304,
+    "officeLongitude": 77.2177,
+    "officeLocationUpdatedAt": "2026-10-28T13:15:00.000Z",
+    "officeMapUrl": "https://www.google.com/maps?q=28.6304,77.2177",
+    "office": {
+      "photoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1729000000/advocates/office_law_chamber.jpg",
+      "latitude": 28.6304,
+      "longitude": 77.2177,
+      "updatedAt": "2026-10-28T13:15:00.000Z"
+    }
+  }
+}
+```
+
+---
+
+### 6. Normalized Error Reference Table
+
+| Case | Status | Message | Details |
+|---|---|---|---|
+| No file attached | `400 Bad Request` | `No photo file provided.` | File multipart field missing in request. |
+| Wrong file format | `400 Bad Request` | `Invalid file format. Only JPEG, JPG, PNG, and WEBP images are allowed.` | E.g. PDF, GIF, TXT uploaded. |
+| File > 5MB | `400 Bad Request` | `File size exceeds the 5MB limit.` | Uploaded file size exceeds 5,242,880 bytes. |
+| Only lat or only lng | `400 Bad Request` | `officeLatitude and officeLongitude must be sent together.` | One coordinate sent without the other. |
+| Out of range / Not a number | `400 Bad Request` | `officeLatitude must be between -90 and 90.` / `officeLongitude must be between -180 and 180.` / `...must be a valid number.` | Coordinates outside geographic boundaries or non-numeric (`"abc"`). |
+| Submit without office photo/location | `400 Bad Request` | `Please complete your office photo and office location before submitting for approval.` | Returns `missingFields: ["officePhoto", "officeLocation"]`. |
+| Non-advocate token | `403 Forbidden` | `Access forbidden. Advocate role required.` | Token belongs to user or admin role instead of advocate. |
+| No token provided | `401 Unauthorized` | `Authentication token is missing.` | Missing or malformed `Authorization` header. |
+
+---
+
+### 7. Postman End-to-End Testing Flow
+
+```text
+Step 1: Advocate Login ──> Step 2: Upload Office Photo ──> Step 3: PATCH Coordinates ──> Step 4: GET Profile (Verify) ──> Step 5: Submit for Approval ──> Step 6: Admin Review (Verify Map & Photo)
+```
+
+1. **Advocate Login:**
+   - Call `POST /api/auth/advocate/login/otp/verify` (or password login).
+   - Set environment variable `{{advocate_token}}` from response.
+2. **Upload Office Photo:**
+   - Call `POST /api/advocate/profile/office-photo` with form-data file key `officePhoto`.
+   - Verify `200 OK` and save returned `officePhotoUrl`.
+3. **Set Office Location Coordinates:**
+   - Call `PATCH /api/advocate/profile` with `{ "officeLatitude": 28.6304, "officeLongitude": 77.2177 }`.
+   - Verify `200 OK` with `officeDetailsComplete: true`.
+4. **Fetch Own Profile:**
+   - Call `GET /api/advocate/profile`.
+   - Verify `office` object has `photoUrl`, `latitude`, `longitude`, `updatedAt`.
+5. **Submit for Verification:**
+   - Call `POST /api/advocate/profile/submit-for-approval`.
+   - Verify `200 OK` ("Your profile has been submitted for admin approval").
+6. **Admin Login & Pending Verification:**
+   - Login as Admin via `POST /api/admin/login` to obtain `{{admin_token}}`.
+   - Call `GET /api/admin/advocates/pending`. Verify advocate appears in queue with office photo and coordinates.
+   - Call `GET /api/admin/advocates/{{advocate_id}}`. Verify `officeMapUrl` (`https://www.google.com/maps?q=28.6304,77.2177`).
+7. **Negative Test (Submit without Office Data):**
+   - For a newly registered advocate with missing office data, call `POST /api/advocate/profile/submit-for-approval`.
+   - Verify `400 Bad Request` with `missingFields: ["officePhoto", "officeLocation"]`.
+
+
 
 
 

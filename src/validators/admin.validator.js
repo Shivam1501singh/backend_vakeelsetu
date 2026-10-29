@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
   advocateProfileUpdateSchema,
+  advocateProfileUpdateBaseSchema,
+  validateOfficeCoordinates,
   genderSchema,
   barCouncilIdSchema
 } from './advocate.validator.js';
@@ -60,7 +62,7 @@ export const updateStaffRolesSchema = z.object({
   message: 'At least one role is required.'
 });
 
-export const adminAdvocateProfileUpdateSchema = advocateProfileUpdateSchema.extend({
+export const adminAdvocateProfileUpdateSchema = advocateProfileUpdateBaseSchema.extend({
   fullName: z.string()
     .trim()
     .min(2, { message: 'Full name must be at least 2 characters.' })
@@ -68,7 +70,7 @@ export const adminAdvocateProfileUpdateSchema = advocateProfileUpdateSchema.exte
     .optional(),
   gender: genderSchema.optional(),
   barCouncilId: barCouncilIdSchema.optional()
-}).strict().refine((data) => Object.keys(data).length > 0, {
+}).strict().superRefine(validateOfficeCoordinates).refine((data) => Object.keys(data).length > 0, {
   message: 'Provide at least one field to update.'
 });
 

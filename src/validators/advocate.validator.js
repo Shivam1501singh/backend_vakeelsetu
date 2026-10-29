@@ -135,8 +135,53 @@ export const advocateLoginEmailPasswordSchema = z.object({
     .min(8, { message: 'Password must be at least 8 characters long.' })
 }).strict();
 
-// Profile update validation schema
-export const advocateProfileUpdateSchema = z.object({
+// Coordinate validation helper (handles numbers and valid numeric strings; rejects empty string, NaN, Infinity)
+export const parseCoordinate = (min, max, fieldName) => z.preprocess((val) => {
+  if (val === undefined || val === null) return val;
+  if (typeof val === 'number') return val;
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (trimmed === '') return NaN;
+    if (!/^-?\d+(\.\d+)?$/.test(trimmed)) return NaN;
+    return Number(trimmed);
+  }
+  return NaN;
+}, z.number({ invalid_type_error: `${fieldName} must be a valid number.` })
+  .refine((n) => !Number.isNaN(n) && Number.isFinite(n), { message: `${fieldName} must be a valid finite number.` })
+  .refine((n) => n >= min && n <= max, { message: `${fieldName} must be between ${min} and ${max}.` })
+  .nullable()
+  .optional()
+);
+
+export const officeLatitudeSchema = parseCoordinate(-90, 90, 'officeLatitude');
+export const officeLongitudeSchema = parseCoordinate(-180, 180, 'officeLongitude');
+
+// Both or neither refinement rule for office coordinates
+export const validateOfficeCoordinates = (data, ctx) => {
+  const hasLat = data.officeLatitude !== undefined;
+  const hasLng = data.officeLongitude !== undefined;
+  if (!hasLat && !hasLng) return;
+  if (hasLat !== hasLng) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'officeLatitude and officeLongitude must be sent together.',
+      path: ['officeLatitude']
+    });
+    return;
+  }
+  const latIsNull = data.officeLatitude === null;
+  const lngIsNull = data.officeLongitude === null;
+  if (latIsNull !== lngIsNull) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'officeLatitude and officeLongitude must be sent together.',
+      path: ['officeLatitude']
+    });
+  }
+};
+
+// Profile update validation schema (Base object before refinement)
+export const advocateProfileUpdateBaseSchema = z.object({
   experienceYears: z.number().int().min(0, { message: 'Experience must be a non-negative number.' }).max(80, { message: 'Experience cannot exceed 80 years.' }).optional().nullable(),
   casesHandled: z.number().int().min(0, { message: 'Cases handled must be a non-negative number.' }).max(100000, { message: 'Cases handled cannot exceed 100,000.' }).optional().nullable(),
   practiceAreaIds: z.array(z.string()).min(1, { message: 'Select at least one practice area.' }).optional().nullable(),
@@ -164,8 +209,14 @@ export const advocateProfileUpdateSchema = z.object({
   experience: z.number().int().min(0, { message: 'Experience must be a non-negative number.' }).max(80, { message: 'Experience cannot exceed 80 years.' }).optional().nullable(),
   videoChargePerMinute: z.number().min(0, { message: 'Video charge must be a non-negative number.' }).optional().nullable(),
   voiceChargePerMinute: z.number().min(0, { message: 'Voice charge must be a non-negative number.' }).optional().nullable(),
-  languages: z.array(z.string().trim().min(1)).optional().nullable()
-}).strict();
+  languages: z.array(z.string().trim().min(1)).optional().nullable(),
+
+  // Office location coordinates collected at profile completion
+  officeLatitude: officeLatitudeSchema,
+  officeLongitude: officeLongitudeSchema
+});
+
+export const advocateProfileUpdateSchema = advocateProfileUpdateBaseSchema.strict().superRefine(validateOfficeCoordinates);
 
 export const initiateAadhaarSchema = z.object({
   registrationId: z.string().uuid({ message: 'Invalid registration session ID.' }),

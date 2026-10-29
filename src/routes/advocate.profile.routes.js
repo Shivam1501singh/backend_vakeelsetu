@@ -14,6 +14,7 @@ router.get('/', generalLimiter, advocateProfileController.getProfile);
 router.get('/verification-status', generalLimiter, advocateProfileController.getVerificationStatus);
 router.patch('/', generalLimiter, advocateProfileController.updateProfile);
 router.post('/photo', generalLimiter, upload.single('profilePhoto'), advocateProfileController.uploadProfilePhoto);
+router.post('/office-photo', generalLimiter, upload.single('officePhoto'), advocateProfileController.uploadOfficePhoto);
 router.post('/submit-for-approval', generalLimiter, advocateProfileController.submitForApproval);
 
 export default router;
