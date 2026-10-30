@@ -940,7 +940,8 @@ export const getCurrentUserProfile = async (id, accountType) => {
       bestPracticeArea: profile.bestPracticeArea,
       about: profile.about,
       courtPractice: profile.courtPractice,
-      completeAddress: profile.completeAddress,
+      // TODO: remove fallback after backfill-office-address --apply
+      officeAddress: profile.officeAddress || profile.completeAddress || null,
       videoCallChargePerMinute: profile.videoCallChargePerMinute !== null ? Number(profile.videoCallChargePerMinute) : null,
       voiceCallChargePerMinute: profile.voiceCallChargePerMinute !== null ? Number(profile.voiceCallChargePerMinute) : null,
       offlineVisitingFee: profile.offlineVisitingFee !== null ? Number(profile.offlineVisitingFee) : null,

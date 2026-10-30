@@ -5,6 +5,7 @@ import prisma from '../src/lib/prisma.js';
 import * as advocateProfileController from '../src/controllers/advocate.profile.controller.js';
 import * as adminController from '../src/controllers/admin.controller.js';
 import { advocateProfileUpdateSchema } from '../src/validators/advocate.validator.js';
+import { adminAdvocateProfileUpdateSchema } from '../src/validators/admin.validator.js';
 import { quote } from '../src/services/advocateBooking/pricing.js';
 
 describe('Advocate Profile Change Approval Workflow (Stubbed Prisma & Cloudinary)', () => {
@@ -501,4 +502,99 @@ describe('Advocate Profile Change Approval Workflow (Stubbed Prisma & Cloudinary
     const inPersonQuote = quote(advocate, 'IN_PERSON');
     assert.equal(inPersonQuote.fee, 500); // live fee (not 1500)
   });
+
+  it('15. Advocate Profile Update Schema: completeAddress is rejected with 400', () => {
+    const result = advocateProfileUpdateSchema.safeParse({
+      completeAddress: 'Some residential address'
+    });
+    assert.equal(result.success, false);
+    const errorMsg = result.error.errors[0]?.message;
+    assert.equal(errorMsg, 'completeAddress is no longer supported. Use officeAddress.');
+  });
+
+  it('16. Admin Advocate Profile Update Schema: completeAddress is rejected with 400', () => {
+    const result = adminAdvocateProfileUpdateSchema.safeParse({
+      completeAddress: 'Some admin updated address'
+    });
+    assert.equal(result.success, false);
+    const errorMsg = result.error.errors[0]?.message;
+    assert.equal(errorMsg, 'completeAddress is no longer supported. Use officeAddress.');
+  });
+
+  it('17. Response formatOfficeDetails fallback: completeAddress only, both, neither', () => {
+    // 17.1 Only completeAddress present -> officeAddress fallback
+    const advOnlyComplete = {
+      officeAddress: null,
+      completeAddress: 'Chamber 101, High Court',
+      officePhotoUrl: null,
+      officeLatitude: null,
+      officeLongitude: null,
+      officeLocationUpdatedAt: null
+    };
+    const details1 = advocateProfileController.formatOfficeDetails(advOnlyComplete);
+    assert.equal(details1.officeAddress, 'Chamber 101, High Court');
+    assert.equal(details1.office.address, 'Chamber 101, High Court');
+
+    // 17.2 Both present -> officeAddress wins
+    const advBoth = {
+      officeAddress: 'Chamber 202, New Wing',
+      completeAddress: 'Old residential address',
+      officePhotoUrl: null,
+      officeLatitude: null,
+      officeLongitude: null,
+      officeLocationUpdatedAt: null
+    };
+    const details2 = advocateProfileController.formatOfficeDetails(advBoth);
+    assert.equal(details2.officeAddress, 'Chamber 202, New Wing');
+    assert.equal(details2.office.address, 'Chamber 202, New Wing');
+
+    // 17.3 Neither present -> null
+    const advNeither = {
+      officeAddress: null,
+      completeAddress: null,
+      officePhotoUrl: null,
+      officeLatitude: null,
+      officeLongitude: null,
+      officeLocationUpdatedAt: null
+    };
+    const details3 = advocateProfileController.formatOfficeDetails(advNeither);
+    assert.equal(details3.officeAddress, null);
+    assert.equal(details3.office.address, null);
+  });
+
+  it('18. Backfill selection logic: overwrites nothing, skips whitespace, idempotent', () => {
+    const mockDb = [
+      { id: 'adv-1', officeAddress: null, completeAddress: 'Chamber 101, Delhi High Court' },
+      { id: 'adv-2', officeAddress: 'Chamber 202, Supreme Court', completeAddress: 'Old Address' },
+      { id: 'adv-3', officeAddress: '', completeAddress: '   ' }, // whitespace-only -> skip
+      { id: 'adv-4', officeAddress: null, completeAddress: null }
+    ];
+
+    // Filter criteria identical to backfill script
+    const toMigrate = mockDb.filter(row => {
+      const isMissingOffice = !row.officeAddress || row.officeAddress.trim() === '';
+      const hasComplete = row.completeAddress && row.completeAddress.trim().length > 0;
+      return isMissingOffice && hasComplete;
+    });
+
+    assert.equal(toMigrate.length, 1);
+    assert.equal(toMigrate[0].id, 'adv-1');
+
+    // Apply backfill
+    toMigrate.forEach(row => {
+      row.officeAddress = row.completeAddress.trim();
+    });
+
+    // Idempotent: re-running filter yields 0 candidates
+    const secondRun = mockDb.filter(row => {
+      const isMissingOffice = !row.officeAddress || row.officeAddress.trim() === '';
+      const hasComplete = row.completeAddress && row.completeAddress.trim().length > 0;
+      return isMissingOffice && hasComplete;
+    });
+
+    assert.equal(secondRun.length, 0);
+    // adv-2 was never touched
+    assert.equal(mockDb[1].officeAddress, 'Chamber 202, Supreme Court');
+  });
 });
+

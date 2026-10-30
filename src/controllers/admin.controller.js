@@ -673,13 +673,14 @@ export const listPendingAdvocates = async (req, res, next) => {
       city: adv.city,
       state: adv.state,
       pincode: adv.pincode,
-      officeAddress: adv.officeAddress ?? null,
+      // TODO: remove fallback after backfill-office-address --apply
+      officeAddress: adv.officeAddress || adv.completeAddress || null,
       officePhotoUrl: adv.officePhotoUrl ?? null,
       officeLatitude: adv.officeLatitude ?? null,
       officeLongitude: adv.officeLongitude ?? null,
       officeLocationUpdatedAt: adv.officeLocationUpdatedAt ?? null,
       office: {
-        address: adv.officeAddress ?? null,
+        address: adv.officeAddress || adv.completeAddress || null,
         photoUrl: adv.officePhotoUrl ?? null,
         latitude: adv.officeLatitude ?? null,
         longitude: adv.officeLongitude ?? null,
@@ -708,13 +709,14 @@ export const listPendingAdvocates = async (req, res, next) => {
  */
 export const formatAdvocateReviewData = (advocate) => {
   if (!advocate) return null;
-  const { passwordHash, aadhaarNumber, officePhotoPublicId, pendingOfficeChange, pendingProfileChange, ...safeAdvocate } = advocate;
+  const { passwordHash, aadhaarNumber, completeAddress, officePhotoPublicId, pendingOfficeChange, pendingProfileChange, ...safeAdvocate } = advocate;
 
   const officeLatitude = advocate.officeLatitude ?? null;
   const officeLongitude = advocate.officeLongitude ?? null;
   const officePhotoUrl = advocate.officePhotoUrl ?? null;
   const officeLocationUpdatedAt = advocate.officeLocationUpdatedAt ?? null;
-  const officeAddress = advocate.officeAddress ?? null;
+  // TODO: remove fallback after backfill-office-address --apply
+  const officeAddress = advocate.officeAddress || advocate.completeAddress || null;
   const officeMapUrl = (officeLatitude !== null && officeLongitude !== null)
     ? `https://www.google.com/maps?q=${officeLatitude},${officeLongitude}`
     : null;
@@ -802,13 +804,14 @@ export const listRejectedAdvocates = async (req, res, next) => {
       city: adv.city,
       state: adv.state,
       pincode: adv.pincode,
-      officeAddress: adv.officeAddress ?? null,
+      // TODO: remove fallback after backfill-office-address --apply
+      officeAddress: adv.officeAddress || adv.completeAddress || null,
       officePhotoUrl: adv.officePhotoUrl ?? null,
       officeLatitude: adv.officeLatitude ?? null,
       officeLongitude: adv.officeLongitude ?? null,
       officeLocationUpdatedAt: adv.officeLocationUpdatedAt ?? null,
       office: {
-        address: adv.officeAddress ?? null,
+        address: adv.officeAddress || adv.completeAddress || null,
         photoUrl: adv.officePhotoUrl ?? null,
         latitude: adv.officeLatitude ?? null,
         longitude: adv.officeLongitude ?? null,
@@ -930,7 +933,6 @@ export const updateAdvocateProfileByAdmin = async (req, res, next) => {
     if (validated.bestPracticeArea !== undefined) updateData.bestPracticeArea = validated.bestPracticeArea;
     if (validated.topCourtPractised !== undefined) updateData.topCourtPractised = validated.topCourtPractised;
     if (validated.courtPractice !== undefined) updateData.courtPractice = validated.courtPractice;
-    if (validated.completeAddress !== undefined) updateData.completeAddress = validated.completeAddress;
     if (validated.offlineVisitingFee !== undefined) updateData.offlineVisitingFee = validated.offlineVisitingFee;
     if (validated.state !== undefined) updateData.state = validated.state;
     if (validated.city !== undefined) updateData.city = validated.city;
@@ -1506,6 +1508,10 @@ export const getAdvocateProfileChangeDetails = async (req, res, next) => {
       } else if (field === 'officePhoto') {
         current = advocate.officePhotoUrl ?? null;
         requested = reqVal?.url ?? reqVal;
+      } else if (field === 'officeAddress') {
+        // TODO: remove fallback after backfill-office-address --apply
+        current = advocate.officeAddress || advocate.completeAddress || null;
+        requested = reqVal;
       } else {
         current = advocate[field] !== undefined && advocate[field] !== null
           ? (typeof advocate[field] === 'object' && 'toNumber' in advocate[field] ? advocate[field].toNumber() : advocate[field])

@@ -68,7 +68,8 @@ export const formatOfficeDetails = (advocate) => {
   const latitude = advocate.officeLatitude ?? null;
   const longitude = advocate.officeLongitude ?? null;
   const updatedAt = advocate.officeLocationUpdatedAt ?? null;
-  const address = advocate.officeAddress ?? null;
+  // TODO: remove fallback after backfill-office-address --apply
+  const address = advocate.officeAddress || advocate.completeAddress || null;
 
   return {
     office: {
@@ -110,6 +111,10 @@ export const formatProfileChange = (advocate) => {
     } else if (key === 'officePhoto') {
       current = advocate.officePhotoUrl ?? null;
       requested = reqVal?.url ?? reqVal;
+    } else if (key === 'officeAddress') {
+      // TODO: remove fallback after backfill-office-address --apply
+      current = advocate.officeAddress || advocate.completeAddress || null;
+      requested = reqVal;
     } else {
       current = advocate[key] !== undefined && advocate[key] !== null
         ? (typeof advocate[key] === 'object' && 'toNumber' in advocate[key] ? advocate[key].toNumber() : advocate[key])
@@ -479,8 +484,7 @@ export const updateProfile = async (req, res, next) => {
 
     const directFieldKeys = [
       'fullName', 'gender', 'casesHandled', 'practiceAreas', 'practiceAreaIds',
-      'bestPracticeArea', 'topCourtPractised', 'courtPractice', 'languagesSpoken',
-      'completeAddress'
+      'bestPracticeArea', 'topCourtPractised', 'courtPractice', 'languagesSpoken'
     ];
     const approvalScalarKeys = [
       'experienceYears', 'about', 'videoCallChargePerMinute', 'voiceCallChargePerMinute',
@@ -847,7 +851,6 @@ export const getVerificationStatus = async (req, res, next) => {
         state: advocate.state,
         city: advocate.city,
         pincode: advocate.pincode,
-        completeAddress: advocate.completeAddress,
         about: advocate.about,
         bio: advocate.about,
         videoCallChargePerMinute: advocate.videoCallChargePerMinute,

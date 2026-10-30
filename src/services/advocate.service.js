@@ -189,6 +189,8 @@ export const listAdvocates = async ({
     averageRating: true,
     totalReviews: true,
     officeAddress: true,
+    // TODO: remove fallback after backfill-office-address --apply
+    completeAddress: true,
     pincode: true,
     latitude: true,
     longitude: true,
@@ -281,7 +283,8 @@ export const listAdvocates = async ({
 
     // Clean up internal coordinates/pincode fields for privacy and format distance
     const cleanAdvocates = paginated.map(adv => {
-      const { pincode, latitude, longitude, _count, ...cleanAdv } = adv;
+      const { pincode, latitude, longitude, completeAddress, _count, ...cleanAdv } = adv;
+      cleanAdv.officeAddress = adv.officeAddress || adv.completeAddress || null;
       if (adv.distance !== Infinity) {
         cleanAdv.distance = parseFloat(adv.distance.toFixed(2));
       } else {
@@ -321,7 +324,8 @@ export const listAdvocates = async ({
 
   // Clean up coordinates and compute/attach distance if refCoords is available (e.g. user logged in but sorted by experience)
   const cleanAdvocates = advocates.map(adv => {
-    const { pincode, latitude, longitude, _count, ...cleanAdv } = adv;
+    const { pincode, latitude, longitude, completeAddress, _count, ...cleanAdv } = adv;
+    cleanAdv.officeAddress = adv.officeAddress || adv.completeAddress || null;
     if (refCoords) {
       const coords = getAdvocateCoordinates(adv);
       if (coords) {
@@ -428,7 +432,6 @@ export const getAdvocateDetailsPublic = async (id, currentUserId) => {
     state: advocate.state,
     city: advocate.city,
     pincode: advocate.pincode,
-    completeAddress: advocate.completeAddress,
     videoCallChargePerMinute: advocate.videoCallChargePerMinute,
     voiceCallChargePerMinute: advocate.voiceCallChargePerMinute,
     offlineVisitingFee: advocate.offlineVisitingFee,
@@ -436,12 +439,13 @@ export const getAdvocateDetailsPublic = async (id, currentUserId) => {
     totalReviews: advocate.totalReviews,
     status: advocate.status,
     approvalStatus: advocate.approvalStatus,
-    officeAddress: advocate.officeAddress ?? null,
+    // TODO: remove fallback after backfill-office-address --apply
+    officeAddress: advocate.officeAddress || advocate.completeAddress || null,
     officeLatitude: advocate.officeLatitude ?? null,
     officeLongitude: advocate.officeLongitude ?? null,
     officePhotoUrl: advocate.officePhotoUrl ?? null,
     office: {
-      address: advocate.officeAddress ?? null,
+      address: advocate.officeAddress || advocate.completeAddress || null,
       photoUrl: advocate.officePhotoUrl ?? null,
       latitude: advocate.officeLatitude ?? null,
       longitude: advocate.officeLongitude ?? null,

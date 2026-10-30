@@ -3,6 +3,7 @@ import {
   advocateProfileUpdateSchema,
   advocateProfileUpdateBaseSchema,
   validateOfficeCoordinates,
+  validateLocationPairs,
   genderSchema,
   barCouncilIdSchema,
   officeAddressSchema
@@ -80,8 +81,8 @@ export const adminAdvocateProfileUpdateSchema = advocateProfileUpdateBaseSchema.
     .optional(),
   gender: genderSchema.optional(),
   barCouncilId: barCouncilIdSchema.optional(),
-  officeAddress: officeAddressSchema.optional().nullable()
-}).strict().superRefine(validateOfficeCoordinates).refine((data) => Object.keys(data).length > 0, {
+}).strict().superRefine(validateLocationPairs).refine((data) => Object.keys(data).length > 0, {
   message: 'Provide at least one field to update.'
 });
+
 

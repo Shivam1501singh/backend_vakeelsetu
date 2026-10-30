@@ -69,7 +69,8 @@ export const listSavedLawyers = async (userId) => {
         languagesSpoken: adv.languagesSpoken,
         state: adv.state,
         city: adv.city,
-        completeAddress: adv.completeAddress,
+        // TODO: remove fallback after backfill-office-address --apply
+        officeAddress: adv.officeAddress || adv.completeAddress || null,
         videoCallChargePerMinute: adv.videoCallChargePerMinute !== null ? Number(adv.videoCallChargePerMinute) : null,
         voiceCallChargePerMinute: adv.voiceCallChargePerMinute !== null ? Number(adv.voiceCallChargePerMinute) : null,
         offlineVisitingFee: adv.offlineVisitingFee !== null ? Number(adv.offlineVisitingFee) : null,

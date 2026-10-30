@@ -260,7 +260,8 @@ export const advocateProfileUpdateBaseSchema = z.object({
   about: bioSchema,
   bio: bioSchema,
   courtPractice: parseOptionalArray(z.string().trim().min(1)),
-  completeAddress: z.string().trim().max(500, { message: 'Address cannot exceed 500 characters.' }).optional().nullable(),
+  // Retired completeAddress field to intercept and reject with 400
+  completeAddress: z.any().optional(),
   videoCallChargePerMinute: parseOptionalFloat(0, 100000, 'Video call charge'),
   voiceCallChargePerMinute: parseOptionalFloat(0, 100000, 'Voice call charge'),
   offlineVisitingFee: parseOptionalFloat(0, 1000000, 'Offline visiting fee'),
@@ -331,6 +332,15 @@ export const advocateRegistrationAddressSchema = z.object({
 
 // Location and coordinate pairs refinement
 export const validateLocationPairs = (data, ctx) => {
+  // 0. completeAddress retired: reject with 400 "completeAddress is no longer supported. Use officeAddress."
+  if (data.completeAddress !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'completeAddress is no longer supported. Use officeAddress.',
+      path: ['completeAddress']
+    });
+  }
+
   // 1. Old latitude / longitude in the body: reject with 400 "Use officeLatitude/officeLongitude."
   if (data.latitude !== undefined || data.longitude !== undefined) {
     ctx.addIssue({

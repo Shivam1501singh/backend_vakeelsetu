@@ -858,7 +858,7 @@ This feature enables authenticated Advocates to retrieve, complete, and update t
       "about": "Experienced advocate specializing in civil and property disputes with a focus on practical solutions.",
       "courtPractice": ["High Court", "District Court"],
       "topCourtPractised": "Delhi High Court",
-      "completeAddress": "Office No. 204, District Court Complex",
+      "officeAddress": "Office No. 204, District Court Complex",
       "videoCallChargePerMinute": 50,
       "voiceCallChargePerMinute": 30,
       "offlineVisitingFee": 1000,
@@ -882,7 +882,6 @@ This feature enables authenticated Advocates to retrieve, complete, and update t
     "topCourtPractised": "Delhi High Court",
     "about": "Experienced advocate specializing in civil and property disputes with a focus on practical solutions.",
     "courtPractice": ["High Court", "District Court"],
-    "completeAddress": "Office No. 204, District Court Complex",
     "videoCallChargePerMinute": 50,
     "voiceCallChargePerMinute": 30,
     "offlineVisitingFee": 1000,
@@ -964,7 +963,7 @@ The `advocateProfileUpdateSchema` enforces the following backend validations:
 4. **Best Practice Area & Top Court Practised:** Strings, max length 100 characters.
 5. **Biography (`about` / `bio`):** String, must contain between 50 and 500 words (word count, not character count, custom split-word refinement validation).
 6. **Court Practice (`courtPractice`):** Array of valid text strings representing courts.
-7. **Complete Address (`completeAddress`):** String, max length 500 characters.
+7. **Office Address (`officeAddress`):** String, 10 to 500 characters. Single address across the platform; changes by approved advocates require admin review. Note: `completeAddress` is retired and rejected with `400 Bad Request: "completeAddress is no longer supported. Use officeAddress."`.
 8. **Charges (`videoCallChargePerMinute` / `videoChargePerMinute`, `voiceCallChargePerMinute` / `voiceChargePerMinute`, `offlineVisitingFee`):** Numbers >= 0. Raw numbers are stored in the database.
 9. **Strict Body validation:** Unknown fields are rejected with `.strict()`.
 
@@ -1533,7 +1532,7 @@ Help Request reference IDs can be customized via environment variables without r
       "country": "India",
       "state": "Uttar Pradesh",
       "city": "Ghaziabad",
-      "completeAddress": "District Court Complex",
+      "officeAddress": "District Court Complex",
       "videoCallChargePerMinute": 50,
       "voiceCallChargePerMinute": 30,
       "offlineVisitingFee": 1000,
@@ -1922,7 +1921,7 @@ Retrieves all advocates saved by the currently authenticated user.
         "languagesSpoken": ["English", "Hindi"],
         "state": "Delhi",
         "city": "New Delhi",
-        "completeAddress": "Chamber 405...",
+        "officeAddress": "Chamber 405...",
         "videoCallChargePerMinute": 60,
         "voiceCallChargePerMinute": 40,
         "offlineVisitingFee": 2500,
@@ -3196,7 +3195,7 @@ A logged-in Normal User can like an Advocate once and can later unlike the Advoc
         "languagesSpoken": ["English", "Hindi"],
         "state": "Delhi",
         "city": "New Delhi",
-        "completeAddress": "Chamber 402, High Court",
+        "officeAddress": "Chamber 402, High Court",
         "videoCallChargePerMinute": 50,
         "voiceCallChargePerMinute": 30,
         "offlineVisitingFee": 1500,
@@ -4311,7 +4310,7 @@ Returned when the Admin has verified and approved the Advocate profile. Returns 
     "state": "Delhi",
     "city": "New Delhi",
     "pincode": "110001",
-    "completeAddress": "Office 101, Delhi High Court Chamber",
+    "officeAddress": "Office 101, Delhi High Court Chamber",
     "about": "Experienced criminal defense advocate with 8 years of practice.",
     "bio": "Experienced criminal defense advocate with 8 years of practice.",
     "videoCallChargePerMinute": 50,
@@ -10439,7 +10438,7 @@ This guide covers the administrative workflow for editing advocate profiles and 
 | Field Category | Fields | Behavior & Rules |
 |---|---|---|
 | **Identity Fields (Admin-Only)** | `fullName`, `gender`, `barCouncilId` | Admin can correct spelling/typos or Bar Council ID. `barCouncilId` is validated for uniqueness across all other advocates. |
-| **Professional Profile Fields** | `experienceYears`, `casesHandled`, `bestPracticeArea`, `topCourtPractised`, `practiceAreas` (array), `courtPractice` (array), `completeAddress`, `offlineVisitingFee`, `state`, `city`, `pincode`, `about` | Updated directly. Decimals are parsed safely; empty or non-existent fields are ignored. |
+| **Professional Profile Fields** | `experienceYears`, `casesHandled`, `bestPracticeArea`, `topCourtPractised`, `practiceAreas` (array), `courtPractice` (array), `officeAddress`, `offlineVisitingFee`, `state`, `city`, `pincode`, `about` | Updated directly. Decimals are parsed safely; empty or non-existent fields are ignored. Note: `completeAddress` is rejected with 400. |
 | **Supported Aliases** | `bio` (alias for `about`), `experience` (alias for `experienceYears`), `videoChargePerMinute` (alias for `videoCallChargePerMinute`), `voiceChargePerMinute` (alias for `voiceCallChargePerMinute`), `languages` (alias for `languagesSpoken`) | Fully supported for backward-compatibility with client/advocate self-service payloads. |
 | **Biography Word Count Rule** | `bio` / `about` | **Strictly enforced:** Must contain between **50 and 500 words** (evaluated via `validateBioWords`). |
 | **STRICTLY NON-EDITABLE (Rejected with 400)** | `email`, `phone`, `aadhaarNumber`, `password`, `passwordHash`, `approvalStatus`, `status`, `callAvailability`, `deletionStatus`, `isOnline`, `lastSeenAt`, `averageRating`, `totalReviews`, `profilePhotoUrl`, `latitude`, `longitude` | Zod `.strict()` rejects any unknown or un-editable keys with an unrecognized key error. Identity verification and status flags have dedicated lifecycles. |
@@ -12583,7 +12582,7 @@ To protect clients from unvetted fee spikes, misleading experience claims, or ar
      - **Profile Photo:** `profilePhoto` (file upload)
      - **Office & Location:** `officeAddress` (10–500 chars), `pincode` (6 digits), `city`, `state`, `officeLatitude`, `officeLongitude`, `officePhoto` (file upload)
    - **Direct Fields (immediate live update):**
-     - `casesHandled`, `practiceAreas` (alias `practiceAreaIds`), `bestPracticeArea`, `topCourtPractised`, `courtPractice`, `languagesSpoken` (alias `languages`), `completeAddress`, `fullName`, `gender`.
+     - `casesHandled`, `practiceAreas` (alias `practiceAreaIds`), `bestPracticeArea`, `topCourtPractised`, `courtPractice`, `languagesSpoken` (alias `languages`), `fullName`, `gender`.
 3. **Rules by Advocate Approval Status:**
    - **Non-Approved Advocates (`PENDING` / `REJECTED` / `DRAFT`):** All edits (direct and approval fields) save directly to live fields. Photos are replaced immediately, office coordinates sync to `latitude` / `longitude`, and the whole profile is reviewed together during initial bar enrollment verification.
    - **Approved Advocates (`APPROVED`):**
@@ -12615,7 +12614,7 @@ To protect clients from unvetted fee spikes, misleading experience claims, or ar
            • Top Court & Practices                      • Offline Visiting Fee
            • Languages Spoken                           • Profile Photo
            • Full Name, Gender                          • Office Address, Pincode
-           • Complete Address                           • City, State, Coordinates
+                 │                                      • City, State, Coordinates
                  │                                      • Office Photo
                  ▼                                               │
          Updated LIVE instantly                                  ▼
@@ -12688,12 +12687,13 @@ To protect clients from unvetted fee spikes, misleading experience claims, or ar
 - **Headers:** `Authorization: Bearer {{advocate_token}}`
 - **Content-Type:** `multipart/form-data` or `application/json`
 - **Fields Supported:**
-  - **Direct Fields (Live instantly):** `fullName`, `gender`, `casesHandled`, `practiceAreas`, `bestPracticeArea`, `topCourtPractised`, `courtPractice`, `languagesSpoken`, `completeAddress`.
+  - **Direct Fields (Live instantly):** `fullName`, `gender`, `casesHandled`, `practiceAreas`, `bestPracticeArea`, `topCourtPractised`, `courtPractice`, `languagesSpoken`.
   - **Approval Fields (Queued in draft for Approved advocates):** `experienceYears`, `about`, `videoCallChargePerMinute`, `voiceCallChargePerMinute`, `offlineVisitingFee`, `profilePhoto` (file), `officeAddress`, `pincode`, `city`, `state`, `officeLatitude`, `officeLongitude`, `officePhoto` (file).
 - **Validation Rules:**
   - Coordinates must be submitted together: `officeLatitude` and `officeLongitude`.
   - Regional location fields must be submitted together: `pincode`, `city`, and `state`.
   - Legacy fields `latitude` and `longitude` are rejected with `400 Bad Request` ("Use officeLatitude/officeLongitude.").
+  - Retired field `completeAddress` is rejected with `400 Bad Request` ("completeAddress is no longer supported. Use officeAddress.").
   - Numeric fields sent as strings via `multipart/form-data` (e.g., `"12"`, `"500.50"`) are automatically parsed into numbers.
   - JSON array strings in multipart (e.g., `practiceAreas: '["Civil", "Criminal"]'`) are automatically parsed into string arrays.
   - Diffing: If an approval field matches the advocate's current live value, it is omitted from the draft. If the draft becomes completely empty, `profileChangeStatus` is cleared to `null`.
@@ -13057,3 +13057,72 @@ GET  /api/admin/advocates/{{advocateId}}/profile-change ───> Side-by-side 
    - Call `GET {{BACKEND_URL}}/api/advocates/{{advocate_id}}` (public profile).
    - Verify new `experienceYears`, `videoCallChargePerMinute`, and `officeAddress` are live.
    - Verify old live photo was cleaned up from Cloudinary.
+
+---
+
+### 8. Single Address Architecture: `officeAddress` (Retirement of `completeAddress`)
+
+#### 8.1 Unified Single-Address Rule
+Advocates on VakeelSetu have exactly **one** address across the entire platform: `officeAddress`. The legacy field `completeAddress` is officially retired.
+- **Client Writes:** Any payload attempting to send `completeAddress` to `PATCH /api/advocate/profile` or `PATCH /api/admin/advocates/:advocateId/profile` is immediately rejected with:
+  ```json
+  {
+    "success": false,
+    "message": "completeAddress is no longer supported. Use officeAddress."
+  }
+  ```
+- **API Responses:** `completeAddress` is completely omitted from all JSON responses across all endpoints (own profile `GET /api/advocate/profile`, public directory `GET /api/advocates`, public profile `GET /api/advocates/:id`, admin advocate review `GET /api/admin/advocates/:id`, saved lawyers, and liked advocates). Every endpoint returns `officeAddress`.
+- **Read Fallback Until Backfill:** To ensure existing registered advocates whose address was saved under `completeAddress` never experience a blank address before the database backfill is executed, all response formatters implement a temporary non-breaking read fallback:
+  ```javascript
+  // TODO: remove fallback after backfill-office-address --apply
+  const officeAddress = advocate.officeAddress || advocate.completeAddress || null;
+  ```
+
+#### 8.2 One-Time Backfill Script (`scripts/backfill-office-address.js`)
+A standalone backfill script is provided to migrate existing advocates' address data safely:
+- **Safety First:** Follows the same pattern as `scripts/backfill-booking-ids.js`. It performs zero schema drops or renames, leaving the `completeAddress` column intact in the database as a rollback safety measure.
+- **Rollout Process:**
+  1. **Deploy backend code** to production.
+  2. **Run Dry Run:** Inspect all migration candidates without modifying database records:
+     ```bash
+     node scripts/backfill-office-address.js --dry-run
+     ```
+     Outputs the connected DB host, total candidates found, length breakdown, and candidate advocate IDs.
+  3. **Run Apply Mode:** Commit the data migration atomically inside a Prisma transaction:
+     ```bash
+     node scripts/backfill-office-address.js --apply
+     ```
+  4. **Post-Migration Cleanup (Future Task):** Once verified in production, remove the read-only fallback code lines and generate a Prisma migration to drop the unused `completeAddress` database column.
+
+#### 8.3 Postman Verification Checks
+1. **Advocate Write Rejection:**
+   - Send `PATCH {{BACKEND_URL}}/api/advocate/profile` with body:
+     ```json
+     {
+       "completeAddress": "Chamber 101, High Court"
+     }
+     ```
+   - **Expect:** `400 Bad Request` with:
+     ```json
+     {
+       "success": false,
+       "message": "completeAddress is no longer supported. Use officeAddress."
+     }
+     ```
+2. **Response Shape Verification:**
+   - Send `GET {{BACKEND_URL}}/api/advocate/profile` (or `GET {{BACKEND_URL}}/api/advocates/{{advocate_id}}`).
+   - **Expect:** `200 OK`. Response contains `"officeAddress": "..."` and does **not** contain `"completeAddress"`.
+3. **Admin Write Rejection:**
+   - Send `PATCH {{BACKEND_URL}}/api/admin/advocates/{{advocate_id}}/profile` with body:
+     ```json
+     {
+       "completeAddress": "Admin test address update"
+     }
+     ```
+   - **Expect:** `400 Bad Request` with:
+     ```json
+     {
+       "success": false,
+       "message": "completeAddress is no longer supported. Use officeAddress."
+     }
+     ```

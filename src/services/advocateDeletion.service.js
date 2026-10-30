@@ -122,7 +122,8 @@ export const finalizeAdvocateDeletion = async (advocateId) => {
         about: advocate.about,
         courtPractice: advocate.courtPractice,
         languagesSpoken: advocate.languagesSpoken,
-        completeAddress: advocate.completeAddress,
+        // TODO: remove fallback after backfill-office-address --apply
+        completeAddress: advocate.completeAddress || advocate.officeAddress || null,
         videoCallChargePerMinute: advocate.videoCallChargePerMinute,
         voiceCallChargePerMinute: advocate.voiceCallChargePerMinute,
         offlineVisitingFee: advocate.offlineVisitingFee,
