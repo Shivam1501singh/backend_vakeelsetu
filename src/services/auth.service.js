@@ -9,6 +9,7 @@ import { encrypt, decrypt } from '../utils/crypto.js';
 import { initiateAadhaarDigiLocker, fetchAadhaarDetails } from './idspay.service.js';
 import * as aadhaarOtp from './aadhaarOtp/index.js';
 import { uploadBufferToCloudinary, deleteFromCloudinary } from './cloudinary.service.js';
+import { formatPricingSummary } from './advocateBooking/pricing.js';
 
 // Cooldown map for Aadhaar OTP generation (60 seconds per registration session)
 const aadhaarOtpCooldowns = new Map();
@@ -942,9 +943,11 @@ export const getCurrentUserProfile = async (id, accountType) => {
       courtPractice: profile.courtPractice,
       // TODO: remove fallback after backfill-office-address --apply
       officeAddress: profile.officeAddress || profile.completeAddress || null,
-      videoCallChargePerMinute: profile.videoCallChargePerMinute !== null ? Number(profile.videoCallChargePerMinute) : null,
-      voiceCallChargePerMinute: profile.voiceCallChargePerMinute !== null ? Number(profile.voiceCallChargePerMinute) : null,
+      voiceCallPricePer15Min: profile.voiceCallPricePer15Min !== null ? Number(profile.voiceCallPricePer15Min) : null,
+      videoCallPricePer15Min: profile.videoCallPricePer15Min !== null ? Number(profile.videoCallPricePer15Min) : null,
       offlineVisitingFee: profile.offlineVisitingFee !== null ? Number(profile.offlineVisitingFee) : null,
+      officeVisitDurationMinutes: profile.officeVisitDurationMinutes !== null ? profile.officeVisitDurationMinutes : null,
+      pricing: formatPricingSummary(profile),
       status: profile.status,
       approvalStatus: profile.approvalStatus,
       callAvailability: profile.callAvailability ?? false,

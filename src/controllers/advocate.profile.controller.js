@@ -2,6 +2,7 @@ import prisma from '../lib/prisma.js';
 import { advocateProfileUpdateSchema } from '../validators/advocate.validator.js';
 import { uploadBufferToCloudinary, deleteFromCloudinary } from '../services/cloudinary.service.js';
 import { computeEffectiveOnlineStatus } from '../utils/advocateStatus.js';
+import { formatPricingSummary } from '../services/advocateBooking/pricing.js';
 
 /**
  * Approval-required fields for APPROVED advocates.
@@ -9,9 +10,10 @@ import { computeEffectiveOnlineStatus } from '../utils/advocateStatus.js';
 export const APPROVAL_FIELDS = [
   'experienceYears',
   'about',
-  'videoCallChargePerMinute',
-  'voiceCallChargePerMinute',
+  'voiceCallPricePer15Min',
+  'videoCallPricePer15Min',
   'offlineVisitingFee',
+  'officeVisitDurationMinutes',
   'profilePhoto',
   'officeAddress',
   'pincode',
@@ -28,9 +30,10 @@ export const APPROVAL_FIELDS = [
 export const FIELD_LABELS = {
   experienceYears: 'Experience (years)',
   about: 'About',
-  videoCallChargePerMinute: 'Video call fee (₹/min)',
-  voiceCallChargePerMinute: 'Voice call fee (₹/min)',
-  offlineVisitingFee: 'Offline visiting fee (₹)',
+  voiceCallPricePer15Min: 'Voice call price (15 min)',
+  videoCallPricePer15Min: 'Video call price (15 min)',
+  offlineVisitingFee: 'Office visit price',
+  officeVisitDurationMinutes: 'Office visit duration (min)',
   profilePhoto: 'Profile photo',
   officeAddress: 'Office address',
   pincode: 'Pincode',
@@ -151,7 +154,7 @@ const isEqualValue = (field, liveVal, reqVal) => {
   if (liveVal === null || liveVal === undefined) {
     return reqVal === null || reqVal === undefined || reqVal === '';
   }
-  if (['experienceYears', 'videoCallChargePerMinute', 'voiceCallChargePerMinute', 'offlineVisitingFee', 'officeLatitude', 'officeLongitude'].includes(field)) {
+  if (['experienceYears', 'voiceCallPricePer15Min', 'videoCallPricePer15Min', 'offlineVisitingFee', 'officeVisitDurationMinutes', 'officeLatitude', 'officeLongitude'].includes(field)) {
     const liveNum = typeof liveVal === 'object' && liveVal !== null && 'toNumber' in liveVal ? liveVal.toNumber() : Number(liveVal);
     const reqNum = Number(reqVal);
     return Math.abs(liveNum - reqNum) < 0.000001;
@@ -182,15 +185,28 @@ export const getProfile = async (req, res, next) => {
       });
     }
 
-    // Exclude passwordHash, aadhaarNumber, and officePhotoPublicId
-    const { passwordHash, aadhaarNumber, officePhotoPublicId, pendingOfficeChange, pendingProfileChange, ...safeAdvocate } = advocate;
+    // Exclude passwordHash, aadhaarNumber, officePhotoPublicId, and legacy fee columns
+    const {
+      passwordHash,
+      aadhaarNumber,
+      officePhotoPublicId,
+      pendingOfficeChange,
+      pendingProfileChange,
+      ...safeAdvocate
+    } = advocate;
     const officeDetails = formatOfficeDetails(advocate);
     const profileChange = formatProfileChange(advocate);
+    const pricing = formatPricingSummary(advocate);
 
     return res.status(200).json({
       success: true,
       advocate: {
         ...safeAdvocate,
+        voiceCallPricePer15Min: advocate.voiceCallPricePer15Min !== null ? Number(advocate.voiceCallPricePer15Min) : null,
+        videoCallPricePer15Min: advocate.videoCallPricePer15Min !== null ? Number(advocate.videoCallPricePer15Min) : null,
+        offlineVisitingFee: advocate.offlineVisitingFee !== null ? Number(advocate.offlineVisitingFee) : null,
+        officeVisitDurationMinutes: advocate.officeVisitDurationMinutes !== null ? advocate.officeVisitDurationMinutes : null,
+        pricing,
         ...officeDetails,
         profileChange,
         isOnline: computeEffectiveOnlineStatus(advocate.isOnline, advocate.lastSeenAt),
@@ -478,17 +494,38 @@ export const updateProfile = async (req, res, next) => {
     const normalized = { ...validated };
     if (normalized.bio !== undefined) normalized.about = normalized.bio;
     if (normalized.experience !== undefined) normalized.experienceYears = normalized.experience;
-    if (normalized.videoChargePerMinute !== undefined) normalized.videoCallChargePerMinute = normalized.videoChargePerMinute;
-    if (normalized.voiceChargePerMinute !== undefined) normalized.voiceCallChargePerMinute = normalized.voiceChargePerMinute;
     if (normalized.languages !== undefined) normalized.languagesSpoken = normalized.languages;
+
+    // Validate merged office visit pair (fee + duration) only when at least one is being updated
+    if (normalized.offlineVisitingFee !== undefined || normalized.officeVisitDurationMinutes !== undefined) {
+      const liveFee = advocate.offlineVisitingFee != null ? Number(advocate.offlineVisitingFee) : null;
+      const liveDuration = advocate.officeVisitDurationMinutes != null ? advocate.officeVisitDurationMinutes : null;
+
+      const effectiveOfflineFee = normalized.offlineVisitingFee !== undefined
+        ? normalized.offlineVisitingFee
+        : liveFee;
+      const effectiveOfficeDuration = normalized.officeVisitDurationMinutes !== undefined
+        ? normalized.officeVisitDurationMinutes
+        : liveDuration;
+
+      const hasMergedFee = effectiveOfflineFee !== null && effectiveOfflineFee !== undefined && !Number.isNaN(effectiveOfflineFee);
+      const hasMergedDuration = effectiveOfficeDuration !== null && effectiveOfficeDuration !== undefined;
+
+      if (hasMergedFee !== hasMergedDuration) {
+        return res.status(400).json({
+          success: false,
+          message: 'offlineVisitingFee and officeVisitDurationMinutes must both be set, or both be null.'
+        });
+      }
+    }
 
     const directFieldKeys = [
       'fullName', 'gender', 'casesHandled', 'practiceAreas', 'practiceAreaIds',
       'bestPracticeArea', 'topCourtPractised', 'courtPractice', 'languagesSpoken'
     ];
     const approvalScalarKeys = [
-      'experienceYears', 'about', 'videoCallChargePerMinute', 'voiceCallChargePerMinute',
-      'offlineVisitingFee', 'officeAddress', 'pincode', 'city', 'state',
+      'experienceYears', 'about', 'voiceCallPricePer15Min', 'videoCallPricePer15Min',
+      'offlineVisitingFee', 'officeVisitDurationMinutes', 'officeAddress', 'pincode', 'city', 'state',
       'officeLatitude', 'officeLongitude'
     ];
 
@@ -554,14 +591,27 @@ export const updateProfile = async (req, res, next) => {
         await deleteFromCloudinary(pId).catch(() => {});
       }
 
-      const { passwordHash, aadhaarNumber, officePhotoPublicId: _opId, pendingOfficeChange: _poc, pendingProfileChange: _ppc, ...safeAdvocate } = updatedAdvocate;
+      const {
+        passwordHash,
+        aadhaarNumber,
+        officePhotoPublicId: _opId,
+        pendingOfficeChange: _poc,
+        pendingProfileChange: _ppc,
+        ...safeAdvocate
+      } = updatedAdvocate;
       const officeDetails = formatOfficeDetails(updatedAdvocate);
+      const pricing = formatPricingSummary(updatedAdvocate);
 
       return res.status(200).json({
         success: true,
         message: 'Profile updated successfully',
         advocate: {
           ...safeAdvocate,
+          voiceCallPricePer15Min: updatedAdvocate.voiceCallPricePer15Min !== null ? Number(updatedAdvocate.voiceCallPricePer15Min) : null,
+          videoCallPricePer15Min: updatedAdvocate.videoCallPricePer15Min !== null ? Number(updatedAdvocate.videoCallPricePer15Min) : null,
+          offlineVisitingFee: updatedAdvocate.offlineVisitingFee !== null ? Number(updatedAdvocate.offlineVisitingFee) : null,
+          officeVisitDurationMinutes: updatedAdvocate.officeVisitDurationMinutes !== null ? updatedAdvocate.officeVisitDurationMinutes : null,
+          pricing,
           ...officeDetails,
           profileChange: null,
           type: 'advocate'
@@ -660,9 +710,17 @@ export const updateProfile = async (req, res, next) => {
       await deleteFromCloudinary(pId).catch(() => {});
     }
 
-    const { passwordHash, aadhaarNumber, officePhotoPublicId: _opId, pendingOfficeChange: _poc, pendingProfileChange: _ppc, ...safeAdvocate } = updatedAdvocate;
+    const {
+      passwordHash,
+      aadhaarNumber,
+      officePhotoPublicId: _opId,
+      pendingOfficeChange: _poc,
+      pendingProfileChange: _ppc,
+      ...safeAdvocate
+    } = updatedAdvocate;
     const officeDetails = formatOfficeDetails(updatedAdvocate);
     const profileChange = formatProfileChange(updatedAdvocate);
+    const pricing = formatPricingSummary(updatedAdvocate);
 
     let message = 'Profile updated.';
     if (touchedApprovalFields && hasDraftChanges) {
@@ -674,6 +732,11 @@ export const updateProfile = async (req, res, next) => {
       message,
       advocate: {
         ...safeAdvocate,
+        voiceCallPricePer15Min: updatedAdvocate.voiceCallPricePer15Min !== null ? Number(updatedAdvocate.voiceCallPricePer15Min) : null,
+        videoCallPricePer15Min: updatedAdvocate.videoCallPricePer15Min !== null ? Number(updatedAdvocate.videoCallPricePer15Min) : null,
+        offlineVisitingFee: updatedAdvocate.offlineVisitingFee !== null ? Number(updatedAdvocate.offlineVisitingFee) : null,
+        officeVisitDurationMinutes: updatedAdvocate.officeVisitDurationMinutes !== null ? updatedAdvocate.officeVisitDurationMinutes : null,
+        pricing,
         ...officeDetails,
         profileChange,
         type: 'advocate'
@@ -745,8 +808,16 @@ export const uploadProfilePhoto = async (req, res, next) => {
         await deleteFromCloudinary(oldDraftPublicId).catch(() => {});
       }
 
-      const { passwordHash, aadhaarNumber, officePhotoPublicId: _opId, pendingOfficeChange: _poc, pendingProfileChange: _ppc, ...safeAdvocate } = updatedAdvocate;
+      const {
+        passwordHash,
+        aadhaarNumber,
+        officePhotoPublicId: _opId,
+        pendingOfficeChange: _poc,
+        pendingProfileChange: _ppc,
+        ...safeAdvocate
+      } = updatedAdvocate;
       const officeDetails = formatOfficeDetails(updatedAdvocate);
+      const pricing = formatPricingSummary(updatedAdvocate);
 
       return res.status(200).json({
         success: true,
@@ -754,6 +825,11 @@ export const uploadProfilePhoto = async (req, res, next) => {
         profilePhotoUrl: url,
         advocate: {
           ...safeAdvocate,
+          voiceCallPricePer15Min: updatedAdvocate.voiceCallPricePer15Min !== null ? Number(updatedAdvocate.voiceCallPricePer15Min) : null,
+          videoCallPricePer15Min: updatedAdvocate.videoCallPricePer15Min !== null ? Number(updatedAdvocate.videoCallPricePer15Min) : null,
+          offlineVisitingFee: updatedAdvocate.offlineVisitingFee !== null ? Number(updatedAdvocate.offlineVisitingFee) : null,
+          officeVisitDurationMinutes: updatedAdvocate.officeVisitDurationMinutes !== null ? updatedAdvocate.officeVisitDurationMinutes : null,
+          pricing,
           ...officeDetails,
           profileChange: formatProfileChange(updatedAdvocate),
           type: 'advocate'
@@ -778,8 +854,16 @@ export const uploadProfilePhoto = async (req, res, next) => {
         await deleteFromCloudinary(oldPublicId).catch(() => {});
       }
 
-      const { passwordHash, aadhaarNumber, officePhotoPublicId: _opId, pendingOfficeChange: _poc, pendingProfileChange: _ppc, ...safeAdvocate } = updatedAdvocate;
+      const {
+        passwordHash,
+        aadhaarNumber,
+        officePhotoPublicId: _opId,
+        pendingOfficeChange: _poc,
+        pendingProfileChange: _ppc,
+        ...safeAdvocate
+      } = updatedAdvocate;
       const officeDetails = formatOfficeDetails(updatedAdvocate);
+      const pricing = formatPricingSummary(updatedAdvocate);
 
       return res.status(200).json({
         success: true,
@@ -787,6 +871,11 @@ export const uploadProfilePhoto = async (req, res, next) => {
         profilePhotoUrl: url,
         advocate: {
           ...safeAdvocate,
+          voiceCallPricePer15Min: updatedAdvocate.voiceCallPricePer15Min !== null ? Number(updatedAdvocate.voiceCallPricePer15Min) : null,
+          videoCallPricePer15Min: updatedAdvocate.videoCallPricePer15Min !== null ? Number(updatedAdvocate.videoCallPricePer15Min) : null,
+          offlineVisitingFee: updatedAdvocate.offlineVisitingFee !== null ? Number(updatedAdvocate.offlineVisitingFee) : null,
+          officeVisitDurationMinutes: updatedAdvocate.officeVisitDurationMinutes !== null ? updatedAdvocate.officeVisitDurationMinutes : null,
+          pricing,
           ...officeDetails,
           profileChange: null,
           type: 'advocate'
@@ -853,9 +942,11 @@ export const getVerificationStatus = async (req, res, next) => {
         pincode: advocate.pincode,
         about: advocate.about,
         bio: advocate.about,
-        videoCallChargePerMinute: advocate.videoCallChargePerMinute,
-        voiceCallChargePerMinute: advocate.voiceCallChargePerMinute,
-        offlineVisitingFee: advocate.offlineVisitingFee,
+        voiceCallPricePer15Min: advocate.voiceCallPricePer15Min !== null ? Number(advocate.voiceCallPricePer15Min) : null,
+        videoCallPricePer15Min: advocate.videoCallPricePer15Min !== null ? Number(advocate.videoCallPricePer15Min) : null,
+        offlineVisitingFee: advocate.offlineVisitingFee !== null ? Number(advocate.offlineVisitingFee) : null,
+        officeVisitDurationMinutes: advocate.officeVisitDurationMinutes !== null ? advocate.officeVisitDurationMinutes : null,
+        pricing: formatPricingSummary(advocate),
         averageRating: advocate.averageRating,
         totalReviews: advocate.totalReviews,
         status: advocate.status,

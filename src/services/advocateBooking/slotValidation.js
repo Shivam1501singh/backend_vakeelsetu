@@ -14,9 +14,10 @@ export const DEFAULT_BOOKING_TIMEZONE = 'Asia/Kolkata';
  *
  * @param {string} mode - VOICE_CALL | VIDEO_CALL | IN_PERSON
  * @param {string|Date} startAtInput - ISO 8601 date string or Date
+ * @param {number|null} [customDurationMinutes=null] - Optional advocate-specific duration
  * @returns {{ startAt: Date, endAt: Date, durationMinutes: number }}
  */
-export const validateStart = (mode, startAtInput) => {
+export const validateStart = (mode, startAtInput, customDurationMinutes = null) => {
   if (!startAtInput) {
     const error = new Error('Slot start time (startAt) is required.');
     error.statusCode = 400;
@@ -35,7 +36,9 @@ export const validateStart = (mode, startAtInput) => {
   const slotMinutes = parseInt(process.env.ADVOCATE_BOOKING_SLOT_MINUTES || '15', 10);
   const minLeadMinutes = parseInt(process.env.ADVOCATE_BOOKING_MIN_LEAD_MINUTES || '30', 10);
   const maxDaysAhead = parseInt(process.env.ADVOCATE_BOOKING_MAX_DAYS_AHEAD || '30', 10);
-  const durationMinutes = getModeDurationMinutes(mode);
+  const durationMinutes = customDurationMinutes
+    ? parseInt(customDurationMinutes, 10)
+    : getModeDurationMinutes(mode);
 
   // Check seconds and milliseconds are 0
   if (startAt.getUTCSeconds() !== 0 || startAt.getUTCMilliseconds() !== 0) {

@@ -218,6 +218,51 @@ export const parseOptionalFloat = (min, max, label) => z.preprocess((val) => {
   .nullable()
 );
 
+export const parsePriceField = (label) => z.preprocess((val) => {
+  if (val === undefined || val === null || val === '') return val === '' ? null : val;
+  if (typeof val === 'number') return val;
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (trimmed === '' || trimmed.toLowerCase() === 'null') return null;
+    if (!/^-?\d+(\.\d+)?$/.test(trimmed)) return NaN;
+    return parseFloat(trimmed);
+  }
+  return NaN;
+}, z.number({ invalid_type_error: `${label} must be a valid number.` })
+  .refine((n) => !Number.isNaN(n) && Number.isFinite(n), { message: `${label} must be a valid finite number.` })
+  .refine((n) => n > 0, { message: `${label} must be a positive number.` })
+  .refine((n) => {
+    const parts = n.toString().split('.');
+    return parts.length < 2 || parts[1].length <= 2;
+  }, { message: `${label} can have at most 2 decimal places.` })
+  .refine((n) => {
+    const maxPayment = parseInt(process.env.RAZORPAY_MAX_PAYMENT_AMOUNT_RUPEES || '500000', 10);
+    const feePaise = Math.round(n * 100);
+    const gstPaise = Math.round((feePaise * 18) / 100);
+    const totalPaise = feePaise + gstPaise + 2500;
+    return totalPaise <= maxPayment * 100;
+  }, { message: `Total booking amount for ${label} exceeds the maximum allowed payment limit.` })
+  .optional()
+  .nullable()
+);
+
+export const parseDurationField = (label) => z.preprocess((val) => {
+  if (val === undefined || val === null || val === '') return val === '' ? null : val;
+  if (typeof val === 'number') return Number.isInteger(val) ? val : NaN;
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (trimmed === '' || trimmed.toLowerCase() === 'null') return null;
+    if (!/^\d+$/.test(trimmed)) return NaN;
+    return parseInt(trimmed, 10);
+  }
+  return NaN;
+}, z.number({ invalid_type_error: `${label} must be a positive whole number.` })
+  .refine((n) => !Number.isNaN(n) && Number.isInteger(n), { message: `${label} must be a whole number.` })
+  .refine((n) => n >= 1 && n <= 1440, { message: `${label} must be between 1 and 1440 minutes.` })
+  .optional()
+  .nullable()
+);
+
 // Helper to parse arrays that may arrive as JSON strings in multipart/form-data
 export const parseOptionalArray = (itemSchema, maxItems) => z.preprocess((val) => {
   if (val === undefined || val === null || val === '') return val === '' ? null : val;
@@ -262,9 +307,19 @@ export const advocateProfileUpdateBaseSchema = z.object({
   courtPractice: parseOptionalArray(z.string().trim().min(1)),
   // Retired completeAddress field to intercept and reject with 400
   completeAddress: z.any().optional(),
-  videoCallChargePerMinute: parseOptionalFloat(0, 100000, 'Video call charge'),
-  voiceCallChargePerMinute: parseOptionalFloat(0, 100000, 'Voice call charge'),
-  offlineVisitingFee: parseOptionalFloat(0, 1000000, 'Offline visiting fee'),
+
+  // Pricing & duration fields
+  voiceCallPricePer15Min: parsePriceField('voiceCallPricePer15Min'),
+  videoCallPricePer15Min: parsePriceField('videoCallPricePer15Min'),
+  offlineVisitingFee: parsePriceField('offlineVisitingFee'),
+  officeVisitDurationMinutes: parseDurationField('officeVisitDurationMinutes'),
+
+  // Retired legacy per-minute fields to intercept and reject with 400
+  videoCallChargePerMinute: z.any().optional(),
+  voiceCallChargePerMinute: z.any().optional(),
+  videoChargePerMinute: z.any().optional(),
+  voiceChargePerMinute: z.any().optional(),
+
   officeAddress: officeAddressSchema.optional().nullable(),
   state: z.string().trim().min(2, { message: 'State must be at least 2 characters.' }).max(100).optional().nullable(),
   city: z.string().trim().min(2, { message: 'City must be at least 2 characters.' }).max(100).optional().nullable(),
@@ -276,8 +331,6 @@ export const advocateProfileUpdateBaseSchema = z.object({
 
   // Aliases (Section 10 request payload support)
   experience: parseOptionalInt(0, 80, 'Experience'),
-  videoChargePerMinute: parseOptionalFloat(0, 100000, 'Video charge'),
-  voiceChargePerMinute: parseOptionalFloat(0, 100000, 'Voice charge'),
   languages: parseOptionalArray(z.string().trim().min(1)),
   languagesSpoken: parseOptionalArray(z.string().trim().min(1)),
 
@@ -339,6 +392,36 @@ export const validateLocationPairs = (data, ctx) => {
       message: 'completeAddress is no longer supported. Use officeAddress.',
       path: ['completeAddress']
     });
+  }
+
+  // 0.1 Legacy per-minute fee fields retired: reject with 400
+  if (data.voiceCallChargePerMinute !== undefined || data.voiceChargePerMinute !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'voiceCallChargePerMinute is no longer supported. Use voiceCallPricePer15Min.',
+      path: [data.voiceCallChargePerMinute !== undefined ? 'voiceCallChargePerMinute' : 'voiceChargePerMinute']
+    });
+  }
+
+  if (data.videoCallChargePerMinute !== undefined || data.videoChargePerMinute !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'videoCallChargePerMinute is no longer supported. Use videoCallPricePer15Min.',
+      path: [data.videoCallChargePerMinute !== undefined ? 'videoCallChargePerMinute' : 'videoChargePerMinute']
+    });
+  }
+
+  // 0.2 Office visit fee and duration pair rule when both sent in payload
+  if (data.offlineVisitingFee !== undefined && data.officeVisitDurationMinutes !== undefined) {
+    const hasFee = data.offlineVisitingFee !== null;
+    const hasDuration = data.officeVisitDurationMinutes !== null;
+    if (hasFee !== hasDuration) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'offlineVisitingFee and officeVisitDurationMinutes must both be provided or both be null.',
+        path: [!hasFee ? 'offlineVisitingFee' : 'officeVisitDurationMinutes']
+      });
+    }
   }
 
   // 1. Old latitude / longitude in the body: reject with 400 "Use officeLatitude/officeLongitude."

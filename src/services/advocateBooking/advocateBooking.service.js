@@ -4,7 +4,8 @@ import {
   isAdvocateBookable,
   assertAdvocateBookable,
   getBookableModes,
-  quote
+  quote,
+  formatPricingSummary
 } from './pricing.js';
 import {
   validateStart,
@@ -31,9 +32,10 @@ export const getAdvocateBookingOptions = async (advocateId) => {
       status: true,
       approvalStatus: true,
       deletionStatus: true,
-      voiceCallChargePerMinute: true,
-      videoCallChargePerMinute: true,
-      offlineVisitingFee: true
+      voiceCallPricePer15Min: true,
+      videoCallPricePer15Min: true,
+      offlineVisitingFee: true,
+      officeVisitDurationMinutes: true
     }
   });
 
@@ -47,7 +49,9 @@ export const getAdvocateBookingOptions = async (advocateId) => {
   const modes = bookable ? getBookableModes(advocate) : [];
 
   const slotMinutes = parseInt(process.env.ADVOCATE_BOOKING_SLOT_MINUTES || '15', 10);
-  const inPersonMinutes = parseInt(process.env.ADVOCATE_IN_PERSON_MINUTES || '60', 10);
+  const inPersonMinutes = advocate.officeVisitDurationMinutes
+    ? parseInt(advocate.officeVisitDurationMinutes, 10)
+    : parseInt(process.env.ADVOCATE_IN_PERSON_MINUTES || '60', 10);
   const minLeadMinutes = parseInt(process.env.ADVOCATE_BOOKING_MIN_LEAD_MINUTES || '30', 10);
   const maxDaysAhead = parseInt(process.env.ADVOCATE_BOOKING_MAX_DAYS_AHEAD || '30', 10);
   const timezone = process.env.BOOKING_TIMEZONE || DEFAULT_BOOKING_TIMEZONE;
@@ -62,6 +66,11 @@ export const getAdvocateBookingOptions = async (advocateId) => {
     },
     bookable,
     modes,
+    pricing: formatPricingSummary(advocate),
+    voiceCallPricePer15Min: advocate.voiceCallPricePer15Min !== null ? Number(advocate.voiceCallPricePer15Min) : null,
+    videoCallPricePer15Min: advocate.videoCallPricePer15Min !== null ? Number(advocate.videoCallPricePer15Min) : null,
+    offlineVisitingFee: advocate.offlineVisitingFee !== null ? Number(advocate.offlineVisitingFee) : null,
+    officeVisitDurationMinutes: advocate.officeVisitDurationMinutes ?? inPersonMinutes,
     slotMinutes,
     inPersonMinutes,
     minLeadMinutes,
@@ -87,7 +96,7 @@ export const quoteBookingSlot = async (advocateId, { mode, startAt }, userId = n
   assertAdvocateBookable(advocate);
   const breakdown = quote(advocate, mode);
 
-  const { startAt: slotStart, endAt: slotEnd, durationMinutes } = validateStart(mode, startAt);
+  const { startAt: slotStart, endAt: slotEnd, durationMinutes } = validateStart(mode, startAt, breakdown.durationMinutes);
 
   const free = await isSlotFree(advocateId, slotStart, slotEnd);
   if (!free) {
@@ -153,7 +162,7 @@ export const createAdvocateBookingCheckout = async ({ userId, advocateId, mode, 
 
   assertAdvocateBookable(advocate);
   const pricing = quote(advocate, mode);
-  const { startAt: slotStart, endAt: slotEnd, durationMinutes } = validateStart(mode, startAt);
+  const { startAt: slotStart, endAt: slotEnd, durationMinutes } = validateStart(mode, startAt, pricing.durationMinutes);
 
   const now = new Date();
 

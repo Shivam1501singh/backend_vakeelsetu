@@ -124,9 +124,10 @@ export const finalizeAdvocateDeletion = async (advocateId) => {
         languagesSpoken: advocate.languagesSpoken,
         // TODO: remove fallback after backfill-office-address --apply
         completeAddress: advocate.completeAddress || advocate.officeAddress || null,
-        videoCallChargePerMinute: advocate.videoCallChargePerMinute,
-        voiceCallChargePerMinute: advocate.voiceCallChargePerMinute,
+        voiceCallPricePer15Min: advocate.voiceCallPricePer15Min,
+        videoCallPricePer15Min: advocate.videoCallPricePer15Min,
         offlineVisitingFee: advocate.offlineVisitingFee,
+        officeVisitDurationMinutes: advocate.officeVisitDurationMinutes,
         averageRating: advocate.averageRating,
         totalReviews: advocate.totalReviews,
         profileData: {

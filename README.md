@@ -859,9 +859,10 @@ This feature enables authenticated Advocates to retrieve, complete, and update t
       "courtPractice": ["High Court", "District Court"],
       "topCourtPractised": "Delhi High Court",
       "officeAddress": "Office No. 204, District Court Complex",
-      "videoCallChargePerMinute": 50,
-      "voiceCallChargePerMinute": 30,
+      "voiceCallPricePer15Min": 450,
+      "videoCallPricePer15Min": 750,
       "offlineVisitingFee": 1000,
+      "officeVisitDurationMinutes": 60,
       "type": "advocate"
     }
   }
@@ -882,9 +883,10 @@ This feature enables authenticated Advocates to retrieve, complete, and update t
     "topCourtPractised": "Delhi High Court",
     "about": "Experienced advocate specializing in civil and property disputes with a focus on practical solutions.",
     "courtPractice": ["High Court", "District Court"],
-    "videoCallChargePerMinute": 50,
-    "voiceCallChargePerMinute": 30,
+    "voiceCallPricePer15Min": 450,
+    "videoCallPricePer15Min": 750,
     "offlineVisitingFee": 1000,
+    "officeVisitDurationMinutes": 60,
     "country": "India",
     "state": "Uttar Pradesh",
     "city": "Ghaziabad"
@@ -900,9 +902,10 @@ This feature enables authenticated Advocates to retrieve, complete, and update t
     "topCourtPractised": "Delhi High Court",
     "about": "Experienced advocate specializing in civil and property disputes with a focus on practical solutions.",
     "courtPractice": ["High Court"],
-    "videoChargePerMinute": 50,
-    "voiceChargePerMinute": 30,
+    "voiceCallPricePer15Min": 450,
+    "videoCallPricePer15Min": 750,
     "offlineVisitingFee": 1000,
+    "officeVisitDurationMinutes": 60,
     "languages": ["Hindi", "English"]
   }
   ```
@@ -927,9 +930,10 @@ This feature enables authenticated Advocates to retrieve, complete, and update t
       "country": "India",
       "state": "Uttar Pradesh",
       "city": "Ghaziabad",
-      "videoCallChargePerMinute": 50,
-      "voiceCallChargePerMinute": 30,
+      "voiceCallPricePer15Min": 450,
+      "videoCallPricePer15Min": 750,
       "offlineVisitingFee": 1000,
+      "officeVisitDurationMinutes": 60,
       "averageRating": 4.5,
       "totalReviews": 0
     }
@@ -964,7 +968,12 @@ The `advocateProfileUpdateSchema` enforces the following backend validations:
 5. **Biography (`about` / `bio`):** String, must contain between 50 and 500 words (word count, not character count, custom split-word refinement validation).
 6. **Court Practice (`courtPractice`):** Array of valid text strings representing courts.
 7. **Office Address (`officeAddress`):** String, 10 to 500 characters. Single address across the platform; changes by approved advocates require admin review. Note: `completeAddress` is retired and rejected with `400 Bad Request: "completeAddress is no longer supported. Use officeAddress."`.
-8. **Charges (`videoCallChargePerMinute` / `videoChargePerMinute`, `voiceCallChargePerMinute` / `voiceChargePerMinute`, `offlineVisitingFee`):** Numbers >= 0. Raw numbers are stored in the database.
+8. **Pricing (`voiceCallPricePer15Min`, `videoCallPricePer15Min`, `offlineVisitingFee`, `officeVisitDurationMinutes`):**
+   - `voiceCallPricePer15Min` and `videoCallPricePer15Min`: Positive numbers, max 2 decimals, max ₹500,000. Set to `null` to disable the calling mode.
+   - `officeVisitDurationMinutes`: Integer minutes (minimum 15, maximum 480).
+   - `offlineVisitingFee`: Positive number, max 2 decimals, max ₹500,000.
+   - **Office Visit Pair Rule:** `offlineVisitingFee` and `officeVisitDurationMinutes` must both be set, or both be null. Setting one without the other returns `400 Bad Request`.
+   - **Legacy Fields Rejection (400):** Passing `voiceCallChargePerMinute`, `voiceChargePerMinute`, `videoCallChargePerMinute`, or `videoChargePerMinute` returns `400 Bad Request` directing to the new 15-minute fields.
 9. **Strict Body validation:** Unknown fields are rejected with `.strict()`.
 
 ---
@@ -1493,9 +1502,10 @@ Help Request reference IDs can be customized via environment variables without r
         "country": "India",
         "state": "Uttar Pradesh",
         "city": "Ghaziabad",
-        "videoCallChargePerMinute": 50,
-        "voiceCallChargePerMinute": 30,
+        "voiceCallPricePer15Min": 450,
+        "videoCallPricePer15Min": 750,
         "offlineVisitingFee": 1000,
+        "officeVisitDurationMinutes": 60,
         "averageRating": 4.6,
         "totalReviews": 28
       }
@@ -1533,9 +1543,10 @@ Help Request reference IDs can be customized via environment variables without r
       "state": "Uttar Pradesh",
       "city": "Ghaziabad",
       "officeAddress": "District Court Complex",
-      "videoCallChargePerMinute": 50,
-      "voiceCallChargePerMinute": 30,
+      "voiceCallPricePer15Min": 450,
+      "videoCallPricePer15Min": 750,
       "offlineVisitingFee": 1000,
+      "officeVisitDurationMinutes": 60,
       "averageRating": 4.6,
       "totalReviews": 28
     }
@@ -1922,9 +1933,10 @@ Retrieves all advocates saved by the currently authenticated user.
         "state": "Delhi",
         "city": "New Delhi",
         "officeAddress": "Chamber 405...",
-        "videoCallChargePerMinute": 60,
-        "voiceCallChargePerMinute": 40,
+        "voiceCallPricePer15Min": 600,
+        "videoCallPricePer15Min": 900,
         "offlineVisitingFee": 2500,
+        "officeVisitDurationMinutes": 60,
         "averageRating": 4.3,
         "totalReviews": 3,
         "isSaved": true
@@ -3196,9 +3208,10 @@ A logged-in Normal User can like an Advocate once and can later unlike the Advoc
         "state": "Delhi",
         "city": "New Delhi",
         "officeAddress": "Chamber 402, High Court",
-        "videoCallChargePerMinute": 50,
-        "voiceCallChargePerMinute": 30,
+        "voiceCallPricePer15Min": 450,
+        "videoCallPricePer15Min": 750,
         "offlineVisitingFee": 1500,
+        "officeVisitDurationMinutes": 60,
         "averageRating": 4.8,
         "totalReviews": 25,
         "status": "ACTIVE",
@@ -4313,9 +4326,10 @@ Returned when the Admin has verified and approved the Advocate profile. Returns 
     "officeAddress": "Office 101, Delhi High Court Chamber",
     "about": "Experienced criminal defense advocate with 8 years of practice.",
     "bio": "Experienced criminal defense advocate with 8 years of practice.",
-    "videoCallChargePerMinute": 50,
-    "voiceCallChargePerMinute": 30,
+    "voiceCallPricePer15Min": 450,
+    "videoCallPricePer15Min": 750,
     "offlineVisitingFee": 1000,
+    "officeVisitDurationMinutes": 60,
     "averageRating": null,
     "totalReviews": 0,
     "status": "ACTIVE",
@@ -4787,9 +4801,10 @@ model DeletedAdvocate {
   courtPractice            String[]
   languagesSpoken          String[]
   completeAddress          String?
-  videoCallChargePerMinute Decimal?
-  voiceCallChargePerMinute Decimal?
+  voiceCallPricePer15Min   Decimal?
+  videoCallPricePer15Min   Decimal?
   offlineVisitingFee       Decimal?
+  officeVisitDurationMinutes Int?
   averageRating            Decimal?
   totalReviews            Int                    @default(0)
   profileData             Json?
@@ -10438,8 +10453,8 @@ This guide covers the administrative workflow for editing advocate profiles and 
 | Field Category | Fields | Behavior & Rules |
 |---|---|---|
 | **Identity Fields (Admin-Only)** | `fullName`, `gender`, `barCouncilId` | Admin can correct spelling/typos or Bar Council ID. `barCouncilId` is validated for uniqueness across all other advocates. |
-| **Professional Profile Fields** | `experienceYears`, `casesHandled`, `bestPracticeArea`, `topCourtPractised`, `practiceAreas` (array), `courtPractice` (array), `officeAddress`, `offlineVisitingFee`, `state`, `city`, `pincode`, `about` | Updated directly. Decimals are parsed safely; empty or non-existent fields are ignored. Note: `completeAddress` is rejected with 400. |
-| **Supported Aliases** | `bio` (alias for `about`), `experience` (alias for `experienceYears`), `videoChargePerMinute` (alias for `videoCallChargePerMinute`), `voiceChargePerMinute` (alias for `voiceCallChargePerMinute`), `languages` (alias for `languagesSpoken`) | Fully supported for backward-compatibility with client/advocate self-service payloads. |
+| **Professional Profile Fields** | `experienceYears`, `casesHandled`, `bestPracticeArea`, `topCourtPractised`, `practiceAreas` (array), `courtPractice` (array), `officeAddress`, `voiceCallPricePer15Min`, `videoCallPricePer15Min`, `offlineVisitingFee`, `officeVisitDurationMinutes`, `state`, `city`, `pincode`, `about` | Updated directly. Decimals are parsed safely; empty or non-existent fields are ignored. `officeVisitDurationMinutes` & `offlineVisitingFee` must both be set or both null. Note: `completeAddress` and legacy `ChargePerMinute` fields are rejected with 400. |
+| **Supported Aliases** | `bio` (alias for `about`), `experience` (alias for `experienceYears`), `languages` (alias for `languagesSpoken`) | Fully supported for backward-compatibility with client/advocate self-service payloads. (Legacy per-minute charges `voiceCallChargePerMinute`, `videoCallChargePerMinute`, `voiceChargePerMinute`, `videoChargePerMinute` are retired and rejected with 400). |
 | **Biography Word Count Rule** | `bio` / `about` | **Strictly enforced:** Must contain between **50 and 500 words** (evaluated via `validateBioWords`). |
 | **STRICTLY NON-EDITABLE (Rejected with 400)** | `email`, `phone`, `aadhaarNumber`, `password`, `passwordHash`, `approvalStatus`, `status`, `callAvailability`, `deletionStatus`, `isOnline`, `lastSeenAt`, `averageRating`, `totalReviews`, `profilePhotoUrl`, `latitude`, `longitude` | Zod `.strict()` rejects any unknown or un-editable keys with an unrecognized key error. Identity verification and status flags have dedicated lifecycles. |
 
@@ -11892,21 +11907,31 @@ All financial amounts in database and API payloads are strictly stored and compu
 
 | Mode | Duration | Rate Field on Advocate | Calculation Formula |
 |---|---|---|---|
-| `VOICE_CALL` | **15 minutes** | `voiceCallChargePerMinute` (₹/min) | `feePaise = round(voiceCallChargePerMinute * 15 * 100)` |
-| `VIDEO_CALL` | **15 minutes** | `videoCallChargePerMinute` (₹/min) | `feePaise = round(videoCallChargePerMinute * 15 * 100)` |
-| `IN_PERSON` | **60 minutes** | `offlineVisitingFee` (₹ flat) | `feePaise = round(offlineVisitingFee * 100)` |
+| `VOICE_CALL` | **15 minutes** (fixed) | `voiceCallPricePer15Min` (₹ / 15 min) | `feePaise = round(voiceCallPricePer15Min * 100)` |
+| `VIDEO_CALL` | **15 minutes** (fixed) | `videoCallPricePer15Min` (₹ / 15 min) | `feePaise = round(videoCallPricePer15Min * 100)` |
+| `IN_PERSON` | `advocate.officeVisitDurationMinutes` (>= 15 min) | `offlineVisitingFee` (₹ flat) | `feePaise = round(offlineVisitingFee * 100)` |
+
+> **Historical Snapshot Preservation:**
+> Existing bookings in `AdvocateBooking` permanently retain their historical `durationMinutes`, `startAt`, `endAt`, `feePaise`, `gstPaise`, `platformFeePaise`, and `totalPaise`. They are immutable and never re-evaluated against subsequent advocate rate changes.
 
 #### Breakdown & Taxes:
-- **Advocate Fee (`feePaise`):** Rate × duration. Minimum is ₹1 (100 paise).
+- **Advocate Fee (`feePaise`):** Stored directly in paise. Minimum is ₹1 (100 paise).
 - **GST (`gstPaise`):** `round(feePaise * (BOOKING_GST_PERCENT / 100))` (Default `18%`). Tax applies **only to the advocate fee**.
 - **Platform Fee (`platformFeePaise`):** `round(BOOKING_PLATFORM_FEE * 100)` (Default `₹25` = `2500 paise`). **No GST** is charged on the platform fee.
 - **Total Amount (`totalAmountPaise`):** `feePaise + gstPaise + platformFeePaise`.
 
-#### Example (₹34/min Voice Call):
-- Fee: `34 * 15 = ₹510` = `51000 paise`
-- GST (18%): `round(51000 * 0.18) = 9180 paise` (`₹91.80`)
+#### Example 1 (Voice Call @ ₹450 per 15 min):
+- Advocate Fee: `450 * 100 = 45000 paise` (`₹450.00`)
+- GST (18%): `round(45000 * 0.18) = 8100 paise` (`₹81.00`)
 - Platform fee: `2500 paise` (`₹25.00`)
-- Total: `51000 + 9180 + 2500 = 62680 paise` (`₹626.80`)
+- Total: `45000 + 8100 + 2500 = 55600 paise` (`₹556.00`)
+
+#### Example 2 (In-Person Consultation: 45 min @ ₹1,500):
+- Advocate Fee: `1500 * 100 = 150000 paise` (`₹1,500.00`)
+- Duration: `45 minutes` (from `advocate.officeVisitDurationMinutes`)
+- GST (18%): `round(150000 * 0.18) = 27000 paise` (`₹270.00`)
+- Platform fee: `2500 paise` (`₹25.00`)
+- Total: `150000 + 27000 + 2500 = 179500 paise` (`₹1,795.00`)
 
 #### Environment Variables Reference:
 | Variable | Default | Purpose |
@@ -11924,12 +11949,13 @@ All financial amounts in database and API payloads are strictly stored and compu
 ### 3. Slot Rules & Concurrency Control
 
 1. **Frontend-Driven Calendar:**
-   The frontend generates calendar slot grids based on the advocate's duration (15 min for voice/video, 60 min for in-person) and filters them against `GET /api/advocates/:id/busy-slots`.
+   The frontend generates calendar slot grids based on the advocate's duration (15 min for voice/video, `officeVisitDurationMinutes` for in-person) and filters them against `GET /api/advocates/:id/busy-slots`.
 2. **Grid Alignment Validation:**
-   - Voice/Video: `startAt.getMinutes() % 15 === 0` and `startAt.getSeconds() === 0`.
-   - In-Person: `startAt.getMinutes() === 0` and `startAt.getSeconds() === 0` (top of the hour).
+   - **All Modes (`VOICE_CALL`, `VIDEO_CALL`, `IN_PERSON`):** `startAt.getMinutes() % 15 === 0` and `startAt.getSeconds() === 0`.
+   - All appointments start on 15-minute grid boundaries (`:00`, `:15`, `:30`, `:45`).
+   - Slot end time: `endAt = new Date(startAt.getTime() + durationMinutes * 60000)`.
 3. **Cross-Mode Overlap Protection:**
-   An advocate has only **one physical schedule**. If an advocate has a 60-minute In-Person booking from `14:00` to `15:00`, all voice/video slots within that entire 60-minute window (`14:00`, `14:15`, `14:30`, `14:45`) are occupied.
+   An advocate has only **one physical schedule**. If an advocate has a 45-minute In-Person booking from `14:00` to `14:45`, all voice/video slots within that entire 45-minute window (`14:00`, `14:15`, `14:30`) are occupied.
 4. **User Conflict Protection:**
    A user cannot book two overlapping appointments with different advocates. Attempting to book during an existing confirmed or active hold slot returns `409 Conflict` (`code: USER_SLOT_CONFLICT`).
 5. **Concurrency & Race Conditions:**
@@ -11999,8 +12025,7 @@ All financial amounts in database and API payloads are strictly stored and compu
         "mode": "VOICE_CALL",
         "label": "Voice Call",
         "durationMinutes": 15,
-        "ratePerMinute": 34,
-        "flatFee": null,
+        "pricePer15Min": 510,
         "feePaise": 51000,
         "fee": 510
       },
@@ -12008,8 +12033,7 @@ All financial amounts in database and API payloads are strictly stored and compu
         "mode": "VIDEO_CALL",
         "label": "Video Call",
         "durationMinutes": 15,
-        "ratePerMinute": 50,
-        "flatFee": null,
+        "pricePer15Min": 750,
         "feePaise": 75000,
         "fee": 750
       },
@@ -12017,8 +12041,6 @@ All financial amounts in database and API payloads are strictly stored and compu
         "mode": "IN_PERSON",
         "label": "In-Person Consultation",
         "durationMinutes": 60,
-        "ratePerMinute": null,
-        "flatFee": 2000,
         "feePaise": 200000,
         "fee": 2000
       }
@@ -12032,7 +12054,6 @@ All financial amounts in database and API payloads are strictly stored and compu
 }
 ```
 *(Note: `subjects` removed from booking options; may be added back later).*
-```
 
 ---
 
@@ -12575,10 +12596,10 @@ To protect clients from unvetted fee spikes, misleading experience claims, or ar
    - The separate `PUT /api/advocate/profile/office` route and separate admin office-change endpoints have been **removed**.
    - `POST /api/advocate/profile/photo` is retained as a compatibility alias of `PATCH /api/advocate/profile` with `profilePhoto`.
 2. **Approval-Field List vs Direct-Field List:**
-   - **Approval Fields (13 sensitive fields):**
+   - **Approval Fields (14 sensitive fields):**
      - **Experience:** `experienceYears` (alias `experience`)
      - **About:** `about` (alias `bio`, 50–500 words)
-     - **Fees:** `videoCallChargePerMinute` (alias `videoChargePerMinute`), `voiceCallChargePerMinute` (alias `voiceChargePerMinute`), `offlineVisitingFee`
+     - **Consultation Pricing & Duration:** `voiceCallPricePer15Min`, `videoCallPricePer15Min`, `offlineVisitingFee`, `officeVisitDurationMinutes` (legacy per-minute fields are rejected with `400 Bad Request`)
      - **Profile Photo:** `profilePhoto` (file upload)
      - **Office & Location:** `officeAddress` (10–500 chars), `pincode` (6 digits), `city`, `state`, `officeLatitude`, `officeLongitude`, `officePhoto` (file upload)
    - **Direct Fields (immediate live update):**
@@ -12688,11 +12709,13 @@ To protect clients from unvetted fee spikes, misleading experience claims, or ar
 - **Content-Type:** `multipart/form-data` or `application/json`
 - **Fields Supported:**
   - **Direct Fields (Live instantly):** `fullName`, `gender`, `casesHandled`, `practiceAreas`, `bestPracticeArea`, `topCourtPractised`, `courtPractice`, `languagesSpoken`.
-  - **Approval Fields (Queued in draft for Approved advocates):** `experienceYears`, `about`, `videoCallChargePerMinute`, `voiceCallChargePerMinute`, `offlineVisitingFee`, `profilePhoto` (file), `officeAddress`, `pincode`, `city`, `state`, `officeLatitude`, `officeLongitude`, `officePhoto` (file).
+  - **Approval Fields (Queued in draft for Approved advocates):** `experienceYears`, `about`, `voiceCallPricePer15Min`, `videoCallPricePer15Min`, `offlineVisitingFee`, `officeVisitDurationMinutes`, `profilePhoto` (file), `officeAddress`, `pincode`, `city`, `state`, `officeLatitude`, `officeLongitude`, `officePhoto` (file).
 - **Validation Rules:**
   - Coordinates must be submitted together: `officeLatitude` and `officeLongitude`.
   - Regional location fields must be submitted together: `pincode`, `city`, and `state`.
+  - In-person visit fields must be submitted together: `offlineVisitingFee` and `officeVisitDurationMinutes` must both be set or both null.
   - Legacy fields `latitude` and `longitude` are rejected with `400 Bad Request` ("Use officeLatitude/officeLongitude.").
+  - Legacy pricing fields `voiceCallChargePerMinute`, `voiceChargePerMinute`, `videoCallChargePerMinute`, `videoChargePerMinute` are rejected with `400 Bad Request`.
   - Retired field `completeAddress` is rejected with `400 Bad Request` ("completeAddress is no longer supported. Use officeAddress.").
   - Numeric fields sent as strings via `multipart/form-data` (e.g., `"12"`, `"500.50"`) are automatically parsed into numbers.
   - JSON array strings in multipart (e.g., `practiceAreas: '["Civil", "Criminal"]'`) are automatically parsed into string arrays.
@@ -12718,7 +12741,8 @@ To protect clients from unvetted fee spikes, misleading experience claims, or ar
       "rejectionReason": null,
       "requestedChanges": {
         "experienceYears": 12,
-        "videoCallChargePerMinute": 150,
+        "videoCallPricePer15Min": 750,
+        "voiceCallPricePer15Min": 500,
         "officeAddress": "Chamber 204, New High Court Wing, Sector 1",
         "pincode": "110003",
         "city": "New Delhi",
@@ -12746,7 +12770,7 @@ To protect clients from unvetted fee spikes, misleading experience claims, or ar
   "submittedAt": "2026-10-29T10:35:00.000Z",
   "requestedChanges": {
     "experienceYears": 12,
-    "videoCallChargePerMinute": 150,
+    "videoCallPricePer15Min": 750,
     "officeAddress": "Chamber 204, New High Court Wing, Sector 1"
   }
 }
@@ -12766,7 +12790,7 @@ To protect clients from unvetted fee spikes, misleading experience claims, or ar
     "updatedAt": "2026-10-29T10:36:00.000Z",
     "requestedChanges": {
       "experienceYears": 12,
-      "videoCallChargePerMinute": 150
+      "videoCallPricePer15Min": 750
     }
   }
 }
@@ -12803,7 +12827,7 @@ When an advocate fetches their own profile via `GET /api/advocate/profile`, the 
       "rejectionReason": null,
       "requestedChanges": {
         "experienceYears": 12,
-        "videoCallChargePerMinute": 150,
+        "videoCallPricePer15Min": 750,
         "officeAddress": "Chamber 204, New High Court Wing, Sector 1"
       }
     }
@@ -12843,7 +12867,8 @@ When an advocate fetches their own profile via `GET /api/advocate/profile`, the 
       "profileChangeUpdatedAt": "2026-10-29T10:30:00.000Z",
       "requestedFields": [
         "experienceYears",
-        "videoCallChargePerMinute",
+        "videoCallPricePer15Min",
+        "voiceCallPricePer15Min",
         "officeAddress",
         "officePhoto"
       ]
@@ -12865,6 +12890,11 @@ When an advocate fetches their own profile via `GET /api/advocate/profile`, the 
 
 #### 5.2 Side-by-Side Review Details (`GET /api/admin/advocates/:advocateId/profile-change`)
 - **Headers:** `Authorization: Bearer {{admin_token}}`
+- **Field Labels Displayed in Admin Review:**
+  - `voiceCallPricePer15Min`: *"Voice Call Price (per 15 min)"*
+  - `videoCallPricePer15Min`: *"Video Call Price (per 15 min)"*
+  - `officeVisitDurationMinutes`: *"Office Visit Duration (minutes)"*
+  - `offlineVisitingFee`: *"Office Visit Fee"*
 - **Response (`200 OK`):**
 ```json
 {
@@ -12884,9 +12914,10 @@ When an advocate fetches their own profile via `GET /api/advocate/profile`, the 
     "current": {
       "experienceYears": 10,
       "about": "Senior High Court advocate with civil specialization.",
-      "videoCallChargePerMinute": 100,
-      "voiceCallChargePerMinute": 80,
+      "voiceCallPricePer15Min": 450,
+      "videoCallPricePer15Min": 750,
       "offlineVisitingFee": 1000,
+      "officeVisitDurationMinutes": 60,
       "profilePhotoUrl": "https://res.cloudinary.com/vakeelsetu/image/upload/v1720000000/advocates/old_photo.jpg",
       "officeAddress": "Chamber 12, Old Wing",
       "pincode": "110001",
@@ -12899,7 +12930,8 @@ When an advocate fetches their own profile via `GET /api/advocate/profile`, the 
     },
     "requested": {
       "experienceYears": 12,
-      "videoCallChargePerMinute": 150,
+      "videoCallPricePer15Min": 900,
+      "voiceCallPricePer15Min": 600,
       "officeAddress": "Chamber 204, New High Court Wing, Sector 1",
       "pincode": "110003",
       "city": "New Delhi",
@@ -12930,7 +12962,7 @@ When an advocate fetches their own profile via `GET /api/advocate/profile`, the 
   "advocate": {
     "id": "c1f7b024-4f9e-4b42-8924-1b1574a23b32",
     "experienceYears": 12,
-    "videoCallChargePerMinute": 150,
+    "videoCallPricePer15Min": 750,
     "officeAddress": "Chamber 204, New High Court Wing, Sector 1",
     "officeLocationUpdatedAt": "2026-10-29T10:40:00.000Z"
   }
@@ -13026,7 +13058,8 @@ GET  /api/admin/advocates/{{advocateId}}/profile-change ───> Side-by-side 
 2. **Submit Sensitive Fields as Draft:**
    - Send `PATCH {{BACKEND_URL}}/api/advocate/profile` as `multipart/form-data` with:
      - `experienceYears`: `12`
-     - `videoCallChargePerMinute`: `150`
+     - `videoCallPricePer15Min`: `750`
+     - `voiceCallPricePer15Min`: `450`
      - `officeAddress`: `Chamber 204, New High Court Wing, Sector 1`
      - `pincode`: `110003`
      - `city`: `New Delhi`
@@ -13055,7 +13088,7 @@ GET  /api/admin/advocates/{{advocateId}}/profile-change ───> Side-by-side 
    - Call `POST {{BACKEND_URL}}/api/admin/advocates/{{advocate_id}}/profile-change/approve`.
    - Verify `200 OK`.
    - Call `GET {{BACKEND_URL}}/api/advocates/{{advocate_id}}` (public profile).
-   - Verify new `experienceYears`, `videoCallChargePerMinute`, and `officeAddress` are live.
+   - Verify new `experienceYears`, `videoCallPricePer15Min`, `voiceCallPricePer15Min`, and `officeAddress` are live.
    - Verify old live photo was cleaned up from Cloudinary.
 
 ---
@@ -13126,3 +13159,171 @@ A standalone backfill script is provided to migrate existing advocates' address 
        "message": "completeAddress is no longer supported. Use officeAddress."
      }
      ```
+
+---
+
+## 35. Advocate Pricing (Per 15 Min + Office Visit Duration)
+
+### 1. Overview & Business Rules
+To modernize consultation pricing and provide advocates with full autonomy over their offline schedule, the platform migrated from a per-minute model to fixed 15-minute intervals and advocate-defined office visits:
+
+1. **Voice and Video Calls (`voiceCallPricePer15Min`, `videoCallPricePer15Min`):**
+   - Entered as a flat price for a **15-minute consultation** (in INR).
+   - Stored in the database as price per 15 min (`Decimal`).
+   - Nullable: setting either field to `null` disables that consultation mode for bookings.
+   - Validation: Must be a positive number with at most 2 decimal places, up to ₹500,000 (Razorpay order ceiling).
+2. **Office Visits / In-Person Consultation (`officeVisitDurationMinutes`, `offlineVisitingFee`):**
+   - Advocate defines their own in-person appointment duration in minutes (`officeVisitDurationMinutes`).
+   - Must be an integer >= 15 minutes (and <= 480 minutes).
+   - The corresponding fee (`offlineVisitingFee`) is charged for that full duration.
+   - **Pair Rule:** `officeVisitDurationMinutes` and `offlineVisitingFee` must either both be set (numbers) or both be null. Setting one without the other returns `400 Bad Request`.
+3. **Old Per-Minute Fields Removed from API:**
+   - `voiceCallChargePerMinute`, `voiceChargePerMinute`, `videoCallChargePerMinute`, and `videoChargePerMinute` are retired.
+   - Sending any of these fields to `PATCH /api/advocate/profile` or `PATCH /api/admin/advocates/:advocateId/profile` returns `400 Bad Request` with an explicit message pointing to the new fields (e.g. `"voiceCallChargePerMinute is no longer supported. Use voiceCallPricePer15Min."`).
+   - Old per-minute fields are completely omitted from all API responses.
+4. **Historical Booking Immutability:**
+   - Existing bookings in `AdvocateBooking` preserve their stored `durationMinutes`, `startAt`, `endAt`, `feePaise`, `gstPaise`, `platformFeePaise`, and `totalPaise`.
+   - Past bookings are never recalculated from current advocate rates.
+
+---
+
+### 2. Two-Phase Migration & Deployment Order
+
+1. **Phase A (Applied):**
+   - New database columns added:
+     - `voiceCallPricePer15Min` (`DECIMAL(65,30)`)
+     - `videoCallPricePer15Min` (`DECIMAL(65,30)`)
+     - `officeVisitDurationMinutes` (`INTEGER`)
+   - Data migrated inside SQL migration `20261031120000_advocate_pricing_per_15_min`:
+     - `voiceCallPricePer15Min = voiceCallChargePerMinute * 15`
+     - `videoCallPricePer15Min = videoCallChargePerMinute * 15`
+     - `officeVisitDurationMinutes = 60` (for advocates with non-null `offlineVisitingFee`)
+   - In-flight draft `pendingProfileChange` JSON blobs migrated:
+     - Per-minute charges converted to per-15min prices (× 15).
+   - All backend code switched exclusively to the new fields.
+   - Backend and frontend deployed together.
+2. **Phase B (Applied):**
+   - Executed migration `20261031130000_drop_legacy_advocate_pricing_columns`:
+     - `ALTER TABLE "Advocate" DROP COLUMN IF EXISTS "videoCallChargePerMinute", DROP COLUMN IF EXISTS "voiceCallChargePerMinute";`
+     - `ALTER TABLE "DeletedAdvocate" DROP COLUMN IF EXISTS "videoCallChargePerMinute", DROP COLUMN IF EXISTS "voiceCallChargePerMinute";`
+   - Removed deprecated column definitions from `prisma/schema.prisma` and regenerated Prisma Client.
+   - Database schema fully updated and verified in sync with production.
+
+---
+
+### 3. Postman Verification Guide (Dummy IDs for Manual Testing)
+
+> [!NOTE]
+> Do NOT execute these requests against production advocate records with live clients. Use dummy IDs or local/staging environment tokens.
+
+#### 1. Update Profile with New 15-Min Fields (`PATCH /api/advocate/profile`)
+- **Headers:** `Authorization: Bearer {{advocate_token}}`, `Content-Type: application/json`
+- **Request Body:**
+```json
+{
+  "voiceCallPricePer15Min": 450,
+  "videoCallPricePer15Min": 750,
+  "offlineVisitingFee": 1500,
+  "officeVisitDurationMinutes": 45
+}
+```
+- **Expect (`200 OK`):**
+  - If advocate is `APPROVED`: Changes saved into `pendingProfileChange` (draft) for admin review.
+  - If advocate is `PENDING`/`REJECTED`: Changes applied immediately to live record.
+
+#### 2. Rejection of Legacy Per-Minute Fields (`PATCH /api/advocate/profile`)
+- **Headers:** `Authorization: Bearer {{advocate_token}}`, `Content-Type: application/json`
+- **Request Body:**
+```json
+{
+  "voiceCallChargePerMinute": 30
+}
+```
+- **Expect (`400 Bad Request`):**
+```json
+{
+  "success": false,
+  "message": "voiceCallChargePerMinute is no longer supported. Use voiceCallPricePer15Min."
+}
+```
+
+#### 3. Get Booking Options (`GET /api/advocates/:id/booking-options`)
+- **URL:** `{{BACKEND_URL}}/api/advocates/00000000-0000-0000-0000-000000000001/booking-options`
+- **Expect (`200 OK`):**
+```json
+{
+  "success": true,
+  "advocate": {
+    "id": "00000000-0000-0000-0000-000000000001",
+    "fullName": "Adv. Demo Lawyer",
+    "profilePhotoUrl": null,
+    "bookable": true,
+    "modes": [
+      {
+        "mode": "VOICE_CALL",
+        "label": "Voice Call",
+        "durationMinutes": 15,
+        "pricePer15Min": 450,
+        "feePaise": 45000,
+        "fee": 450
+      },
+      {
+        "mode": "VIDEO_CALL",
+        "label": "Video Call",
+        "durationMinutes": 15,
+        "pricePer15Min": 750,
+        "feePaise": 75000,
+        "fee": 750
+      },
+      {
+        "mode": "IN_PERSON",
+        "label": "In-Person Consultation",
+        "durationMinutes": 45,
+        "feePaise": 150000,
+        "fee": 1500
+      }
+    ],
+    "pricingConfig": {
+      "gstPercent": 18,
+      "platformFeeRupees": 25,
+      "platformFeePaise": 2500
+    }
+  }
+}
+```
+
+#### 4. Booking Quote Calculation (`POST /api/advocates/:id/booking-quote`)
+- **URL:** `{{BACKEND_URL}}/api/advocates/00000000-0000-0000-0000-000000000001/booking-quote`
+- **Request Body (In-Person Consultation):**
+```json
+{
+  "mode": "IN_PERSON",
+  "startAt": "2026-11-01T10:00:00.000Z"
+}
+```
+- **Expect (`200 OK`):**
+```json
+{
+  "success": true,
+  "quote": {
+    "advocateId": "00000000-0000-0000-0000-000000000001",
+    "mode": "IN_PERSON",
+    "durationMinutes": 45,
+    "startAt": "2026-11-01T10:00:00.000Z",
+    "endAt": "2026-11-01T10:45:00.000Z",
+    "pricing": {
+      "feePaise": 150000,
+      "fee": 1500,
+      "gstPercent": 18,
+      "gstPaise": 27000,
+      "gst": 270,
+      "platformFeePaise": 2500,
+      "platformFee": 25,
+      "totalAmountPaise": 179500,
+      "totalAmount": 1795,
+      "currency": "INR"
+    },
+    "isAvailable": true
+  }
+}
+```

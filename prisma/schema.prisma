@@ -193,9 +193,10 @@ model DeletedAdvocate {
   courtPractice            String[]
   languagesSpoken          String[]
   completeAddress          String?
-  videoCallChargePerMinute Decimal?
-  voiceCallChargePerMinute Decimal?
-  offlineVisitingFee       Decimal?
+  offlineVisitingFee         Decimal?
+  voiceCallPricePer15Min     Decimal?
+  videoCallPricePer15Min     Decimal?
+  officeVisitDurationMinutes Int?
   averageRating            Decimal?
   totalReviews             Int                    @default(0)
   profileData              Json?
@@ -253,9 +254,10 @@ model Advocate {
   about                    String?
   courtPractice            String[]
   completeAddress          String?
-  videoCallChargePerMinute Decimal?
-  voiceCallChargePerMinute Decimal?
-  offlineVisitingFee       Decimal?
+  offlineVisitingFee         Decimal?
+  voiceCallPricePer15Min     Decimal?
+  videoCallPricePer15Min     Decimal?
+  officeVisitDurationMinutes Int?
 
   averageRating            Decimal?
   totalReviews             Int               @default(0)

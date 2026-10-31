@@ -1,7 +1,7 @@
 import prisma from '../lib/prisma.js';
 import { getTeamMates } from './advocateTeam.service.js';
 import { computeEffectiveOnlineStatus } from '../utils/advocateStatus.js';
-import { isAdvocateBookable, getBookableModes } from './advocateBooking/pricing.js';
+import { isAdvocateBookable, getBookableModes, formatPricingSummary } from './advocateBooking/pricing.js';
 
 // Hardcoded mapping of coordinates for the common Indian pincodes used in the seed data/locations
 const PINCODE_COORDINATES = {
@@ -183,9 +183,10 @@ export const listAdvocates = async ({
     languagesSpoken: true,
     state: true,
     city: true,
-    videoCallChargePerMinute: true,
-    voiceCallChargePerMinute: true,
+    voiceCallPricePer15Min: true,
+    videoCallPricePer15Min: true,
     offlineVisitingFee: true,
+    officeVisitDurationMinutes: true,
     averageRating: true,
     totalReviews: true,
     officeAddress: true,
@@ -296,6 +297,11 @@ export const listAdvocates = async ({
       cleanAdv.isOnline = computeEffectiveOnlineStatus(adv.isOnline, adv.lastSeenAt);
       cleanAdv.lastSeenAt = adv.lastSeenAt;
       cleanAdv.callAvailability = adv.callAvailability ?? false;
+      cleanAdv.voiceCallPricePer15Min = adv.voiceCallPricePer15Min !== null ? Number(adv.voiceCallPricePer15Min) : null;
+      cleanAdv.videoCallPricePer15Min = adv.videoCallPricePer15Min !== null ? Number(adv.videoCallPricePer15Min) : null;
+      cleanAdv.offlineVisitingFee = adv.offlineVisitingFee !== null ? Number(adv.offlineVisitingFee) : null;
+      cleanAdv.officeVisitDurationMinutes = adv.officeVisitDurationMinutes !== null ? adv.officeVisitDurationMinutes : null;
+      cleanAdv.pricing = formatPricingSummary(adv);
       return cleanAdv;
     });
 
@@ -348,6 +354,11 @@ export const listAdvocates = async ({
     cleanAdv.isOnline = computeEffectiveOnlineStatus(adv.isOnline, adv.lastSeenAt);
     cleanAdv.lastSeenAt = adv.lastSeenAt;
     cleanAdv.callAvailability = adv.callAvailability ?? false;
+    cleanAdv.voiceCallPricePer15Min = adv.voiceCallPricePer15Min !== null ? Number(adv.voiceCallPricePer15Min) : null;
+    cleanAdv.videoCallPricePer15Min = adv.videoCallPricePer15Min !== null ? Number(adv.videoCallPricePer15Min) : null;
+    cleanAdv.offlineVisitingFee = adv.offlineVisitingFee !== null ? Number(adv.offlineVisitingFee) : null;
+    cleanAdv.officeVisitDurationMinutes = adv.officeVisitDurationMinutes !== null ? adv.officeVisitDurationMinutes : null;
+    cleanAdv.pricing = formatPricingSummary(adv);
     return cleanAdv;
   });
 
@@ -432,9 +443,11 @@ export const getAdvocateDetailsPublic = async (id, currentUserId) => {
     state: advocate.state,
     city: advocate.city,
     pincode: advocate.pincode,
-    videoCallChargePerMinute: advocate.videoCallChargePerMinute,
-    voiceCallChargePerMinute: advocate.voiceCallChargePerMinute,
-    offlineVisitingFee: advocate.offlineVisitingFee,
+    voiceCallPricePer15Min: advocate.voiceCallPricePer15Min !== null ? Number(advocate.voiceCallPricePer15Min) : null,
+    videoCallPricePer15Min: advocate.videoCallPricePer15Min !== null ? Number(advocate.videoCallPricePer15Min) : null,
+    offlineVisitingFee: advocate.offlineVisitingFee !== null ? Number(advocate.offlineVisitingFee) : null,
+    officeVisitDurationMinutes: advocate.officeVisitDurationMinutes !== null ? advocate.officeVisitDurationMinutes : null,
+    pricing: formatPricingSummary(advocate),
     averageRating: advocate.averageRating,
     totalReviews: advocate.totalReviews,
     status: advocate.status,

@@ -1,5 +1,6 @@
 import prisma from '../lib/prisma.js';
 import { computeEffectiveOnlineStatus } from '../utils/advocateStatus.js';
+import { formatPricingSummary } from './advocateBooking/pricing.js';
 
 /**
  * Normal User likes an Advocate.
@@ -132,9 +133,11 @@ export const getUserLikedAdvocates = async (userId) => {
         city: adv.city,
         // TODO: remove fallback after backfill-office-address --apply
         officeAddress: adv.officeAddress || adv.completeAddress || null,
-        videoCallChargePerMinute: adv.videoCallChargePerMinute !== null ? Number(adv.videoCallChargePerMinute) : null,
-        voiceCallChargePerMinute: adv.voiceCallChargePerMinute !== null ? Number(adv.voiceCallChargePerMinute) : null,
+        voiceCallPricePer15Min: adv.voiceCallPricePer15Min !== null ? Number(adv.voiceCallPricePer15Min) : null,
+        videoCallPricePer15Min: adv.videoCallPricePer15Min !== null ? Number(adv.videoCallPricePer15Min) : null,
         offlineVisitingFee: adv.offlineVisitingFee !== null ? Number(adv.offlineVisitingFee) : null,
+        officeVisitDurationMinutes: adv.officeVisitDurationMinutes !== null ? adv.officeVisitDurationMinutes : null,
+        pricing: formatPricingSummary(adv),
         averageRating: adv.averageRating !== null ? Number(adv.averageRating) : null,
         totalReviews: adv.totalReviews,
         status: adv.status,

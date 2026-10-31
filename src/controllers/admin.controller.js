@@ -18,6 +18,7 @@ import * as blogValidator from '../validators/blog.validator.js';
 import { getCurrentUserProfile } from '../services/auth.service.js';
 import { checkUserPermission } from '../services/rbac.service.js';
 import { deleteFromCloudinary } from '../services/cloudinary.service.js';
+import { formatPricingSummary } from '../services/advocateBooking/pricing.js';
 
 /**
  * Admin / Staff Unified Login
@@ -709,7 +710,15 @@ export const listPendingAdvocates = async (req, res, next) => {
  */
 export const formatAdvocateReviewData = (advocate) => {
   if (!advocate) return null;
-  const { passwordHash, aadhaarNumber, completeAddress, officePhotoPublicId, pendingOfficeChange, pendingProfileChange, ...safeAdvocate } = advocate;
+  const {
+    passwordHash,
+    aadhaarNumber,
+    completeAddress,
+    officePhotoPublicId,
+    pendingOfficeChange,
+    pendingProfileChange,
+    ...safeAdvocate
+  } = advocate;
 
   const officeLatitude = advocate.officeLatitude ?? null;
   const officeLongitude = advocate.officeLongitude ?? null;
@@ -727,8 +736,15 @@ export const formatAdvocateReviewData = (advocate) => {
     changedFields: advocate.pendingProfileChange ? Object.keys(advocate.pendingProfileChange) : []
   } : null;
 
+  const pricing = formatPricingSummary(advocate);
+
   return {
     ...safeAdvocate,
+    voiceCallPricePer15Min: advocate.voiceCallPricePer15Min !== null ? Number(advocate.voiceCallPricePer15Min) : null,
+    videoCallPricePer15Min: advocate.videoCallPricePer15Min !== null ? Number(advocate.videoCallPricePer15Min) : null,
+    offlineVisitingFee: advocate.offlineVisitingFee !== null ? Number(advocate.offlineVisitingFee) : null,
+    officeVisitDurationMinutes: advocate.officeVisitDurationMinutes !== null ? advocate.officeVisitDurationMinutes : null,
+    pricing,
     name: advocate.fullName,
     barId: advocate.barCouncilId,
     profileImage: advocate.profilePhotoUrl,
@@ -933,11 +949,37 @@ export const updateAdvocateProfileByAdmin = async (req, res, next) => {
     if (validated.bestPracticeArea !== undefined) updateData.bestPracticeArea = validated.bestPracticeArea;
     if (validated.topCourtPractised !== undefined) updateData.topCourtPractised = validated.topCourtPractised;
     if (validated.courtPractice !== undefined) updateData.courtPractice = validated.courtPractice;
+    if (validated.voiceCallPricePer15Min !== undefined) updateData.voiceCallPricePer15Min = validated.voiceCallPricePer15Min;
+    if (validated.videoCallPricePer15Min !== undefined) updateData.videoCallPricePer15Min = validated.videoCallPricePer15Min;
     if (validated.offlineVisitingFee !== undefined) updateData.offlineVisitingFee = validated.offlineVisitingFee;
+    if (validated.officeVisitDurationMinutes !== undefined) updateData.officeVisitDurationMinutes = validated.officeVisitDurationMinutes;
     if (validated.state !== undefined) updateData.state = validated.state;
     if (validated.city !== undefined) updateData.city = validated.city;
     if (validated.pincode !== undefined) updateData.pincode = validated.pincode;
     if (validated.officeAddress !== undefined) updateData.officeAddress = validated.officeAddress;
+
+    // Validate merged office visit pair (fee + duration) only when at least one is being updated
+    if (validated.offlineVisitingFee !== undefined || validated.officeVisitDurationMinutes !== undefined) {
+      const liveFee = advocate.offlineVisitingFee != null ? Number(advocate.offlineVisitingFee) : null;
+      const liveDuration = advocate.officeVisitDurationMinutes != null ? advocate.officeVisitDurationMinutes : null;
+
+      const effectiveOfflineFee = validated.offlineVisitingFee !== undefined
+        ? validated.offlineVisitingFee
+        : liveFee;
+      const effectiveOfficeDuration = validated.officeVisitDurationMinutes !== undefined
+        ? validated.officeVisitDurationMinutes
+        : liveDuration;
+
+      const hasMergedFee = effectiveOfflineFee !== null && effectiveOfflineFee !== undefined && !Number.isNaN(effectiveOfflineFee);
+      const hasMergedDuration = effectiveOfficeDuration !== null && effectiveOfficeDuration !== undefined;
+
+      if (hasMergedFee !== hasMergedDuration) {
+        return res.status(400).json({
+          success: false,
+          message: 'offlineVisitingFee and officeVisitDurationMinutes must both be set, or both be null.'
+        });
+      }
+    }
 
     // Aliases
     if (validated.bio !== undefined) {
@@ -950,18 +992,6 @@ export const updateAdvocateProfileByAdmin = async (req, res, next) => {
       updateData.experienceYears = validated.experience;
     } else if (validated.experienceYears !== undefined) {
       updateData.experienceYears = validated.experienceYears;
-    }
-
-    if (validated.videoChargePerMinute !== undefined) {
-      updateData.videoCallChargePerMinute = validated.videoChargePerMinute;
-    } else if (validated.videoCallChargePerMinute !== undefined) {
-      updateData.videoCallChargePerMinute = validated.videoCallChargePerMinute;
-    }
-
-    if (validated.voiceChargePerMinute !== undefined) {
-      updateData.voiceCallChargePerMinute = validated.voiceChargePerMinute;
-    } else if (validated.voiceCallChargePerMinute !== undefined) {
-      updateData.voiceCallChargePerMinute = validated.voiceCallChargePerMinute;
     }
 
     if (validated.languages !== undefined) {
@@ -979,7 +1009,7 @@ export const updateAdvocateProfileByAdmin = async (req, res, next) => {
 
     // Compute changedFields
     const changedFields = [];
-    const decimalFields = ['videoCallChargePerMinute', 'voiceCallChargePerMinute', 'offlineVisitingFee', 'officeLatitude', 'officeLongitude'];
+    const decimalFields = ['voiceCallPricePer15Min', 'videoCallPricePer15Min', 'offlineVisitingFee', 'officeLatitude', 'officeLongitude'];
     const arrayFields = ['languagesSpoken', 'courtPractice', 'practiceAreas'];
 
     for (const key of Object.keys(updateData)) {
@@ -1594,8 +1624,8 @@ export const approveAdvocateProfileChange = async (req, res, next) => {
     const updateData = {};
 
     const scalarFields = [
-      'experienceYears', 'about', 'videoCallChargePerMinute', 'voiceCallChargePerMinute',
-      'offlineVisitingFee', 'officeAddress', 'pincode', 'city', 'state'
+      'experienceYears', 'about', 'voiceCallPricePer15Min', 'videoCallPricePer15Min',
+      'offlineVisitingFee', 'officeVisitDurationMinutes', 'officeAddress', 'pincode', 'city', 'state'
     ];
     for (const f of scalarFields) {
       if (requested[f] !== undefined) {
