@@ -33,6 +33,14 @@ router.patch('/advocates/:advocateId/call-availability', requireAuth, requirePer
 router.patch('/advocates/:advocateId/cancel-deletion', requireAuth, requirePermission('advocates:delete'), generalLimiter, adminController.cancelAdvocateDeletion);
 router.delete('/advocates/:advocateId/permanent', requireAuth, requirePermission('advocates:delete'), generalLimiter, adminController.permanentDeleteAdvocate);
 
+// Advocate Withdrawals & Payouts Management
+router.get('/withdrawals', requireAuth, requirePermission('payouts:view'), generalLimiter, adminController.listAdminWithdrawals);
+router.get('/withdrawals/:id', requireAuth, requirePermission('payouts:view'), generalLimiter, adminController.getAdminWithdrawalDetails);
+router.post('/withdrawals/:id/approve', requireAuth, requirePermission('payouts:manage'), generalLimiter, adminController.approveWithdrawal);
+router.post('/withdrawals/:id/mark-paid', requireAuth, requirePermission('payouts:manage'), generalLimiter, adminController.markWithdrawalPaid);
+router.post('/withdrawals/:id/reject', requireAuth, requirePermission('payouts:manage'), generalLimiter, adminController.rejectWithdrawal);
+router.get('/advocates/:advocateId/earnings', requireAuth, requirePermission('payouts:view'), generalLimiter, adminController.getAdminAdvocateEarnings);
+
 // RBAC Management Routes (Roles, Permissions, User Role Assignments, Users List)
 router.use('/', rbacRoutes);
 

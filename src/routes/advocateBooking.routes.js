@@ -63,6 +63,51 @@ advocateAppointmentRouter.patch(
 );
 
 // -------------------------------------------------------------
+// Advocate Earnings & Payout / Withdrawal Routes (Requires ADVOCATE role)
+// -------------------------------------------------------------
+export const advocateEarningsRouter = express.Router();
+
+advocateEarningsRouter.get(
+  '/earnings',
+  requireAuth,
+  requireRole('ADVOCATE'),
+  generalLimiter,
+  advocateBookingController.getAdvocateEarnings
+);
+
+advocateEarningsRouter.get(
+  '/payout-account',
+  requireAuth,
+  requireRole('ADVOCATE'),
+  generalLimiter,
+  advocateBookingController.getAdvocatePayoutAccount
+);
+
+advocateEarningsRouter.post(
+  '/withdrawals',
+  requireAuth,
+  requireRole('ADVOCATE'),
+  generalLimiter,
+  advocateBookingController.requestAdvocateWithdrawal
+);
+
+advocateEarningsRouter.get(
+  '/withdrawals',
+  requireAuth,
+  requireRole('ADVOCATE'),
+  generalLimiter,
+  advocateBookingController.getAdvocateWithdrawals
+);
+
+advocateEarningsRouter.get(
+  '/withdrawals/:id',
+  requireAuth,
+  requireRole('ADVOCATE'),
+  generalLimiter,
+  advocateBookingController.getAdvocateWithdrawalById
+);
+
+// -------------------------------------------------------------
 // Admin Advocate Booking Routes (Requires advocate_bookings:view)
 // -------------------------------------------------------------
 adminAdvocateBookingRouter.get(

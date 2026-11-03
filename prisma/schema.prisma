@@ -314,6 +314,9 @@ model Advocate {
   passwordResets       AdvocatePasswordReset[]
   bookings             AdvocateBooking[]
   feedbacks            Feedback[]
+  earningLedgerEntries AdvocateEarningLedger[]
+  payoutAccount        AdvocatePayoutAccount?
+  withdrawals          AdvocateWithdrawal[]
 }
 
 model AdvocatePasswordReset {
@@ -724,6 +727,7 @@ model AdvocateBooking {
   user               User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
   advocate           Advocate              @relation(fields: [advocateId], references: [id], onDelete: Restrict)
   payment            Payment?
+  earningLedgerEntries AdvocateEarningLedger[]
 
   @@index([advocateId, startAt])
   @@index([userId, createdAt])
@@ -953,4 +957,68 @@ model UserRole {
   @@index([userId])
   @@index([roleId])
   @@index([userType])
+}
+
+model AdvocateEarningLedger {
+  id                String              @id @default(uuid())
+  advocateId        String
+  type              String              // BOOKING_EARNING | WITHDRAWAL_HOLD | WITHDRAWAL_RELEASE | REFUND_REVERSAL | ADJUSTMENT
+  amountPaise       Int                 // + credit, - debit
+  advocateBookingId String?
+  withdrawalId      String?
+  note              String?
+  createdBy         String?             // "system" | admin/staff id
+  createdAt         DateTime            @default(now())
+
+  advocate          Advocate            @relation(fields: [advocateId], references: [id], onDelete: Restrict)
+  advocateBooking   AdvocateBooking?    @relation(fields: [advocateBookingId], references: [id], onDelete: Restrict)
+  withdrawal        AdvocateWithdrawal? @relation(fields: [withdrawalId], references: [id], onDelete: Restrict)
+
+  @@unique([type, advocateBookingId])
+  @@index([advocateId, createdAt])
+}
+
+model AdvocatePayoutAccount {
+  id                     String   @id @default(uuid())
+  advocateId             String   @unique
+  accountHolderName      String
+  accountNumberEncrypted String
+  accountNumberLast4     String
+  ifsc                   String
+  bankName               String
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  advocate               Advocate @relation(fields: [advocateId], references: [id], onDelete: Restrict)
+}
+
+model AdvocateWithdrawal {
+  id                     String                  @id @default(uuid())
+  withdrawalId           String                  @unique // VSW-...
+  advocateId             String
+  amountPaise            Int
+  status                 String                  // REQUESTED | APPROVED | PAID | REJECTED
+  accountHolderName      String
+  accountNumberEncrypted String
+  accountNumberLast4     String
+  ifsc                   String
+  bankName               String
+  bankAccountChanged     Boolean                 @default(false)
+  holderNameMatches      Boolean                 @default(true) // vs advocate fullName (normalized)
+  approvedAt             DateTime?
+  approvedBy             String?
+  paidAt                 DateTime?
+  paidBy                 String?
+  utr                    String?
+  rejectedAt             DateTime?
+  rejectedBy             String?
+  rejectionReason        String?
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+
+  advocate               Advocate                @relation(fields: [advocateId], references: [id], onDelete: Restrict)
+  ledgerEntries          AdvocateEarningLedger[]
+
+  @@index([advocateId, status])
+  @@index([status, createdAt])
 }

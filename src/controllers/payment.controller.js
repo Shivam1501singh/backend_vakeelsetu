@@ -13,6 +13,7 @@ import {
   verifyCheckoutSignature,
   formatPayment
 } from '../services/payment.service.js';
+import { reverseBookingEarningOnRefund } from '../services/advocateEarnings.service.js';
 
 // Cache for throttling status syncs (paymentId -> lastSyncTimestamp)
 const syncThrottleMap = new Map();
@@ -703,12 +704,18 @@ export const adminRefundPayment = async (req, res, next) => {
     }
 
     if (payment.advocateBookingId) {
-      await prisma.advocateBooking.update({
-        where: { id: payment.advocateBookingId },
-        data: {
-          status: isProcessedImmediately ? 'REFUNDED' : 'REFUND_PENDING',
-          refundedAt: isProcessedImmediately ? new Date() : null,
-          refundReason: validated.reason
+      await prisma.$transaction(async (tx) => {
+        await tx.advocateBooking.update({
+          where: { id: payment.advocateBookingId },
+          data: {
+            status: isProcessedImmediately ? 'REFUNDED' : 'REFUND_PENDING',
+            refundedAt: isProcessedImmediately ? new Date() : null,
+            refundReason: validated.reason
+          }
+        });
+
+        if (isProcessedImmediately) {
+          await reverseBookingEarningOnRefund(payment.advocateBookingId, req.user?.id, tx);
         }
       });
     }

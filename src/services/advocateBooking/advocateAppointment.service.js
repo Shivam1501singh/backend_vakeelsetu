@@ -1,4 +1,5 @@
 import prisma from '../../lib/prisma.js';
+import { creditBookingEarning } from '../advocateEarnings.service.js';
 
 export const getAdvocateAppointments = async (advocateId, { status = 'UPCOMING', date, page = 1, limit = 10 } = {}) => {
   const now = new Date();
@@ -230,12 +231,17 @@ export const completeAdvocateAppointment = async (advocateId, appointmentId) => 
     throw error;
   }
 
-  const updated = await prisma.advocateBooking.update({
-    where: { id: appointmentId },
-    data: {
-      status: 'COMPLETED',
-      completedAt: now
-    }
+  const updated = await prisma.$transaction(async (tx) => {
+    const updatedBooking = await tx.advocateBooking.update({
+      where: { id: appointmentId },
+      data: {
+        status: 'COMPLETED',
+        completedAt: now
+      }
+    });
+
+    await creditBookingEarning(updatedBooking.id, tx);
+    return updatedBooking;
   });
 
   return {

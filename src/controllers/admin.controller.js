@@ -11,8 +11,12 @@ import {
   updateStaffRolesSchema,
   adminAdvocateProfileUpdateSchema,
   rejectOfficeChangeSchema,
-  rejectProfileChangeSchema
+  rejectProfileChangeSchema,
+  adminMarkPaidWithdrawalSchema,
+  adminRejectWithdrawalSchema,
+  adminWithdrawalListQuerySchema
 } from '../validators/admin.validator.js';
+import * as advocateEarningsService from '../services/advocateEarnings.service.js';
 import { APPROVAL_FIELDS, FIELD_LABELS } from './advocate.profile.controller.js';
 import * as blogValidator from '../validators/blog.validator.js';
 import { getCurrentUserProfile } from '../services/auth.service.js';
@@ -1732,6 +1736,122 @@ export const rejectAdvocateProfileChange = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: 'Profile changes rejected.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Admin: List withdrawals (payouts:view)
+ * GET /api/admin/withdrawals
+ */
+export const listAdminWithdrawals = async (req, res, next) => {
+  try {
+    const query = adminWithdrawalListQuerySchema.parse(req.query);
+    const result = await advocateEarningsService.listAdminWithdrawals(query);
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Admin: Get single withdrawal details (payouts:view; full account if payouts:manage)
+ * GET /api/admin/withdrawals/:id
+ */
+export const getAdminWithdrawalDetails = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const isAdmin =
+      (req.user.role || req.user.type || '').toUpperCase() === 'ADMIN' ||
+      req.user.type?.toLowerCase() === 'admin';
+    const canManage =
+      isAdmin || (await checkUserPermission(req.user.id, ['payouts:manage'], req.user.type));
+
+    const result = await advocateEarningsService.getAdminWithdrawalDetails(id, { canManage });
+    return res.status(200).json({
+      success: true,
+      withdrawal: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Admin: Approve withdrawal (payouts:manage)
+ * POST /api/admin/withdrawals/:id/approve
+ */
+export const approveWithdrawal = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await advocateEarningsService.approveWithdrawal(id, req.user);
+    return res.status(200).json({
+      success: true,
+      message: 'Withdrawal approved.',
+      withdrawal: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Admin: Mark withdrawal as PAID with UTR (payouts:manage)
+ * POST /api/admin/withdrawals/:id/mark-paid
+ */
+export const markWithdrawalPaid = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const validated = adminMarkPaidWithdrawalSchema.parse(req.body);
+    const result = await advocateEarningsService.markWithdrawalPaid(id, validated, req.user);
+    return res.status(200).json({
+      success: true,
+      message: 'Withdrawal marked as PAID.',
+      withdrawal: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Admin: Reject withdrawal and release held funds (payouts:manage)
+ * POST /api/admin/withdrawals/:id/reject
+ */
+export const rejectWithdrawal = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const validated = adminRejectWithdrawalSchema.parse(req.body);
+    const result = await advocateEarningsService.rejectWithdrawal(id, validated, req.user);
+    return res.status(200).json({
+      success: true,
+      message: 'Withdrawal rejected and held funds released.',
+      withdrawal: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Admin: Get advocate earnings and ledger summary (payouts:view)
+ * GET /api/admin/advocates/:advocateId/earnings
+ */
+export const getAdminAdvocateEarnings = async (req, res, next) => {
+  try {
+    const { advocateId } = req.params;
+    const page = req.query.page;
+    const limit = req.query.limit;
+
+    const result = await advocateEarningsService.getAdvocateEarningsAndLedger(advocateId, { page, limit });
+    return res.status(200).json({
+      success: true,
+      ...result
     });
   } catch (error) {
     next(error);

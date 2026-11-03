@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import prisma from '../lib/prisma.js';
 import { verifyWebhookSignature, syncPaymentFromRazorpay } from '../services/payment.service.js';
+import { reverseBookingEarningOnRefund } from '../services/advocateEarnings.service.js';
 
 /**
  * Public Webhook endpoint for Razorpay events
@@ -109,6 +110,7 @@ export const handleRazorpayWebhook = async (req, res) => {
                   refundedAt: new Date()
                 }
               });
+              await reverseBookingEarningOnRefund(payment.advocateBookingId, 'webhook:refund.processed');
             }
           }
         }

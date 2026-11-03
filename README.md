@@ -13591,3 +13591,450 @@ Open any of these files in a browser to inspect typography, color contrast, and 
    - The payment is marked `PAID`.
    - The email error is logged without failing the HTTP request.
    - Restore valid SMTP credentials and call `GET /api/internal/cron/payments-reconcile` (with `Authorization: Bearer <CRON_SECRET>`). Confirm that both missing confirmation emails are dispatched and timestamps populated.
+
+---
+
+## 37. Advocate Earnings & Withdrawals — Postman Guide
+
+### 1. Overview & Business Rules
+
+The Advocate Earnings & Withdrawal system tracks lawyer compensation via an immutable double-entry ledger, allows advocates to withdraw their consultation earnings into their bank account, and provides an administrative approval and payment pipeline.
+
+```mermaid
+stateDiagram-v2
+    [*] --> REQUESTED: Advocate Submits Withdrawal Form (Funds Held)
+    REQUESTED --> APPROVED: Admin Approves (payouts:manage)
+    REQUESTED --> REJECTED: Admin Rejects (Reason Required, Funds Released)
+    APPROVED --> PAID: Admin Transfers Manually & Enters UTR (payouts:manage)
+    APPROVED --> REJECTED: Admin Rejects (Funds Released)
+    PAID --> [*]
+    REJECTED --> [*]
+```
+
+#### Core Financial Rules
+1. **Earning = Consultation Fee Only:**
+   The advocate receives strictly their consultation fee (`booking.feePaise` snapshot). GST and platform convenience fees belong to the tax authority and platform, respectively. No commission is deducted.
+2. **Instant Credit on Completion:**
+   The earning becomes available the moment the appointment is marked `COMPLETED`. There is no waiting or lock-in period.
+3. **Double-Entry Ledger (No Stored Balance Column):**
+   Available balance is dynamically computed as `SUM(amountPaise)` across all ledger entries in `AdvocateEarningLedger`.
+4. **Summary Metrics:**
+   - **`available`**: `SUM(amountPaise)` from the ledger. This represents currently withdrawable funds.
+   - **`pending`**: Sum of fees for `CONFIRMED` appointments (paid by client, but not yet completed). Informational only.
+   - **`inProcess`**: Sum of withdrawals currently in `REQUESTED` or `APPROVED` status.
+   - **`withdrawn`**: Sum of withdrawals in `PAID` status.
+   - **`totalEarned`**: Booking earnings minus refund reversals (`SUM(amountPaise)` where type is `BOOKING_EARNING` or `REFUND_REVERSAL`).
+5. **Withdrawal Hold at Request Time:**
+   When a withdrawal request is submitted, a `WITHDRAWAL_HOLD` (`-amountPaise`) entry is written to the ledger immediately, reducing `available` balance in real-time.
+   - If **Rejected**: a `WITHDRAWAL_RELEASE` (`+amountPaise`) entry restores the held amount.
+   - If **Paid**: no further ledger debit is required (the amount was already held).
+6. **One Open Request Rule:**
+   An advocate can have at most **ONE** open withdrawal request (`REQUESTED` or `APPROVED`) at any given time. Subsequent requests return `409 Conflict`.
+7. **Minimum Amount:**
+   `amount >= MIN_WITHDRAWAL_AMOUNT` (configured via env, default ₹500.00).
+8. **Refund of Completed Booking (Negative Balance Recovery):**
+   When the Main Admin executes a force refund on a `COMPLETED` booking:
+   - A `REFUND_REVERSAL` (`-booking.feePaise`) entry is added in the same transaction.
+   - If the advocate has already withdrawn their earnings, `available` balance will go **negative**.
+   - The negative balance is automatically recovered from future booking earnings; withdrawals remain blocked until balance exceeds the minimum withdrawal amount.
+9. **Bank Details Prefill & Masking:**
+   - Saved into `AdvocatePayoutAccount` on withdrawal submission so the form is prefilled on subsequent requests.
+   - Account numbers are **encrypted at rest** using AES-256-GCM.
+   - Full account numbers are never exposed in advocate APIs or admin list responses (masked as `XXXXXX1234`). Only admins with `payouts:manage` permission can view the decrypted number on the detail page.
+
+---
+
+### 2. Environment Variables
+
+Add the following to your `.env`:
+
+```env
+# Minimum withdrawal amount in Rupees (Default: 500)
+MIN_WITHDRAWAL_AMOUNT=500
+
+# 32-byte encryption key for bank account numbers at rest (Base64)
+# Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+PAYOUT_ENCRYPTION_KEY=your_base64_32_byte_key_here
+
+# Withdrawal ID template (Default: VSW-{YYYY}{MONTH_LETTER}{RAND6})
+WITHDRAWAL_ID_FORMAT="VSW-{YYYY}{MONTH_LETTER}{RAND6}"
+```
+
+> [!IMPORTANT]
+> If `PAYOUT_ENCRYPTION_KEY` is missing or invalid, withdrawal and payout-account endpoints return `503 Service Unavailable` with `"Payouts are not configured."` and log an error once.
+
+---
+
+### 3. Endpoints Matrix
+
+| Method | Endpoint | Auth | Permission | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/api/advocate/earnings` | Advocate JWT | `ADVOCATE` role | Get balance summary and paginated earnings ledger |
+| `GET` | `/api/advocate/payout-account` | Advocate JWT | `ADVOCATE` role | Get saved payout bank details (masked) for form prefill |
+| `POST` | `/api/advocate/withdrawals` | Advocate JWT | `ADVOCATE` role | Submit a new withdrawal request |
+| `GET` | `/api/advocate/withdrawals` | Advocate JWT | `ADVOCATE` role | List own withdrawal history (paginated, with status filter) |
+| `GET` | `/api/advocate/withdrawals/:id` | Advocate JWT | `ADVOCATE` role | Get detail of a specific withdrawal request |
+| `GET` | `/api/admin/withdrawals` | Admin / Staff JWT | `payouts:view` | List all withdrawals with status counts, search & date filters |
+| `GET` | `/api/admin/withdrawals/:id` | Admin / Staff JWT | `payouts:view` | Withdrawal detail + advocate ledger history (decrypted account with `payouts:manage`) |
+| `POST` | `/api/admin/withdrawals/:id/approve` | Admin / Staff JWT | `payouts:manage` | Approve a requested withdrawal (`REQUESTED` -> `APPROVED`) |
+| `POST` | `/api/admin/withdrawals/:id/mark-paid` | Admin / Staff JWT | `payouts:manage` | Mark withdrawal as paid with UTR reference (`APPROVED` -> `PAID`) |
+| `POST` | `/api/admin/withdrawals/:id/reject` | Admin / Staff JWT | `payouts:manage` | Reject withdrawal and release held funds back to Available balance |
+| `GET` | `/api/admin/advocates/:advocateId/earnings` | Admin / Staff JWT | `payouts:view` | View any advocate's earnings summary and ledger |
+
+---
+
+### 4. API Requests & Responses Reference
+
+#### 4.1 Advocate: Get Earnings Summary & Ledger
+- **Endpoint:** `GET /api/advocate/earnings?page=1&limit=20`
+- **Headers:** `Authorization: Bearer {{advocate_token}}`
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "summary": {
+    "available": 1530.00,
+    "pending": 510.00,
+    "inProcess": 1000.00,
+    "withdrawn": 2000.00,
+    "totalEarned": 4530.00,
+    "minWithdrawal": 500.00,
+    "canWithdraw": true,
+    "openWithdrawal": null
+  },
+  "ledger": [
+    {
+      "id": "e3b0c442-98fc-1c14-9afbf4c8996fb924",
+      "type": "BOOKING_EARNING",
+      "label": "Booking VLB-2026K9X7Z2 completed",
+      "amount": 510.00,
+      "amountPaise": 51000,
+      "createdAt": "2026-11-03T10:00:00.000Z",
+      "booking": {
+        "bookingId": "VLB-2026K9X7Z2",
+        "mode": "VIDEO_CALL",
+        "scheduledAt": "2026-11-03T10:00:00.000Z",
+        "userName": "Ramesh Kumar"
+      }
+    },
+    {
+      "id": "b1b2c3d4-1234-5678-9abc-def012345678",
+      "type": "WITHDRAWAL_HOLD",
+      "label": "Withdrawal VSW-2026KA1B2C requested",
+      "amount": -1000.00,
+      "amountPaise": -100000,
+      "withdrawalId": "VSW-2026KA1B2C",
+      "createdAt": "2026-11-03T11:00:00.000Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 2,
+    "totalPages": 1,
+    "hasNextPage": false
+  }
+}
+```
+
+#### 4.2 Advocate: Get Saved Payout Account (Prefill)
+- **Endpoint:** `GET /api/advocate/payout-account`
+- **Headers:** `Authorization: Bearer {{advocate_token}}`
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "account": {
+    "accountHolderName": "Adv. Shivam Singh",
+    "accountNumberMasked": "XXXXXX1234",
+    "ifsc": "ABCD0123456",
+    "bankName": "State Bank of India",
+    "updatedAt": "2026-11-03T12:00:00.000Z"
+  }
+}
+```
+*(Returns `"account": null` if no previous withdrawal has been submitted).*
+
+#### 4.3 Advocate: Submit Withdrawal Request
+- **Endpoint:** `POST /api/advocate/withdrawals`
+- **Headers:** `Authorization: Bearer {{advocate_token}}`
+- **Request Body:**
+```json
+{
+  "amount": 1000.00,
+  "accountHolderName": "Adv. Shivam Singh",
+  "accountNumber": "000000001234",
+  "confirmAccountNumber": "000000001234",
+  "ifsc": "ABCD0123456",
+  "bankName": "State Bank of India"
+}
+```
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Withdrawal request submitted.",
+  "withdrawal": {
+    "withdrawalId": "VSW-2026KA1B2C",
+    "amount": 1000.00,
+    "status": "REQUESTED",
+    "bank": {
+      "accountHolderName": "Adv. Shivam Singh",
+      "accountNumberMasked": "XXXXXX1234",
+      "ifsc": "ABCD0123456",
+      "bankName": "State Bank of India"
+    },
+    "createdAt": "2026-11-03T12:05:00.000Z"
+  }
+}
+```
+
+#### 4.4 Admin: List Withdrawals
+- **Endpoint:** `GET /api/admin/withdrawals?status=REQUESTED&page=1&limit=20`
+- **Headers:** `Authorization: Bearer {{admin_token}}` (requires `payouts:view`)
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "withdrawals": [
+    {
+      "id": "c1c2c3c4-1234-5678-9abc-def012345678",
+      "withdrawalId": "VSW-2026KA1B2C",
+      "amount": 1000.00,
+      "status": "REQUESTED",
+      "advocate": {
+        "id": "a1a2a3a4-1234-5678-9abc-def012345678",
+        "name": "Shivam Singh",
+        "phone": "+919876543210",
+        "barCouncilId": "UP/1234/2020"
+      },
+      "bank": {
+        "accountHolderName": "Adv. Shivam Singh",
+        "accountNumberMasked": "XXXXXX1234",
+        "ifsc": "ABCD0123456",
+        "bankName": "State Bank of India"
+      },
+      "flags": {
+        "bankAccountChanged": false,
+        "holderNameMatches": true,
+        "warning": false
+      },
+      "utr": null,
+      "rejectionReason": null,
+      "approvedAt": null,
+      "approvedBy": null,
+      "paidAt": null,
+      "paidBy": null,
+      "rejectedAt": null,
+      "rejectedBy": null,
+      "createdAt": "2026-11-03T12:05:00.000Z"
+    }
+  ],
+  "counts": {
+    "ALL": 15,
+    "REQUESTED": 3,
+    "APPROVED": 2,
+    "PAID": 9,
+    "REJECTED": 1
+  },
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 3,
+    "totalPages": 1,
+    "hasNextPage": false
+  }
+}
+```
+
+#### 4.5 Admin: Get Withdrawal Details
+- **Endpoint:** `GET /api/admin/withdrawals/:id`
+- **Headers:** `Authorization: Bearer {{admin_token}}` (requires `payouts:view`)
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "withdrawal": {
+    "id": "c1c2c3c4-1234-5678-9abc-def012345678",
+    "withdrawalId": "VSW-2026KA1B2C",
+    "amount": 1000.00,
+    "status": "REQUESTED",
+    "advocate": {
+      "id": "a1a2a3a4-1234-5678-9abc-def012345678",
+      "fullName": "Shivam Singh",
+      "phone": "+919876543210",
+      "barCouncilId": "UP/1234/2020",
+      "email": "shivam@example.com"
+    },
+    "bank": {
+      "accountHolderName": "Adv. Shivam Singh",
+      "accountNumberMasked": "XXXXXX1234",
+      "accountNumber": "000000001234",
+      "ifsc": "ABCD0123456",
+      "bankName": "State Bank of India"
+    },
+    "flags": {
+      "bankAccountChanged": false,
+      "holderNameMatches": true,
+      "warning": false
+    },
+    "reviewHistory": {
+      "approvedAt": null,
+      "approvedBy": null,
+      "paidAt": null,
+      "paidBy": null,
+      "utr": null,
+      "rejectedAt": null,
+      "rejectedBy": null,
+      "rejectionReason": null
+    },
+    "advocateSummary": {
+      "available": 530.00,
+      "pending": 510.00,
+      "withdrawn": 2000.00
+    },
+    "recentLedger": [ ... ],
+    "previousWithdrawals": [ ... ],
+    "createdAt": "2026-11-03T12:05:00.000Z",
+    "updatedAt": "2026-11-03T12:05:00.000Z"
+  }
+}
+```
+*(Note: `bank.accountNumber` is returned unmasked ONLY if the admin token has `payouts:manage` permission; callers with only `payouts:view` receive masked values).*
+
+#### 4.6 Admin: Approve Withdrawal
+- **Endpoint:** `POST /api/admin/withdrawals/:id/approve`
+- **Headers:** `Authorization: Bearer {{admin_token}}` (requires `payouts:manage`)
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Withdrawal approved.",
+  "withdrawal": {
+    "id": "c1c2c3c4-1234-5678-9abc-def012345678",
+    "withdrawalId": "VSW-2026KA1B2C",
+    "status": "APPROVED",
+    "approvedAt": "2026-11-03T12:20:00.000Z",
+    "approvedBy": "admin-user-id"
+  }
+}
+```
+
+#### 4.7 Admin: Mark Paid with UTR
+- **Endpoint:** `POST /api/admin/withdrawals/:id/mark-paid`
+- **Headers:** `Authorization: Bearer {{admin_token}}` (requires `payouts:manage`)
+- **Request Body:**
+```json
+{
+  "utr": "UTR123456789012",
+  "paidAt": "2026-11-03T12:30:00.000Z"
+}
+```
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Withdrawal marked as PAID.",
+  "withdrawal": {
+    "id": "c1c2c3c4-1234-5678-9abc-def012345678",
+    "withdrawalId": "VSW-2026KA1B2C",
+    "status": "PAID",
+    "utr": "UTR123456789012",
+    "paidAt": "2026-11-03T12:30:00.000Z",
+    "paidBy": "admin-user-id"
+  }
+}
+```
+
+#### 4.8 Admin: Reject Withdrawal
+- **Endpoint:** `POST /api/admin/withdrawals/:id/reject`
+- **Headers:** `Authorization: Bearer {{admin_token}}` (requires `payouts:manage`)
+- **Request Body:**
+```json
+{
+  "reason": "IFSC code does not match branch address"
+}
+```
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Withdrawal rejected and held funds released.",
+  "withdrawal": {
+    "id": "c1c2c3c4-1234-5678-9abc-def012345678",
+    "withdrawalId": "VSW-2026KA1B2C",
+    "status": "REJECTED",
+    "rejectionReason": "IFSC code does not match branch address",
+    "rejectedAt": "2026-11-03T12:35:00.000Z",
+    "rejectedBy": "admin-user-id"
+  }
+}
+```
+
+---
+
+### 5. Error Codes & Troubleshooting
+
+| Status Code | Message / Cause | Resolution |
+| :--- | :--- | :--- |
+| `400 Bad Request` | `Withdrawal amount must be at least ₹500.` | Enter an amount greater than or equal to `MIN_WITHDRAWAL_AMOUNT`. |
+| `400 Bad Request` | `Amount exceeds your available balance.` | Request an amount less than or equal to `summary.available`. |
+| `400 Bad Request` | `Account numbers do not match.` | Ensure `accountNumber` equals `confirmAccountNumber`. |
+| `400 Bad Request` | `Invalid IFSC code format (e.g. HDFC0001234).` | Verify the 11-character alphanumeric IFSC code format. |
+| `401 Unauthorized` | `Authentication required. Please login.` | Provide a valid `Authorization: Bearer <token>` header. |
+| `403 Forbidden` | `Access forbidden. Insufficient permissions.` | User lacks `payouts:view` or `payouts:manage` RBAC permission. |
+| `404 Not Found` | `Withdrawal request not found.` | Verify the withdrawal ID exists and belongs to the authenticated advocate. |
+| `409 Conflict` | `You already have a withdrawal in process.` | Only one active request is allowed; wait until existing request is `PAID` or `REJECTED`. |
+| `409 Conflict` | `This withdrawal is already APPROVED.` (or `PAID`/`REJECTED`) | State transition is invalid for the withdrawal's current status. |
+| `503 Service Unavailable` | `Payouts are not configured.` | Configure a valid 32-byte base64 `PAYOUT_ENCRYPTION_KEY` in `.env`. |
+
+---
+
+### 6. End-to-End Postman Verification Flow
+
+1. **Advocate Login & Balance Check:**
+   - Log in as an advocate with a `COMPLETED` booking.
+   - Call `GET /api/advocate/earnings`. Confirm `summary.available` equals the booking's consultation fee.
+2. **Initial Payout Account Prefill Check:**
+   - Call `GET /api/advocate/payout-account`. Verify it returns `account: null` on first use.
+3. **Submit Withdrawal Request:**
+   - Call `POST /api/advocate/withdrawals` with amount = ₹1000.00.
+   - Confirm response returns `status: "REQUESTED"` with masked bank details.
+   - Re-check `GET /api/advocate/earnings`: confirm `available` has decreased by ₹1000.00 and `inProcess` increased by ₹1000.00.
+4. **Duplicate Request Prevention (409):**
+   - Call `POST /api/advocate/withdrawals` again while first request is active. Confirm `409 Conflict: You already have a withdrawal in process.`
+5. **Admin List & Detail Review:**
+   - Log in as Admin. Call `GET /api/admin/withdrawals`. Confirm the withdrawal appears in `counts.REQUESTED`.
+   - Call `GET /api/admin/withdrawals/:id`. Confirm that with `payouts:manage`, the full unmasked account number is returned.
+6. **Approval & Payment Transition:**
+   - Call `POST /api/admin/withdrawals/:id/approve`. Status transitions to `APPROVED`.
+   - Call `POST /api/admin/withdrawals/:id/mark-paid` with `utr: "UTR987654321012"`.
+   - As advocate, call `GET /api/advocate/withdrawals/:id`: verify `status: "PAID"` and `utr: "UTR987654321012"`.
+7. **Rejection & Fund Release Flow:**
+   - Submit a new withdrawal request for ₹500.00.
+   - As admin, call `POST /api/admin/withdrawals/:id/reject` with `{ "reason": "Incorrect bank branch" }`.
+   - As advocate, call `GET /api/advocate/earnings`: confirm the held ₹500.00 has been restored to `available`.
+8. **Prefill Verification:**
+   - Call `GET /api/advocate/payout-account`: confirm the masked account number and bank info are returned for prefill.
+9. **Boundary & Validation Checks:**
+   - Submit amount < ₹500.00 -> `400 Bad Request`.
+   - Submit amount > `available` -> `400 Bad Request`.
+
+---
+
+### 7. Historical Earnings Backfill Procedure
+
+To credit earnings for bookings completed prior to this migration:
+
+```bash
+# 1. Execute DB migration
+npx prisma migrate deploy
+
+# 2. Deploy the backend code update
+
+# 3. Perform a dry-run check (Prints candidates and totals, zero DB writes)
+node scripts/backfill-advocate-earnings.js --dry-run
+
+# 4. Apply backfill to database (Executed by Administrator)
+node scripts/backfill-advocate-earnings.js --apply
+```

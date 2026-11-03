@@ -1,10 +1,12 @@
 import * as advocateBookingService from '../services/advocateBooking/advocateBooking.service.js';
 import * as advocateAppointmentService from '../services/advocateBooking/advocateAppointment.service.js';
+import * as advocateEarningsService from '../services/advocateEarnings.service.js';
 import {
   bookingQuoteSchema,
   advocateCheckoutSchema,
   advocateAppointmentQuerySchema
 } from '../validators/advocateBooking.validator.js';
+import { advocateWithdrawalRequestSchema } from '../validators/advocate.validator.js';
 import { checkoutVerifySchema } from '../validators/payment.validator.js';
 import { verifyCheckoutSignature, syncPaymentFromRazorpay, formatPayment } from '../services/payment.service.js';
 import prisma from '../lib/prisma.js';
@@ -246,6 +248,101 @@ export const completeAdvocateAppointment = async (req, res, next) => {
       success: true,
       message: 'Appointment marked as completed.',
       appointment: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Advocate: Get earnings summary and ledger
+ * GET /api/advocate/earnings
+ */
+export const getAdvocateEarnings = async (req, res, next) => {
+  try {
+    const advocateId = req.user.id;
+    const page = req.query.page;
+    const limit = req.query.limit;
+
+    const result = await advocateEarningsService.getAdvocateEarningsAndLedger(advocateId, { page, limit });
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Advocate: Get saved payout account (masked)
+ * GET /api/advocate/payout-account
+ */
+export const getAdvocatePayoutAccount = async (req, res, next) => {
+  try {
+    const advocateId = req.user.id;
+    const account = await advocateEarningsService.getAdvocatePayoutAccount(advocateId);
+    return res.status(200).json({
+      success: true,
+      account
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Advocate: Submit withdrawal request
+ * POST /api/advocate/withdrawals
+ */
+export const requestAdvocateWithdrawal = async (req, res, next) => {
+  try {
+    const advocateId = req.user.id;
+    const validated = advocateWithdrawalRequestSchema.parse(req.body);
+
+    const withdrawal = await advocateEarningsService.requestWithdrawal(advocateId, validated);
+    return res.status(200).json({
+      success: true,
+      message: 'Withdrawal request submitted.',
+      withdrawal
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Advocate: List own withdrawal requests
+ * GET /api/advocate/withdrawals
+ */
+export const getAdvocateWithdrawals = async (req, res, next) => {
+  try {
+    const advocateId = req.user.id;
+    const { status, page, limit } = req.query;
+
+    const result = await advocateEarningsService.getAdvocateWithdrawals(advocateId, { status, page, limit });
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Advocate: Get single withdrawal detail
+ * GET /api/advocate/withdrawals/:id
+ */
+export const getAdvocateWithdrawalById = async (req, res, next) => {
+  try {
+    const advocateId = req.user.id;
+    const { id } = req.params;
+
+    const withdrawal = await advocateEarningsService.getAdvocateWithdrawalById(advocateId, id);
+    return res.status(200).json({
+      success: true,
+      withdrawal
     });
   } catch (error) {
     next(error);

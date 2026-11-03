@@ -504,4 +504,39 @@ export const updateAdvocateOnlineStatusSchema = z.object({
   })
 }).strict();
 
+export const advocateWithdrawalRequestSchema = z.object({
+  amount: z.union([z.number(), z.string()])
+    .transform((val) => {
+      const num = typeof val === 'number' ? val : parseFloat(val);
+      return num;
+    })
+    .refine((num) => !isNaN(num) && num > 0, { message: 'Amount must be a positive number.' })
+    .refine((num) => {
+      // At most 2 decimal places
+      return Math.round(num * 100) === Number((num * 100).toFixed(4));
+    }, {
+      message: 'Amount cannot have more than 2 decimal places.'
+    }),
+  accountHolderName: z.string({ required_error: 'Account holder name is required.' })
+    .trim()
+    .min(2, { message: 'Account holder name must be at least 2 characters.' })
+    .max(100, { message: 'Account holder name cannot exceed 100 characters.' }),
+  accountNumber: z.string({ required_error: 'Account number is required.' })
+    .trim()
+    .regex(/^\d{9,18}$/, { message: 'Account number must be between 9 and 18 digits.' }),
+  confirmAccountNumber: z.string({ required_error: 'Confirm account number is required.' })
+    .trim(),
+  ifsc: z.string({ required_error: 'IFSC is required.' })
+    .trim()
+    .toUpperCase()
+    .regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, { message: 'Invalid IFSC code format (e.g. HDFC0001234).' }),
+  bankName: z.string({ required_error: 'Bank name is required.' })
+    .trim()
+    .min(2, { message: 'Bank name must be at least 2 characters.' })
+    .max(100, { message: 'Bank name cannot exceed 100 characters.' })
+}).strict().refine((data) => data.accountNumber === data.confirmAccountNumber, {
+  message: 'Account numbers do not match.',
+  path: ['confirmAccountNumber']
+});
+
 

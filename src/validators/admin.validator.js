@@ -85,4 +85,31 @@ export const adminAdvocateProfileUpdateSchema = advocateProfileUpdateBaseSchema.
   message: 'Provide at least one field to update.'
 });
 
+export const adminMarkPaidWithdrawalSchema = z.object({
+  utr: z.string({ required_error: 'UTR / bank reference number is required.' })
+    .trim()
+    .min(6, { message: 'UTR must be at least 6 characters.' })
+    .max(40, { message: 'UTR cannot exceed 40 characters.' })
+    .regex(/^[a-zA-Z0-9_-]+$/, { message: 'UTR must be alphanumeric.' }),
+  paidAt: z.string()
+    .datetime({ message: 'paidAt must be a valid ISO datetime string.' })
+    .optional()
+}).strict();
+
+export const adminRejectWithdrawalSchema = z.object({
+  reason: z.string({ required_error: 'Rejection reason is required.' })
+    .trim()
+    .min(5, { message: 'Rejection reason must be at least 5 characters.' })
+    .max(500, { message: 'Rejection reason cannot exceed 500 characters.' })
+}).strict();
+
+export const adminWithdrawalListQuerySchema = z.object({
+  status: z.enum(['REQUESTED', 'APPROVED', 'PAID', 'REJECTED', 'ALL']).optional().default('ALL'),
+  search: z.string().trim().optional(),
+  from: z.string().trim().optional(),
+  to: z.string().trim().optional(),
+  page: z.union([z.number(), z.string()]).optional(),
+  limit: z.union([z.number(), z.string()]).optional()
+});
+
 

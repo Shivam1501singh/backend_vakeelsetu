@@ -44,7 +44,8 @@ import myBookingsRouter from './routes/myBookings.routes.js';
 import {
   userAdvocateBookingRouter,
   advocateAppointmentRouter,
-  adminAdvocateBookingRouter
+  adminAdvocateBookingRouter,
+  advocateEarningsRouter
 } from './routes/advocateBooking.routes.js';
 
 
@@ -130,6 +131,7 @@ app.use('/api/user/payments', userPaymentsRouter);
 app.use('/api/user/bookings', myBookingsRouter);
 app.use('/api/user/advocate-bookings', userAdvocateBookingRouter);
 app.use('/api/advocate/appointments', advocateAppointmentRouter);
+app.use('/api/advocate', advocateEarningsRouter);
 app.use('/api/admin/advocate-bookings', adminAdvocateBookingRouter);
 app.use('/api/admin/consultancy', adminConsultancyRouter);
 app.use('/api/admin/payments', adminPaymentRouter);
