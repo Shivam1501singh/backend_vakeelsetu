@@ -5,15 +5,19 @@ import {
 } from '../validators/feedback.validator.js';
 
 /**
- * User: Submit feedback
- * POST /api/user/feedback or POST /api/feedback
+ * User / Advocate: Submit feedback
+ * POST /api/user/feedback, POST /api/advocate/feedback or POST /api/feedback
  */
 export const submitFeedback = async (req, res, next) => {
   try {
     const validated = createFeedbackSchema.parse(req.body);
 
+    const rawRole = (req.user?.role || req.user?.type || 'USER').toUpperCase();
+    const userType = rawRole === 'ADVOCATE' ? 'ADVOCATE' : 'USER';
+
     const data = await feedbackService.submitFeedback({
-      userId: req.user.id,
+      accountId: req.user.id,
+      userType,
       description: validated.description
     });
 
@@ -37,7 +41,8 @@ export const adminListFeedbacks = async (req, res, next) => {
 
     const result = await feedbackService.listFeedbacksAdmin({
       page: query.page,
-      limit: query.limit
+      limit: query.limit,
+      userType: query.userType
     });
 
     return res.status(200).json({

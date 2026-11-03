@@ -7345,12 +7345,12 @@ GET /api/acts/00000000-0000-0000-0000-000000000000/search?q=property
 
 ---
 
-## 40. Feedback APIs – User & Admin
+## 40. Feedback APIs – User, Advocate & Admin
 
 ### Feature Overview
-The Feedback feature allows authenticated users to submit feedback regarding their experience on the VakeelSetu platform. The user's name and phone number are automatically populated from their authenticated profile in the database, requiring the user to supply only the feedback description. 
+The Feedback feature allows authenticated **Users** and **Advocates** to submit feedback regarding their experience on the VakeelSetu platform. The submitter's name and phone number are automatically populated from their authenticated profile in the database, requiring them to supply only the feedback description.
 
-Platform administrators can review submitted feedbacks in reverse chronological order (latest first) with pagination support and delete individual feedback entries.
+Platform administrators can review submitted feedbacks in reverse chronological order (latest first) with pagination support, filter by `userType` (`USER` or `ADVOCATE`), and delete individual feedback entries.
 
 ---
 
@@ -7359,7 +7359,8 @@ Platform administrators can review submitted feedbacks in reverse chronological 
 | Role | Method | Endpoint | Description | Auth Required |
 | :--- | :--- | :--- | :--- | :--- |
 | **User** | `POST` | `/api/user/feedback` *(or `/api/feedback`)* | Submit user feedback | `USER` JWT Token |
-| **Admin** | `GET` | `/api/admin/feedback` | Retrieve submitted feedback list (paginated, latest first) | `ADMIN` JWT Token |
+| **Advocate** | `POST` | `/api/advocate/feedback` *(or `/api/feedback`)* | Submit advocate feedback | `ADVOCATE` JWT Token |
+| **Admin** | `GET` | `/api/admin/feedback` | Retrieve submitted feedback list (paginated, latest first, optional `userType` filter) | `ADMIN` JWT Token |
 | **Admin** | `DELETE` | `/api/admin/feedback/:id` | Delete feedback entry by ID | `ADMIN` JWT Token |
 
 ---
@@ -7370,6 +7371,13 @@ Platform administrators can review submitted feedbacks in reverse chronological 
 ```http
 Content-Type: application/json
 Authorization: Bearer <USER_JWT_TOKEN>
+```
+*(Or send `auth_token` cookie via browser/Axios with credentials enabled)*
+
+#### For Advocate Endpoints
+```http
+Content-Type: application/json
+Authorization: Bearer <ADVOCATE_JWT_TOKEN>
 ```
 *(Or send `auth_token` cookie via browser/Axios with credentials enabled)*
 
@@ -7388,7 +7396,7 @@ Authorization: Bearer <ADMIN_JWT_TOKEN>
 `POST /api/user/feedback` *(alias: `POST /api/feedback`)*
 
 #### Authentication
-- **Role:** `USER` only
+- **Role:** `USER`
 - **Mechanism:** JWT cookie (`auth_token`) or `Authorization: Bearer <token>` header.
 
 #### Request Body
@@ -7411,7 +7419,9 @@ Authorization: Bearer <ADMIN_JWT_TOKEN>
     "name": "Shivam Singh",
     "phone": "9876543210",
     "description": "The legal consultation service is very smooth and intuitive to use.",
+    "userType": "USER",
     "userId": "84c53adf-49b7-4483-9c79-925270906397",
+    "advocateId": null,
     "createdAt": "2026-09-30T06:28:03.705Z",
     "updatedAt": "2026-09-30T06:28:03.705Z"
   }
@@ -7444,7 +7454,65 @@ Authorization: Bearer <ADMIN_JWT_TOKEN>
 
 ---
 
-### 2. Admin API: View Feedback
+### 2. Advocate API: Submit Feedback
+
+#### Endpoint
+`POST /api/advocate/feedback` *(alias: `POST /api/feedback`)*
+
+#### Authentication
+- **Role:** `ADVOCATE`
+- **Mechanism:** JWT cookie (`auth_token`) or `Authorization: Bearer <token>` header.
+
+#### Request Body
+```json
+{
+  "description": "The client scheduling and appointment workflow is well integrated."
+}
+```
+
+#### Validation Rules (Zod)
+- `description`: String, required, trimmed, min 3 characters, max 2000 characters.
+
+#### Successful Response (`201 Created`)
+```json
+{
+  "success": true,
+  "message": "Feedback submitted successfully",
+  "data": {
+    "id": "2b6c2320-1555-5119-0b70-6814cc8ggb76",
+    "name": "Adv. Rajesh Sharma",
+    "phone": "9876543211",
+    "description": "The client scheduling and appointment workflow is well integrated.",
+    "userType": "ADVOCATE",
+    "userId": null,
+    "advocateId": "95d64bef-50c8-4594-0d80-036381017408",
+    "createdAt": "2026-11-03T10:15:00.000Z",
+    "updatedAt": "2026-11-03T10:15:00.000Z"
+  }
+}
+```
+
+#### Error Responses
+
+- **401 Unauthorized (No token provided):**
+  ```json
+  {
+    "success": false,
+    "message": "Authentication required. Please login."
+  }
+  ```
+
+- **403 Forbidden (Non-advocate calling advocate endpoint):**
+  ```json
+  {
+    "success": false,
+    "message": "Access forbidden. Insufficient permissions."
+  }
+  ```
+
+---
+
+### 3. Admin API: View Feedback
 
 #### Endpoint
 `GET /api/admin/feedback`
@@ -7454,6 +7522,7 @@ Authorization: Bearer <ADMIN_JWT_TOKEN>
 | :--- | :--- | :--- | :--- |
 | `page` | Integer | `1` | Page number (min 1) |
 | `limit` | Integer | `10` | Items per page (min 1, max 100) |
+| `userType` | String | *None* | Optional filter: `USER` or `ADVOCATE` |
 
 #### Authentication
 - **Role:** `ADMIN` only
@@ -7465,20 +7534,24 @@ Authorization: Bearer <ADMIN_JWT_TOKEN>
   "success": true,
   "data": [
     {
-      "id": "ff876cd4-c08f-4960-8c92-5715d0a8afba",
-      "name": "Shivam Singh",
-      "phone": "9876543210",
-      "description": "Second feedback submitted on the platform.",
-      "userId": "84c53adf-49b7-4483-9c79-925270906397",
-      "createdAt": "2026-09-30T06:28:04.948Z",
-      "updatedAt": "2026-09-30T06:28:04.948Z"
+      "id": "2b6c2320-1555-5119-0b70-6814cc8ggb76",
+      "name": "Adv. Rajesh Sharma",
+      "phone": "9876543211",
+      "description": "The client scheduling and appointment workflow is well integrated.",
+      "userType": "ADVOCATE",
+      "userId": null,
+      "advocateId": "95d64bef-50c8-4594-0d80-036381017408",
+      "createdAt": "2026-11-03T10:15:00.000Z",
+      "updatedAt": "2026-11-03T10:15:00.000Z"
     },
     {
       "id": "1c5b1219-0444-4008-9a69-5703bb7ffa65",
       "name": "Shivam Singh",
       "phone": "9876543210",
       "description": "The legal consultation service is very smooth and intuitive to use.",
+      "userType": "USER",
       "userId": "84c53adf-49b7-4483-9c79-925270906397",
+      "advocateId": null,
       "createdAt": "2026-09-30T06:28:03.705Z",
       "updatedAt": "2026-09-30T06:28:03.705Z"
     }
@@ -7502,7 +7575,7 @@ Authorization: Bearer <ADMIN_JWT_TOKEN>
   }
   ```
 
-- **403 Forbidden (Non-admin user attempt):**
+- **403 Forbidden (Non-admin attempt):**
   ```json
   {
     "success": false,
@@ -7512,7 +7585,7 @@ Authorization: Bearer <ADMIN_JWT_TOKEN>
 
 ---
 
-### 3. Admin API: Delete Feedback
+### 4. Admin API: Delete Feedback
 
 #### Endpoint
 `DELETE /api/admin/feedback/:id`
@@ -7534,7 +7607,9 @@ Authorization: Bearer <ADMIN_JWT_TOKEN>
     "name": "Shivam Singh",
     "phone": "9876543210",
     "description": "The legal consultation service is very smooth and intuitive to use.",
+    "userType": "USER",
     "userId": "84c53adf-49b7-4483-9c79-925270906397",
+    "advocateId": null,
     "createdAt": "2026-09-30T06:28:03.705Z",
     "updatedAt": "2026-09-30T06:28:03.705Z"
   }
@@ -7551,7 +7626,7 @@ Authorization: Bearer <ADMIN_JWT_TOKEN>
   }
   ```
 
-- **403 Forbidden (Non-admin user attempt):**
+- **403 Forbidden (Non-admin attempt):**
   ```json
   {
     "success": false,
@@ -7565,17 +7640,17 @@ Authorization: Bearer <ADMIN_JWT_TOKEN>
 
 #### Prerequisites
 1. Ensure the server is running on `http://localhost:5000`.
-2. Prepare a User account and an Admin account.
+2. Prepare a User account, an Advocate account, and an Admin account.
 
 ---
 
 #### Scenario 1: Logged-in User Submits Feedback Successfully
 1. **Authenticate as User:**
    - Call `POST http://localhost:5000/api/auth/user/login/verify-otp` (or verify phone/email OTP).
-   - Copy the returned `token` (or allow Postman cookies).
+   - Copy the returned token (or allow Postman cookies).
 2. **Submit Feedback:**
    - **Method:** `POST`
-   - **URL:** `http://localhost:5000/api/user/feedback`
+   - **URL:** `http://localhost:5000/api/user/feedback` *(or `/api/feedback`)*
    - **Headers:**
      - `Authorization: Bearer <USER_TOKEN>`
      - `Content-Type: application/json`
@@ -7587,15 +7662,40 @@ Authorization: Bearer <ADMIN_JWT_TOKEN>
      ```
 3. **Verify Response:**
    - Status code is `201 Created`.
+   - `userType` is `"USER"`.
    - `name` and `phone` match the authenticated user's profile.
-   - `userId` matches the logged-in user.
+   - `userId` matches the logged-in user, `advocateId` is `null`.
 
 ---
 
-#### Scenario 2: Unauthenticated User Cannot Submit Feedback
+#### Scenario 2: Logged-in Advocate Submits Feedback Successfully
+1. **Authenticate as Advocate:**
+   - Call `POST http://localhost:5000/api/auth/advocate/login` with email and password.
+   - Copy the returned token (or allow Postman cookies).
+2. **Submit Feedback:**
+   - **Method:** `POST`
+   - **URL:** `http://localhost:5000/api/advocate/feedback` *(or `/api/feedback`)*
+   - **Headers:**
+     - `Authorization: Bearer <ADVOCATE_TOKEN>`
+     - `Content-Type: application/json`
+   - **Body (raw JSON):**
+     ```json
+     {
+       "description": "Great platform to manage client legal consultations efficiently."
+     }
+     ```
+3. **Verify Response:**
+   - Status code is `201 Created`.
+   - `userType` is `"ADVOCATE"`.
+   - `name` and `phone` match the authenticated advocate's profile.
+   - `advocateId` matches the logged-in advocate, `userId` is `null`.
+
+---
+
+#### Scenario 3: Unauthenticated User / Advocate Cannot Submit Feedback
 1. **Make Request without Token:**
    - **Method:** `POST`
-   - **URL:** `http://localhost:5000/api/user/feedback`
+   - **URL:** `http://localhost:5000/api/feedback`
    - **Headers:** `Content-Type: application/json` (no `Authorization` header and no cookie)
    - **Body (raw JSON):**
      ```json
@@ -7609,40 +7709,36 @@ Authorization: Bearer <ADMIN_JWT_TOKEN>
 
 ---
 
-#### Scenario 3: Admin Retrieves All Feedback
+#### Scenario 4: Admin Retrieves All Feedback (with optional filter)
 1. **Authenticate as Admin:**
    - Call `POST http://localhost:5000/api/admin/login` with email and password.
-   - Copy the returned `token`.
-2. **Fetch Feedback List:**
+   - Copy the returned token.
+2. **Fetch Feedback List (All):**
    - **Method:** `GET`
    - **URL:** `http://localhost:5000/api/admin/feedback?page=1&limit=10`
    - **Headers:**
      - `Authorization: Bearer <ADMIN_TOKEN>`
-3. **Verify Response:**
-   - Status code is `200 OK`.
-   - `data` contains an array of feedbacks ordered newest first (`createdAt: 'desc'`).
-   - `pagination` contains `total`, `page`, `limit`, and `totalPages`.
+   - Verify: Status code `200 OK`, feedbacks list contains `userType` badge data (`USER` and `ADVOCATE`).
+3. **Fetch Advocate Feedbacks Only:**
+   - **Method:** `GET`
+   - **URL:** `http://localhost:5000/api/admin/feedback?page=1&limit=10&userType=ADVOCATE`
+   - **Headers:** `Authorization: Bearer <ADMIN_TOKEN>`
+   - Verify: Only feedbacks with `userType === "ADVOCATE"` are returned.
 
 ---
 
-#### Scenario 4: Normal User Cannot Access Admin Feedback APIs
-1. **Attempt Admin List as Normal User:**
+#### Scenario 5: Normal User or Advocate Cannot Access Admin Feedback APIs
+1. **Attempt Admin List as Normal User or Advocate:**
    - **Method:** `GET`
    - **URL:** `http://localhost:5000/api/admin/feedback`
-   - **Headers:** `Authorization: Bearer <USER_TOKEN>`
+   - **Headers:** `Authorization: Bearer <USER_TOKEN_OR_ADVOCATE_TOKEN>`
 2. **Verify Response:**
    - Status code is `403 Forbidden`.
    - Response message: `"Access forbidden. Insufficient permissions."`.
-3. **Attempt Admin Delete as Normal User:**
-   - **Method:** `DELETE`
-   - **URL:** `http://localhost:5000/api/admin/feedback/<FEEDBACK_ID>`
-   - **Headers:** `Authorization: Bearer <USER_TOKEN>`
-4. **Verify Response:**
-   - Status code is `403 Forbidden`.
 
 ---
 
-#### Scenario 5: Admin Deletes Feedback Successfully
+#### Scenario 6: Admin Deletes Feedback Successfully
 1. **Delete Feedback Entry:**
    - **Method:** `DELETE`
    - **URL:** `http://localhost:5000/api/admin/feedback/<FEEDBACK_ID>`
@@ -7653,7 +7749,7 @@ Authorization: Bearer <ADMIN_JWT_TOKEN>
 
 ---
 
-#### Scenario 6: Deleting a Non-Existent Feedback ID Returns 404
+#### Scenario 7: Deleting a Non-Existent Feedback ID Returns 404
 1. **Delete with Invalid ID:**
    - **Method:** `DELETE`
    - **URL:** `http://localhost:5000/api/admin/feedback/00000000-0000-0000-0000-000000000000`

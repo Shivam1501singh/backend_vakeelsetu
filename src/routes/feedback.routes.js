@@ -4,6 +4,8 @@ import { requireAuth, requireRole, requirePermission } from '../middleware/auth.
 import { generalLimiter } from '../middleware/rate-limit.middleware.js';
 
 export const userFeedbackRouter = express.Router();
+export const advocateFeedbackRouter = express.Router();
+export const commonFeedbackRouter = express.Router();
 export const adminFeedbackRouter = express.Router();
 
 // User Feedback Route (USER only)
@@ -11,6 +13,24 @@ userFeedbackRouter.post(
   '/',
   requireAuth,
   requireRole('USER'),
+  generalLimiter,
+  feedbackController.submitFeedback
+);
+
+// Advocate Feedback Route (ADVOCATE only)
+advocateFeedbackRouter.post(
+  '/',
+  requireAuth,
+  requireRole('ADVOCATE'),
+  generalLimiter,
+  feedbackController.submitFeedback
+);
+
+// Common Feedback Route (USER and ADVOCATE both allowed)
+commonFeedbackRouter.post(
+  '/',
+  requireAuth,
+  requireRole('USER', 'ADVOCATE'),
   generalLimiter,
   feedbackController.submitFeedback
 );

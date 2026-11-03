@@ -9,5 +9,6 @@ export const createFeedbackSchema = z.object({
 
 export const adminFeedbackQuerySchema = z.object({
   page: z.string().regex(/^\d+$/).transform(Number).optional(),
-  limit: z.string().regex(/^\d+$/).transform(Number).optional()
+  limit: z.string().regex(/^\d+$/).transform(Number).optional(),
+  userType: z.enum(['USER', 'ADVOCATE', 'user', 'advocate']).transform(val => val.toUpperCase()).optional()
 });

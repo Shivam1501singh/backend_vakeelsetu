@@ -133,18 +133,23 @@ model User {
 }
 
 model Feedback {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   name        String
   phone       String
-  description String   @db.Text
-  userId      String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  description String    @db.Text
+  userType    String    @default("USER") // "USER" or "ADVOCATE"
+  userId      String?
+  advocateId  String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  advocate    Advocate? @relation(fields: [advocateId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([advocateId])
   @@index([createdAt])
+  @@index([userType])
 }
 
 model DeletedUser {
@@ -308,6 +313,7 @@ model Advocate {
   teamMatesSecondary   AdvocateTeamMate[]    @relation("TeamMatesSecondary")
   passwordResets       AdvocatePasswordReset[]
   bookings             AdvocateBooking[]
+  feedbacks            Feedback[]
 }
 
 model AdvocatePasswordReset {

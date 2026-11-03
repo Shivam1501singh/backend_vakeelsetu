@@ -26,7 +26,12 @@ import userRoutes from './routes/user.routes.js';
 import advocateDeletionRoutes from './routes/advocate.deletion.routes.js';
 import advocateStatusRoutes from './routes/advocate.status.routes.js';
 import { userConsultancyRouter, adminConsultancyRouter } from './routes/consultancy.routes.js';
-import { userFeedbackRouter, adminFeedbackRouter } from './routes/feedback.routes.js';
+import {
+  userFeedbackRouter,
+  advocateFeedbackRouter,
+  commonFeedbackRouter,
+  adminFeedbackRouter
+} from './routes/feedback.routes.js';
 import { startAccountDeletionJob } from './services/accountDeletionJob.service.js';
 import {
   userCheckoutRouter,
@@ -130,7 +135,8 @@ app.use('/api/admin/consultancy', adminConsultancyRouter);
 app.use('/api/admin/payments', adminPaymentRouter);
 app.use('/api/internal/cron', cronPaymentRouter);
 app.use('/api/user/feedback', userFeedbackRouter);
-app.use('/api/feedback', userFeedbackRouter);
+app.use('/api/advocate/feedback', advocateFeedbackRouter);
+app.use('/api/feedback', commonFeedbackRouter);
 app.use('/api/admin/feedback', adminFeedbackRouter);
 app.use('/api/advocate', advocateDeletionRoutes);
 app.use('/api/advocate', advocateStatusRoutes);
