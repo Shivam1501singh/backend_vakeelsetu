@@ -57,7 +57,11 @@ export const requestAdvocatePasswordReset = async ({ email, phone }) => {
 
   // Send OTP to registered contact
   if (email) {
-    await sendEmailOtp(advocate.email, plainOtp);
+    await sendEmailOtp(advocate.email, plainOtp, {
+      recipientName: advocate.fullName,
+      purpose: 'PASSWORD_RESET',
+      expiryMinutes: 10
+    });
   } else {
     await sendOtpSms({
       mobile: advocate.phone,

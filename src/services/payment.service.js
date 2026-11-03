@@ -6,6 +6,7 @@ import { addWorkingDays } from '../utils/workingDays.js';
 import { createConsultancyWithUniqueBookingId, generateUniqueAdvocateBookingId } from '../utils/bookingId.util.js';
 import { isSlotFree } from './advocateBooking/slotValidation.js';
 import { logApiError } from './errorLogger.service.js';
+import { sendAdvocateBookingConfirmationEmails } from './email.service.js';
 
 /**
  * Verifies Razorpay Checkout signature using constant-time comparison.
@@ -472,7 +473,7 @@ export const syncPaymentFromRazorpay = async ({ paymentId, razorpayOrderId }) =>
   }
 
   // 5. Return fresh Payment with relations
-  return await prisma.payment.findUnique({
+  const freshPayment = await prisma.payment.findUnique({
     where: { id: pId },
     include: {
       attempts: { orderBy: { createdAt: 'desc' } },
@@ -488,4 +489,28 @@ export const syncPaymentFromRazorpay = async ({ paymentId, razorpayOrderId }) =>
       }
     }
   });
+
+  // Trigger advocate booking confirmation emails when confirmed
+  if (
+    freshPayment?.purpose === 'ADVOCATE_BOOKING' &&
+    freshPayment?.status === 'PAID' &&
+    freshPayment?.advocateBooking?.status === 'CONFIRMED' &&
+    (!freshPayment.advocateBooking.userConfirmationEmailSentAt ||
+      !freshPayment.advocateBooking.advocateConfirmationEmailSentAt)
+  ) {
+    try {
+      const withTimeout = (promise, ms = 8000) => {
+        let timer;
+        const timeoutPromise = new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`Email confirmation timed out after ${ms}ms`)), ms);
+        });
+        return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+      };
+      await withTimeout(sendAdvocateBookingConfirmationEmails(freshPayment.advocateBooking.id), 8000);
+    } catch (emailErr) {
+      console.error(`[Razorpay Sync] Booking confirmation email error for ${freshPayment.advocateBooking.id}:`, emailErr.message);
+    }
+  }
+
+  return freshPayment;
 };

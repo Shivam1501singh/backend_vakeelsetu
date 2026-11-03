@@ -709,6 +709,8 @@ model AdvocateBooking {
   completedAt        DateTime?
   refundedAt         DateTime?
   refundReason       String?
+  userConfirmationEmailSentAt     DateTime?
+  advocateConfirmationEmailSentAt DateTime?
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
 

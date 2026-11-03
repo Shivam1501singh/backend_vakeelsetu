@@ -164,7 +164,7 @@ export const sendEmailOtpForRegistration = async ({ registrationId, email }) => 
   await checkDuplicateEmail(normalizedEmail);
 
   // Generate & save Email OTP
-  const { plainOtp } = await createOtp({
+  const { plainOtp, expiryMinutes } = await createOtp({
     registrationId,
     accountType: session.accountType,
     purpose: 'EMAIL_VERIFICATION',
@@ -178,7 +178,11 @@ export const sendEmailOtpForRegistration = async ({ registrationId, email }) => 
   });
 
   // Send the OTP
-  await sendEmailOtp(normalizedEmail, plainOtp);
+  await sendEmailOtp(normalizedEmail, plainOtp, {
+    recipientName: session.fullName,
+    purpose: 'REGISTRATION',
+    expiryMinutes
+  });
   return true;
 };
 
@@ -693,14 +697,18 @@ export const sendLoginEmailOtpService = async ({ email, accountType }) => {
   }
 
   // Generate & save login Email OTP
-  const { plainOtp } = await createOtp({
+  const { plainOtp, expiryMinutes } = await createOtp({
     registrationId: null,
     accountType,
     purpose: 'LOGIN',
     target: normalizedEmail
   });
 
-  await sendEmailOtp(normalizedEmail, plainOtp);
+  await sendEmailOtp(normalizedEmail, plainOtp, {
+    recipientName: account.fullName,
+    purpose: 'LOGIN',
+    expiryMinutes
+  });
   return true;
 };
 

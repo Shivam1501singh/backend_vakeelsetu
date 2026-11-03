@@ -13327,3 +13327,167 @@ To modernize consultation pricing and provide advocates with full autonomy over 
   }
 }
 ```
+
+---
+
+## 36. Email Templates & Notifications
+
+### 1. Architecture & Design Rules
+
+VakeelSetu email notifications use a modern, modular template system built with email-safe HTML, inline CSS, and `<table role="presentation">` layouts matching the official brand design:
+- **Header & Footer:** `#020317` (Deep space navy)
+- **Logo Mark & Accents:** `#f59f0b` (Amber gold)
+- **Wordmark:** "Vakeel" in white + "Setu" in `#f59f0b`
+- **Buttons:** `#f59f0b` with `#020317` dark bold text
+- **Light Surface Container:** Max width 600px with `#ffffff` card and `#ece6dc` outer border on `#f7f4ef` warm background
+- **Client Compatibility:** `<meta name="color-scheme" content="light only" />`, responsive media queries for mobile column stacking (detail labels, buttons, and footer).
+
+#### Core Files:
+- `src/templates/emailLayout.template.js`: Master layout shell, branding constants (`BRAND`, `COLORS`), and shared rendering helpers.
+- `src/templates/otpEmail.template.js`: Verification, login, and password reset OTP email templates.
+- `src/templates/bookingEmail.template.js`: Advocate consultation booking confirmed (user) and new appointment (advocate) templates.
+- `src/services/email.service.js`: Nodemailer singleton transporter, branded sender helper with automatic logo CID attachment, backward-compatible OTP dispatcher, and atomic booking confirmation dispatcher.
+- `scripts/preview-emails.js`: CLI tool to generate visual HTML preview files with dummy data (`tmp/email-previews/*.html`).
+
+#### Shared Helpers (`emailLayout.template.js`):
+- `escapeHtml(value)`: Strictly sanitizes strings against HTML injection / XSS. All dynamic database or input values pass through this helper.
+- `renderDetailRows(details)`: Formats labeled key-value detail tables. Any row whose value is empty, null, or undefined is automatically skipped.
+- `renderButton({ label, url })`: Generates a centered, email-client-safe CTA button. Renders nothing (`''`) if label or URL is missing.
+- `renderNote(text)`: Generates a left-bordered amber callout footnote box. Renders nothing (`''`) if text is empty.
+- `renderEmailLayout({ title, preheader, bodyHtml, showSupport, tagline })`: Wraps inner body HTML inside the branded 600px responsive table shell with hidden inbox preheaders.
+
+---
+
+### 2. Branding Configuration & Logo
+
+#### Environment Variables (`BRAND_*`)
+Visual metadata and contact details are read dynamically at runtime via `getBrand()` in `src/templates/emailLayout.template.js`. **If any value is empty, missing, or invalid, that entire section/link is hidden automatically**—no broken tags or placeholder text will ever appear in outgoing emails.
+
+| Variable | Description / Where It Appears | Validation Rules | Empty / Missing Behavior |
+| :--- | :--- | :--- | :--- |
+| `BRAND_WEBSITE_URL` | Top-right header domain link and footer "Website" link | Accepts `http://` or `https://` only | Hidden in header and footer |
+| `BRAND_TERMS_URL` | Footer "Terms" link | Accepts `http://` or `https://` only | Hidden in footer |
+| `BRAND_CONTACT_URL` | Footer "Contact" link | Accepts `http://` or `https://` only | Hidden in footer |
+| `BRAND_SUPPORT_PHONE` | "Need help?" support callout box (`tel:` link) | Non-empty string | Suppressed from support block |
+| `BRAND_SUPPORT_EMAIL` | "Need help?" support callout box (`mailto:` link) | Valid email format (`user@domain.tld`) | Suppressed from support block |
+| `BRAND_ADDRESS` | Corporate office address in bottom footer left column | Non-empty string | Hidden in footer |
+
+> [!NOTE]
+> - **URL Validation:** Any value starting with anything other than `http://` or `https://` (e.g. `javascript:`) is discarded and logged once as a startup warning.
+> - **Email Validation:** Malformed email addresses are discarded and logged once as a startup warning.
+> - **Support Block Visibility:** The entire "Need help?" support card is hidden if both `BRAND_SUPPORT_PHONE` and `BRAND_SUPPORT_EMAIL` are empty.
+> - **Colours:** Colours remain curated hardcoded constants (`COLORS` in `emailLayout.template.js`) to preserve strict visual design standards.
+
+#### Logo Specifications & Inline CID Attachment:
+- **File location:** `src/assets/email/logo.png`
+- **Recommended format:** Square PNG, 108×108 px (for high-DPI retina display at 54×54 px), file size < 50 KB.
+- **Delivery mechanism:** Inline CID attachment (`cid:vakeelsetu-logo`) via Nodemailer. Does not rely on external CDN hosting or base64 data URIs (which are blocked by Gmail).
+- **Graceful Fallback:** If `logo.png` does not exist on disk, the system automatically falls back to the embedded amber square with the unicode scales of justice symbol `⚖` (`&#9878;`) without attaching any file. Email sending **never fails** due to a missing logo file.
+- **Vercel Serverless Bundling:** Included in `vercel.json` via `"includeFiles": "{uploads/**,src/assets/**}"` under `api/index.js` to ensure static assets persist inside AWS Lambda / Vercel functions.
+
+---
+
+### 3. Catalog of System Emails & Triggers
+
+| Email Type | Template Function | Trigger Point | Recipient | Key Highlights |
+| :--- | :--- | :--- | :--- | :--- |
+| **Registration OTP** | `otpEmailTemplate({ purpose: 'REGISTRATION' })` | `POST /api/auth/user/send-email-otp`<br/>`POST /api/auth/advocate/send-email-otp` | Client / Advocate registrant | Subject: *Your VakeelSetu verification code*<br/>Configurable expiry (`OTP_EXPIRY_MINUTES`, default 5 min). |
+| **Login OTP** | `otpEmailTemplate({ purpose: 'LOGIN' })` | `POST /api/auth/user/login-email-otp`<br/>`POST /api/auth/advocate/login-email-otp` | Registered User / Advocate | Subject: *Your VakeelSetu login code* |
+| **Password Reset OTP** | `otpEmailTemplate({ purpose: 'PASSWORD_RESET' })` | `POST /api/advocate/reset-password` | Registered Advocate | Subject: *Reset your VakeelSetu password*<br/>10-minute expiry. |
+| **Booking Confirmed (User)** | `bookingConfirmedUserTemplate({ booking, payment })` | Post-payment confirmation in `syncPaymentFromRazorpay` | Client / User | Subject: *Booking confirmed – {Advocate}, {Date} {Time} IST*<br/>Snapshot fee breakdown, Total paid, In-person office address + Google Maps link, "View My Bookings" CTA. |
+| **New Appointment (Advocate)** | `newAppointmentAdvocateTemplate({ booking })` | Post-payment confirmation in `syncPaymentFromRazorpay` | Booked Advocate | Subject: *New appointment – {Date} {Time} IST ({Mode})*<br/>Client name, phone (`tel:` link), email, net advocate consultation fee, "Open My Appointments" CTA. |
+
+#### Delivery & Exactly-Once Rules:
+1. **Atomic DB Claiming:** Each email recipient has an independent timestamp column on `AdvocateBooking`:
+   - `userConfirmationEmailSentAt DateTime?`
+   - `advocateConfirmationEmailSentAt DateTime?`
+   Sent via atomic conditional update: `prisma.advocateBooking.updateMany({ where: { id, ...EmailSentAt: null }, data: { ...EmailSentAt: new Date() } })`. If `count === 0`, execution is skipped, completely preventing duplicate sends across concurrent webhook/verification requests.
+2. **Failure Recovery:** If SMTP sending fails, the timestamp is immediately reset to `null` so background jobs can retry.
+3. **Non-blocking Execution:** The primary HTTP checkout verification path awaits email delivery wrapped in an 8-second timeout (`withTimeout`). Slow SMTP connections never block payments or client responses.
+4. **Reconcile Cron (48h Window):** The reconcile cron (`/api/internal/cron/payments-reconcile`) searches for `CONFIRMED` or `COMPLETED` bookings created within the last 48 hours where either timestamp is `null`, and automatically dispatches any missing confirmation emails.
+5. **Missing Recipient Email:** If a booking does not have an email on record, the send is cleanly skipped and logged at `info` level without throwing.
+
+---
+
+### 4. How to Add a New Branded Email
+
+To create a new transactional email (e.g. refund receipt or cancellation notice):
+1. Create or export a new template function in `src/templates/`:
+   ```javascript
+   import { renderEmailLayout, escapeHtml, renderDetailRows, renderButton } from './emailLayout.template.js';
+
+   export const refundNoticeTemplate = ({ booking, refundAmount }) => {
+     const subject = `Refund Processed – Booking ${booking.bookingId}`;
+     const bodyHtml = `
+       <h1 style="margin:14px 0 0;font-size:22px;font-weight:800;color:#14161f;">Refund Initiated</h1>
+       <p style="color:#3d4b5c;">Dear ${escapeHtml(booking.userName)}, your refund has been processed.</p>
+       ${renderDetailRows([
+         { label: 'Booking ID', value: booking.bookingId },
+         { label: 'Refund Amount', value: refundAmount, isHighlighted: true }
+       ])}
+       ${renderButton({ label: 'Check Status', url: 'https://vakeelsetu.com/my-bookings' })}
+     `;
+
+     return {
+       subject,
+       ...renderEmailLayout({ title: subject, preheader: 'Your refund has been initiated', bodyHtml })
+     };
+   };
+   ```
+2. Dispatch via `sendBrandedMail` in `src/services/email.service.js`:
+   ```javascript
+   const { subject, html, text, attachments } = refundNoticeTemplate({ booking, refundAmount });
+   await sendBrandedMail({
+     to: booking.userEmail,
+     subject,
+     html,
+     text,
+     attachments,
+     emailType: 'REFUND_NOTICE'
+   });
+   ```
+
+---
+
+### 5. Visual Previewing
+
+Generate static HTML files for visual QA across desktop and mobile email clients:
+```bash
+node scripts/preview-emails.js
+```
+The script writes standalone HTML files to `tmp/email-previews/` (git-ignored):
+- `tmp/email-previews/otp-registration.html`
+- `tmp/email-previews/otp-login.html`
+- `tmp/email-previews/otp-reset.html`
+- `tmp/email-previews/booking-user.html`
+- `tmp/email-previews/booking-advocate.html`
+
+Open any of these files in a browser to inspect typography, color contrast, and responsive layout scaling.
+
+---
+
+### 6. End-to-End Testing & Verification
+
+1. **Local SMTP Setup:**
+   Configure a test mailbox (e.g. Gmail App Password or Mailtrap) in your local `.env`:
+   ```env
+   EMAIL_HOST="smtp.gmail.com"
+   EMAIL_PORT=587
+   EMAIL_USER="your-email@gmail.com"
+   EMAIL_PASSWORD="your-app-password"
+   CLIENT_URL="http://localhost:5173"
+   ```
+2. **Registration OTP Verification:**
+   Call `POST /api/auth/user/send-email-otp` with `{ email: "your-test@example.com" }`. Inspect the incoming email for `#020317` header, VakeelSetu wordmark, and styled OTP box.
+3. **Razorpay Booking Confirmation:**
+   Complete an advocate booking checkout in test mode. Verify:
+   - User receives *Booking confirmed* with full fee breakdown and payment ID.
+   - Advocate receives *New appointment* with client contact info and net consultation fee.
+4. **Idempotency (No Duplicates):**
+   Re-trigger the Razorpay webhook or `POST /api/payments/verify` with the same payment. Verify that no duplicate emails are dispatched (`updateMany` count is 0).
+5. **SMTP Fault Tolerance & Cron Recovery:**
+   Temporarily invalidate `EMAIL_PASSWORD`. Trigger payment verification. Confirm:
+   - The booking successfully transitions to `CONFIRMED`.
+   - The payment is marked `PAID`.
+   - The email error is logged without failing the HTTP request.
+   - Restore valid SMTP credentials and call `GET /api/internal/cron/payments-reconcile` (with `Authorization: Bearer <CRON_SECRET>`). Confirm that both missing confirmation emails are dispatched and timestamps populated.

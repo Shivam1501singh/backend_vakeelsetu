@@ -1,6 +1,7 @@
 import prisma from '../lib/prisma.js';
 import { syncPaymentFromRazorpay } from '../services/payment.service.js';
 import { getRazorpayClient } from '../config/razorpay.js';
+import { sendAdvocateBookingConfirmationEmails } from '../services/email.service.js';
 
 /**
  * Validates the Vercel Cron Bearer secret
@@ -81,10 +82,37 @@ export const reconcilePaymentsCron = async (req, res) => {
       }
     }
 
+    // Retry sending advocate booking confirmation emails for bookings in last 48 hours
+    const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    const pendingEmailBookings = await prisma.advocateBooking.findMany({
+      where: {
+        createdAt: { gte: fortyEightHoursAgo },
+        status: { in: ['CONFIRMED', 'COMPLETED'] },
+        OR: [
+          { userConfirmationEmailSentAt: null },
+          { advocateConfirmationEmailSentAt: null }
+        ]
+      },
+      select: { id: true },
+      take: 25,
+      orderBy: { createdAt: 'asc' }
+    });
+
+    let emailsRetriedCount = 0;
+    for (const b of pendingEmailBookings) {
+      try {
+        await sendAdvocateBookingConfirmationEmails(b.id);
+        emailsRetriedCount++;
+      } catch (emailErr) {
+        errors.push({ bookingId: b.id, error: emailErr.message });
+      }
+    }
+
     return res.status(200).json({
       success: true,
       reconciledCount,
-      expiredCount: expiredResult.count,
+      expiredCount,
+      emailsRetriedCount,
       errors
     });
   } catch (error) {
