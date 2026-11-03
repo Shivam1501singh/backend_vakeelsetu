@@ -4,7 +4,8 @@ import { getLogoAttachment } from '../templates/emailLayout.template.js';
 import { otpEmailTemplate } from '../templates/otpEmail.template.js';
 import {
   bookingConfirmedUserTemplate,
-  newAppointmentAdvocateTemplate
+  newAppointmentAdvocateTemplate,
+  consultancyBookedUserTemplate
 } from '../templates/bookingEmail.template.js';
 
 let transporterInstance = null;
@@ -282,3 +283,88 @@ export const sendAdvocateBookingConfirmationEmails = async (bookingId) => {
     return { success: false, message: error.message };
   }
 };
+
+/**
+ * Sends a confirmation email to the user for a paid consultancy request.
+ * Follows atomic claim pattern with rollback on failure.
+ * Never throws, catches errors and returns { success, message }.
+ *
+ * @param {string} consultancyRequestId
+ * @returns {Promise<{ success: boolean, message?: string }>}
+ */
+export const sendConsultancyConfirmationEmail = async (consultancyRequestId) => {
+  if (!consultancyRequestId) {
+    return { success: false, message: 'consultancyRequestId is required' };
+  }
+
+  try {
+    const consultancy = await prisma.consultancyRequest.findUnique({
+      where: { id: consultancyRequestId },
+      include: {
+        user: true,
+        payment: {
+          include: {
+            attempts: {
+              orderBy: { createdAt: 'desc' }
+            }
+          }
+        }
+      }
+    });
+
+    if (!consultancy) {
+      console.warn(`[Email Service] ConsultancyRequest ${consultancyRequestId} not found.`);
+      return { success: false, message: 'Consultancy not found' };
+    }
+
+    // Recipient priority: checkout email, fallback to user account email
+    const recipientEmail = (consultancy.email || consultancy.user?.email || '').trim();
+    if (!recipientEmail) {
+      console.info(`[Email Service] Skipping consultancy confirmation email for ${consultancyRequestId}: no email on record.`);
+      return { success: true, message: 'No email on record' };
+    }
+
+    // Atomic claim: only one process can claim and send
+    const claim = await prisma.consultancyRequest.updateMany({
+      where: { id: consultancyRequestId, confirmationEmailSentAt: null },
+      data: { confirmationEmailSentAt: new Date() }
+    });
+
+    if (claim.count === 0) {
+      // Already sent or claimed by another worker/cron
+      return { success: true, message: 'Already sent or claimed' };
+    }
+
+    try {
+      const { subject, html, text, attachments } = consultancyBookedUserTemplate({
+        consultancy,
+        payment: consultancy.payment,
+        userName: consultancy.user?.fullName
+      });
+
+      await sendBrandedMail({
+        to: recipientEmail,
+        subject,
+        html,
+        text,
+        attachments,
+        emailType: 'CONSULTANCY_BOOKED_USER'
+      });
+
+      return { success: true };
+    } catch (err) {
+      // On failure: reset timestamp back to null so cron can retry
+      await prisma.consultancyRequest.update({
+        where: { id: consultancyRequestId },
+        data: { confirmationEmailSentAt: null }
+      }).catch(() => {});
+
+      console.error(`[Email Service] Failed sending consultancy confirmation for ${consultancyRequestId}:`, err.message);
+      return { success: false, message: err.message };
+    }
+  } catch (error) {
+    console.error(`[Email Service] Unexpected error in sendConsultancyConfirmationEmail for ${consultancyRequestId}:`, error.message);
+    return { success: false, message: error.message };
+  }
+};
+

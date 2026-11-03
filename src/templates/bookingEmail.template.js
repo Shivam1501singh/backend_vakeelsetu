@@ -267,3 +267,187 @@ export const newAppointmentAdvocateTemplate = ({ booking } = {}) => {
 
   return { subject, html, text, attachments };
 };
+
+/**
+ * Returns a formatted date and time in Asia/Kolkata timezone (e.g. 3 Nov 2026, 2:45 PM IST).
+ * @param {Date|string} dateInput
+ * @returns {string}
+ */
+export const formatDateTimeIst = (dateInput) => {
+  if (!dateInput) return '';
+  const date = new Date(dateInput);
+  if (isNaN(date.getTime())) return '';
+
+  const rawDateStr = new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  }).format(date);
+
+  const datePart = rawDateStr.replace(/,\s*(\d{4})/, ' $1');
+
+  const timePart = new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  }).format(date).toUpperCase();
+
+  return `${datePart}, ${timePart} IST`;
+};
+
+/**
+ * Returns formatted date only in Asia/Kolkata timezone (e.g. 12 Nov 2026).
+ * @param {Date|string} dateInput
+ * @returns {string}
+ */
+export const formatDateOnlyIst = (dateInput) => {
+  if (!dateInput) return '';
+  const date = new Date(dateInput);
+  if (isNaN(date.getTime())) return '';
+
+  const rawDateStr = new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  }).format(date);
+
+  return rawDateStr.replace(/,\s*(\d{4})/, ' $1');
+};
+
+/**
+ * Maps ConsultancyCallType enum to human-friendly display label.
+ * @param {string} callType
+ * @returns {string}
+ */
+export const getConsultancyCallTypeLabel = (callType = '') => {
+  switch (String(callType).toUpperCase()) {
+    case 'VIDEO_CALL':
+    case 'VIDEO':
+      return 'Video Call';
+    case 'CALL':
+    case 'VOICE_CALL':
+    case 'VOICE':
+      return 'Call';
+    default:
+      return callType ? String(callType).replace(/_/g, ' ') : 'Consultation';
+  }
+};
+
+/**
+ * 3. Template: Consultancy booked – sent to the USER (Demo A).
+ *
+ * @param {object} params
+ * @param {object} params.consultancy ConsultancyRequest object (with user, bookingId, duration, etc.)
+ * @param {object} [params.payment] Associated Payment object (with amount, paidAt, refundEligibleAt, attempts)
+ * @param {string} [params.userName] User full name override
+ * @returns {{ subject: string, html: string, text: string, attachments: Array }}
+ */
+export const consultancyBookedUserTemplate = ({ consultancy, payment, userName } = {}) => {
+  if (!consultancy && !payment) {
+    throw new Error('Either consultancy or payment object is required');
+  }
+
+  const callType = consultancy?.callType || payment?.callType || 'CALL';
+  const callTypeLabel = getConsultancyCallTypeLabel(callType);
+  const duration = consultancy?.duration || payment?.duration || 15;
+  const bookingId = consultancy?.bookingId || '—';
+
+  const subject = `Consultancy booked – ${callTypeLabel} • ${duration} min`;
+  const preheader = `Booking ${bookingId} confirmed. Our team will contact you shortly.`;
+
+  const resolvedName = (userName || consultancy?.user?.fullName || '').trim();
+  const safeName = escapeHtml(resolvedName);
+  const safeCallTypeLabel = escapeHtml(callTypeLabel);
+  const safeDuration = escapeHtml(duration);
+
+  const introHtml = safeName
+    ? `Dear <strong style="color:${COLORS.textMain};">${safeName}</strong>,<br/>Thank you for your payment. Your <strong>${safeCallTypeLabel} Consultation (${safeDuration} min)</strong> is confirmed. Our legal expert team will contact you shortly on the number below.`
+    : `Thank you for your payment. Your <strong>${safeCallTypeLabel} Consultation (${safeDuration} min)</strong> is confirmed. Our legal expert team will contact you shortly on the number below.`;
+
+  const phone = (consultancy?.phoneNumber || payment?.phoneNumber || consultancy?.user?.phone || '').trim();
+  const phoneHtml = phone
+    ? `<a href="tel:${escapeHtml(phone.replace(/\s+/g, ''))}" style="color:${COLORS.textMain};text-decoration:none;">${escapeHtml(phone)}</a>`
+    : '';
+
+  const email = (consultancy?.email || payment?.email || consultancy?.user?.email || '').trim();
+  const bookedOn = formatDateTimeIst(payment?.paidAt || consultancy?.createdAt || new Date());
+
+  const latestAttempt = payment?.attempts && Array.isArray(payment.attempts) && payment.attempts.length > 0
+    ? payment.attempts[0]
+    : null;
+  const paymentId = latestAttempt?.razorpayPaymentId || payment?.id || '—';
+
+  // Amount in paise
+  const amountPaise = payment?.amount !== undefined && payment?.amount !== null
+    ? payment.amount
+    : (consultancy?.price ? Math.round(Number(consultancy.price) * 100) : 0);
+
+  const detailRows = [
+    { label: 'Contact phone', value: phoneHtml, rawHtml: true },
+    { label: 'Contact email', value: email },
+    { label: 'Booked on', value: bookedOn },
+    { label: 'Payment ID', value: paymentId, isMono: true },
+    { label: 'Amount paid', value: formatRupees(amountPaise), isHighlighted: true },
+  ];
+
+  const dashboardUrl = getBookingDashboardUrl('USER');
+
+  const bodyHtml = `
+    <!-- status pill -->
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+      <td bgcolor="${COLORS.pillGreenBg}" style="padding:5px 12px;border-radius:20px;background:${COLORS.pillGreenBg};font-family:'Segoe UI',Arial,sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:${COLORS.pillGreenText};">&#10003;&nbsp; Consultancy booked</td>
+    </tr></table>
+
+    <h1 style="margin:14px 0 0;font-family:'Segoe UI',Arial,sans-serif;font-size:22px;line-height:29px;font-weight:800;color:${COLORS.textMain};">Your expert consultation is booked</h1>
+    <p style="margin:10px 0 0;font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:22px;color:${COLORS.textMuted};">${introHtml}</p>
+
+    <!-- reference box -->
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:20px;border-radius:12px;background:${COLORS.primary};"><tr>
+      <td style="padding:14px 18px;font-family:'Segoe UI',Arial,sans-serif;">
+        <div style="font-size:10.5px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:${COLORS.accent};">Booking ID</div>
+        <div style="margin-top:4px;font-family:'Courier New',monospace;font-size:20px;font-weight:800;letter-spacing:1px;color:#ffffff;">${escapeHtml(bookingId)}</div>
+      </td>
+      <td align="right" style="padding:14px 18px;font-family:'Segoe UI',Arial,sans-serif;">
+        <div style="font-size:10.5px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:${COLORS.accent};">Package</div>
+        <div style="margin-top:4px;font-size:14px;font-weight:700;color:#ffffff;">${escapeHtml(callTypeLabel)}<br/>${escapeHtml(duration)} min</div>
+      </td>
+    </tr></table>
+
+    ${renderDetailRows(detailRows)}
+
+    ${renderButton({ label: 'View My Bookings', url: dashboardUrl })}
+  `;
+
+  const { html, attachments } = renderEmailLayout({
+    title: subject,
+    preheader,
+    bodyHtml,
+    showSupport: true,
+    tagline: 'Bridge to the right advocate'
+  });
+
+  const textLines = [
+    `${subject}`,
+    '',
+    resolvedName ? `Dear ${resolvedName},` : '',
+    `Thank you for your payment. Your ${callTypeLabel} Consultation (${duration} min) is confirmed. Our legal expert team will contact you shortly on the number below.`,
+    '',
+    `Booking ID: ${bookingId}`,
+    `Package: ${callTypeLabel} (${duration} min)`,
+    `Contact phone: ${phone}`,
+    `Contact email: ${email}`,
+    `Booked on: ${bookedOn}`,
+    `Payment ID: ${paymentId}`,
+    `Amount paid: ${formatRupees(amountPaise)}`,
+    '',
+    `View My Bookings: ${dashboardUrl}`
+  ].filter((line, idx, arr) => line !== '' || (idx > 0 && arr[idx - 1] !== ''));
+
+  const text = textLines.join('\n').trim();
+
+  return { subject, html, text, attachments };
+};
+

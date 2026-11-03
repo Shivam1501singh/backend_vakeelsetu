@@ -6,7 +6,7 @@ import { addWorkingDays } from '../utils/workingDays.js';
 import { createConsultancyWithUniqueBookingId, generateUniqueAdvocateBookingId } from '../utils/bookingId.util.js';
 import { isSlotFree } from './advocateBooking/slotValidation.js';
 import { logApiError } from './errorLogger.service.js';
-import { sendAdvocateBookingConfirmationEmails } from './email.service.js';
+import { sendAdvocateBookingConfirmationEmails, sendConsultancyConfirmationEmail } from './email.service.js';
 
 /**
  * Verifies Razorpay Checkout signature using constant-time comparison.
@@ -509,6 +509,27 @@ export const syncPaymentFromRazorpay = async ({ paymentId, razorpayOrderId }) =>
       await withTimeout(sendAdvocateBookingConfirmationEmails(freshPayment.advocateBooking.id), 8000);
     } catch (emailErr) {
       console.error(`[Razorpay Sync] Booking confirmation email error for ${freshPayment.advocateBooking.id}:`, emailErr.message);
+    }
+  }
+
+  // Trigger consultancy confirmation email when paid
+  if (
+    freshPayment?.purpose === 'CONSULTANCY' &&
+    freshPayment?.status === 'PAID' &&
+    freshPayment?.consultancyRequestId &&
+    !freshPayment?.consultancyRequest?.confirmationEmailSentAt
+  ) {
+    try {
+      const withTimeout = (promise, ms = 8000) => {
+        let timer;
+        const timeoutPromise = new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`Consultancy email confirmation timed out after ${ms}ms`)), ms);
+        });
+        return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+      };
+      await withTimeout(sendConsultancyConfirmationEmail(freshPayment.consultancyRequestId), 8000);
+    } catch (emailErr) {
+      console.error(`[Razorpay Sync] Consultancy confirmation email error for ${freshPayment.consultancyRequestId}:`, emailErr.message);
     }
   }
 

@@ -4,7 +4,8 @@ import path from 'path';
 import { otpEmailTemplate } from '../src/templates/otpEmail.template.js';
 import {
   bookingConfirmedUserTemplate,
-  newAppointmentAdvocateTemplate
+  newAppointmentAdvocateTemplate,
+  consultancyBookedUserTemplate
 } from '../src/templates/bookingEmail.template.js';
 
 const outputDir = path.resolve(process.cwd(), 'tmp/email-previews');
@@ -32,7 +33,7 @@ const otpReset = otpEmailTemplate({
   purpose: 'PASSWORD_RESET'
 });
 
-// 2. Dummy Booking Data
+// 2. Dummy Advocate Booking Data
 const dummyBooking = {
   id: 'b8918239-1122-4433-8899-aabbccddeeff',
   bookingId: 'VLB-2026K7Q4M2X',
@@ -78,13 +79,50 @@ const bookingAdvocate = newAppointmentAdvocateTemplate({
   booking: dummyBooking
 });
 
+// 3. Dummy Consultancy Data (Demo A)
+const dummyConsultancy = {
+  id: 'c1234567-89ab-cdef-0123-456789abcdef',
+  bookingId: 'VSB-2026K4H7Q2M',
+  callType: 'VIDEO_CALL',
+  duration: 30,
+  phoneNumber: '+91 9876543210',
+  email: 'client@example.com',
+  createdAt: new Date('2026-11-03T09:15:00.000Z'),
+  user: {
+    fullName: 'Rahul Verma',
+    email: 'client@example.com',
+    phone: '+91 9876543210'
+  }
+};
+
+const dummyConsultancyPayment = {
+  id: 'pay-uuid-8888',
+  amount: 89900,
+  paidAt: new Date('2026-11-03T09:15:00.000Z'),
+  refundEligibleAt: new Date('2026-11-12T00:00:00.000Z'),
+  attempts: [
+    {
+      id: 'att-cons-1',
+      status: 'CAPTURED',
+      razorpayPaymentId: 'pay_P1A8X7Y6Z5Q4M3'
+    }
+  ]
+};
+
+const consultancyUser = consultancyBookedUserTemplate({
+  consultancy: dummyConsultancy,
+  payment: dummyConsultancyPayment,
+  userName: 'Rahul Verma'
+});
+
 // Write all preview files
 const previews = [
   { filename: 'otp-registration.html', content: otpRegistration.html },
   { filename: 'otp-login.html', content: otpLogin.html },
   { filename: 'otp-reset.html', content: otpReset.html },
   { filename: 'booking-user.html', content: bookingUser.html },
-  { filename: 'booking-advocate.html', content: bookingAdvocate.html }
+  { filename: 'booking-advocate.html', content: bookingAdvocate.html },
+  { filename: 'consultancy-user.html', content: consultancyUser.html }
 ];
 
 console.log('Generating branded email preview HTML files...\n');
@@ -94,4 +132,5 @@ for (const p of previews) {
   console.log(`✓ Created: ${filePath}`);
 }
 
-console.log(`\nAll 5 email previews written to ${outputDir}/`);
+console.log(`\nAll 6 email previews written to ${outputDir}/`);
+

@@ -648,6 +648,7 @@ model ConsultancyRequest {
   email       String
   status      ConsultancyStatus   @default(PENDING)
   completedAt DateTime?
+  confirmationEmailSentAt DateTime?
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 

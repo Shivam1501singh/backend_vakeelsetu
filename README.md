@@ -13396,16 +13396,20 @@ Visual metadata and contact details are read dynamically at runtime via `getBran
 | **Password Reset OTP** | `otpEmailTemplate({ purpose: 'PASSWORD_RESET' })` | `POST /api/advocate/reset-password` | Registered Advocate | Subject: *Reset your VakeelSetu password*<br/>10-minute expiry. |
 | **Booking Confirmed (User)** | `bookingConfirmedUserTemplate({ booking, payment })` | Post-payment confirmation in `syncPaymentFromRazorpay` | Client / User | Subject: *Booking confirmed – {Advocate}, {Date} {Time} IST*<br/>Snapshot fee breakdown, Total paid, In-person office address + Google Maps link, "View My Bookings" CTA. |
 | **New Appointment (Advocate)** | `newAppointmentAdvocateTemplate({ booking })` | Post-payment confirmation in `syncPaymentFromRazorpay` | Booked Advocate | Subject: *New appointment – {Date} {Time} IST ({Mode})*<br/>Client name, phone (`tel:` link), email, net advocate consultation fee, "Open My Appointments" CTA. |
+| **Consultancy Booked (User)** | `consultancyBookedUserTemplate({ consultancy, payment, userName })` | Post-payment confirmation in `syncPaymentFromRazorpay` (`purpose === 'CONSULTANCY'`) | Client / User (checkout email, fallback to account email) | Subject: *Consultancy booked – {Call \| Video Call} • {duration} min*<br/>Green status pill, Booking ID, Package, Contact phone/email, Booked on (IST), Payment ID, Amount paid, "View My Bookings" CTA. |
 
 #### Delivery & Exactly-Once Rules:
-1. **Atomic DB Claiming:** Each email recipient has an independent timestamp column on `AdvocateBooking`:
-   - `userConfirmationEmailSentAt DateTime?`
-   - `advocateConfirmationEmailSentAt DateTime?`
-   Sent via atomic conditional update: `prisma.advocateBooking.updateMany({ where: { id, ...EmailSentAt: null }, data: { ...EmailSentAt: new Date() } })`. If `count === 0`, execution is skipped, completely preventing duplicate sends across concurrent webhook/verification requests.
+1. **Atomic DB Claiming:** Each email recipient has an independent timestamp column:
+   - `AdvocateBooking`: `userConfirmationEmailSentAt DateTime?`, `advocateConfirmationEmailSentAt DateTime?`
+   - `ConsultancyRequest`: `confirmationEmailSentAt DateTime?`
+   Sent via atomic conditional update: `prisma.<model>.updateMany({ where: { id, ...EmailSentAt: null }, data: { ...EmailSentAt: new Date() } })`. If `count === 0`, execution is skipped, completely preventing duplicate sends across concurrent webhook/verification requests.
 2. **Failure Recovery:** If SMTP sending fails, the timestamp is immediately reset to `null` so background jobs can retry.
 3. **Non-blocking Execution:** The primary HTTP checkout verification path awaits email delivery wrapped in an 8-second timeout (`withTimeout`). Slow SMTP connections never block payments or client responses.
-4. **Reconcile Cron (48h Window):** The reconcile cron (`/api/internal/cron/payments-reconcile`) searches for `CONFIRMED` or `COMPLETED` bookings created within the last 48 hours where either timestamp is `null`, and automatically dispatches any missing confirmation emails.
-5. **Missing Recipient Email:** If a booking does not have an email on record, the send is cleanly skipped and logged at `info` level without throwing.
+4. **Reconcile Cron (48h Window):** The reconcile cron (`/api/internal/cron/payments-reconcile`) searches for:
+   - `CONFIRMED` or `COMPLETED` advocate bookings created in last 48h with missing confirmation timestamps.
+   - `PAID` consultancy requests created in last 48h with `confirmationEmailSentAt: null`.
+   Automatically dispatches any missing confirmation emails.
+5. **Missing Recipient Email:** If a booking or consultancy does not have an email on record (neither checkout email nor account email), the send is cleanly skipped and logged at `info` level without throwing.
 
 ---
 

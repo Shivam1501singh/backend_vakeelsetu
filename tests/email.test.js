@@ -16,13 +16,18 @@ import { otpEmailTemplate } from '../src/templates/otpEmail.template.js';
 import {
   bookingConfirmedUserTemplate,
   newAppointmentAdvocateTemplate,
+  consultancyBookedUserTemplate,
   formatRupees,
-  formatBookingDateTimeIst
+  formatBookingDateTimeIst,
+  formatDateTimeIst,
+  formatDateOnlyIst,
+  getConsultancyCallTypeLabel
 } from '../src/templates/bookingEmail.template.js';
 import {
   sendEmailOtp,
   sendBrandedMail,
   sendAdvocateBookingConfirmationEmails,
+  sendConsultancyConfirmationEmail,
   setTransporter,
   maskEmail
 } from '../src/services/email.service.js';
@@ -254,6 +259,89 @@ describe('3. Booking Email Templates', () => {
     assert.ok(!html.includes('Platform fee')); // net fee only
     assert.ok(html.includes('Open My Appointments'));
   });
+
+  it('renders consultancy confirmation user email with package, booking ID and details', () => {
+    const dummyConsultancy = {
+      id: 'c1234567-89ab-cdef-0123-456789abcdef',
+      bookingId: 'VSB-2026K4H7Q2M',
+      callType: 'VIDEO_CALL',
+      duration: 30,
+      phoneNumber: '+91 9876543210',
+      email: 'client@example.com',
+      createdAt: new Date('2026-11-03T09:15:00.000Z'),
+      user: { fullName: 'Rahul Verma', email: 'client@example.com' }
+    };
+    const dummyPayment = {
+      id: 'pay-uuid-8888',
+      amount: 89900,
+      paidAt: new Date('2026-11-03T09:15:00.000Z'),
+      refundEligibleAt: new Date('2026-11-12T00:00:00.000Z'),
+      attempts: [{ razorpayPaymentId: 'pay_P1A8X7Y6Z5Q4M3' }]
+    };
+
+    const { subject, html, text } = consultancyBookedUserTemplate({
+      consultancy: dummyConsultancy,
+      payment: dummyPayment
+    });
+
+    assert.equal(subject, 'Consultancy booked – Video Call • 30 min');
+    assert.ok(html.includes('Consultancy booked'));
+    assert.ok(html.includes('Your expert consultation is booked'));
+    assert.ok(html.includes('Rahul Verma'));
+    assert.ok(html.includes('VSB-2026K4H7Q2M'));
+    assert.ok(html.includes('Video Call'));
+    assert.ok(html.includes('30 min'));
+    assert.ok(html.includes('+91 9876543210'));
+    assert.ok(html.includes('client@example.com'));
+    assert.ok(html.includes('pay_P1A8X7Y6Z5Q4M3'));
+    assert.ok(html.includes('₹899.00'));
+    assert.ok(html.includes('View My Bookings'));
+    assert.ok(!html.includes('eligible for a refund'));
+    assert.ok(!html.includes('What happens next')); // Demo A does NOT have "what happens next"
+  });
+
+  it('never renders refund eligibility note even if payment.refundEligibleAt is set', () => {
+    const dummyConsultancy = {
+      bookingId: 'VSB-2026K4H7Q2M',
+      callType: 'CALL',
+      duration: 15,
+      user: { fullName: 'Sunil' }
+    };
+    const dummyPayment = {
+      amount: 49900,
+      refundEligibleAt: new Date('2026-11-12T00:00:00.000Z')
+    };
+
+    const { html, text } = consultancyBookedUserTemplate({
+      consultancy: dummyConsultancy,
+      payment: dummyPayment
+    });
+
+    assert.ok(!html.includes('eligible for a refund'));
+    assert.ok(!text.includes('eligible for a refund'));
+  });
+
+  it('escapes dynamic user inputs to prevent injection in consultancy email', () => {
+    const maliciousConsultancy = {
+      bookingId: '<script>alert("xss")</script>',
+      callType: 'CALL',
+      duration: 15,
+      phoneNumber: '"><img src=x onerror=alert(1)>',
+      email: 'hacker@example.com',
+      user: { fullName: '<b>Hacker</b>' }
+    };
+    const payment = { amount: 10000 };
+
+    const { html } = consultancyBookedUserTemplate({
+      consultancy: maliciousConsultancy,
+      payment
+    });
+
+    assert.ok(!html.includes('<script>alert("xss")</script>'));
+    assert.ok(html.includes('&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;'));
+    assert.ok(!html.includes('<b>Hacker</b>'));
+    assert.ok(html.includes('&lt;b&gt;Hacker&lt;/b&gt;'));
+  });
 });
 
 describe('4. Email Service (Stubbed Transporter)', () => {
@@ -417,5 +505,124 @@ describe('4. Email Service (Stubbed Transporter)', () => {
     prisma.advocateBooking.findUnique = originalFindUnique;
     prisma.advocateBooking.updateMany = originalUpdateMany;
     prisma.advocateBooking.update = originalUpdate;
+  });
+
+  it('sendConsultancyConfirmationEmail claims atomically and skips already-sent', async () => {
+    process.env.EMAIL_USER = 'sender@vakeelsetu.com';
+
+    const originalFindUnique = prisma.consultancyRequest.findUnique;
+    const originalUpdateMany = prisma.consultancyRequest.updateMany;
+    const originalUpdate = prisma.consultancyRequest.update;
+
+    let claimAttempts = 0;
+
+    prisma.consultancyRequest.findUnique = async () => ({
+      id: 'mock-consultancy-id-1',
+      bookingId: 'VSB-2026K4H7Q2M',
+      callType: 'CALL',
+      duration: 15,
+      phoneNumber: '+91 9999999999',
+      email: 'client@example.com',
+      user: { fullName: 'Client One', email: 'account@example.com' },
+      payment: {
+        amount: 49900,
+        paidAt: new Date(),
+        attempts: [{ razorpayPaymentId: 'pay_123' }]
+      }
+    });
+
+    prisma.consultancyRequest.updateMany = async () => {
+      claimAttempts++;
+      if (claimAttempts === 1) {
+        return { count: 1 };
+      }
+      return { count: 0 };
+    };
+
+    // First call: claims and sends 1 email
+    const res1 = await sendConsultancyConfirmationEmail('mock-consultancy-id-1');
+    assert.equal(res1.success, true);
+    assert.equal(sentMails.length, 1);
+    assert.equal(sentMails[0].to, 'client@example.com');
+
+    // Second call: count is 0 -> skipped
+    const res2 = await sendConsultancyConfirmationEmail('mock-consultancy-id-1');
+    assert.equal(res2.success, true);
+    assert.equal(sentMails.length, 1);
+
+    prisma.consultancyRequest.findUnique = originalFindUnique;
+    prisma.consultancyRequest.updateMany = originalUpdateMany;
+    prisma.consultancyRequest.update = originalUpdate;
+  });
+
+  it('sendConsultancyConfirmationEmail falls back to user account email if consultancy.email is empty', async () => {
+    process.env.EMAIL_USER = 'sender@vakeelsetu.com';
+
+    const originalFindUnique = prisma.consultancyRequest.findUnique;
+    const originalUpdateMany = prisma.consultancyRequest.updateMany;
+
+    prisma.consultancyRequest.findUnique = async () => ({
+      id: 'mock-consultancy-id-2',
+      bookingId: 'VSB-2026K4H7Q2M',
+      callType: 'CALL',
+      duration: 15,
+      phoneNumber: '+91 9999999999',
+      email: '', // empty checkout email
+      user: { fullName: 'Account User', email: 'account-fallback@example.com' },
+      payment: {
+        amount: 49900,
+        attempts: []
+      }
+    });
+
+    prisma.consultancyRequest.updateMany = async () => ({ count: 1 });
+
+    const res = await sendConsultancyConfirmationEmail('mock-consultancy-id-2');
+    assert.equal(res.success, true);
+    assert.equal(sentMails.length, 1);
+    assert.equal(sentMails[0].to, 'account-fallback@example.com');
+
+    prisma.consultancyRequest.findUnique = originalFindUnique;
+    prisma.consultancyRequest.updateMany = originalUpdateMany;
+  });
+
+  it('sendConsultancyConfirmationEmail resets timestamp on transporter failure', async () => {
+    process.env.EMAIL_USER = 'sender@vakeelsetu.com';
+
+    const originalFindUnique = prisma.consultancyRequest.findUnique;
+    const originalUpdateMany = prisma.consultancyRequest.updateMany;
+    const originalUpdate = prisma.consultancyRequest.update;
+
+    let resetPayload = null;
+
+    prisma.consultancyRequest.findUnique = async () => ({
+      id: 'mock-consultancy-id-3',
+      bookingId: 'VSB-2026K4H7Q2M',
+      callType: 'CALL',
+      duration: 15,
+      email: 'client@example.com',
+      user: { fullName: 'Client' },
+      payment: { amount: 49900 }
+    });
+
+    prisma.consultancyRequest.updateMany = async () => ({ count: 1 });
+    prisma.consultancyRequest.update = async ({ data }) => {
+      resetPayload = data;
+      return {};
+    };
+
+    setTransporter({
+      sendMail: async () => {
+        throw new Error('Connection refused');
+      }
+    });
+
+    const res = await sendConsultancyConfirmationEmail('mock-consultancy-id-3');
+    assert.equal(res.success, false);
+    assert.equal(resetPayload?.confirmationEmailSentAt, null);
+
+    prisma.consultancyRequest.findUnique = originalFindUnique;
+    prisma.consultancyRequest.updateMany = originalUpdateMany;
+    prisma.consultancyRequest.update = originalUpdate;
   });
 });

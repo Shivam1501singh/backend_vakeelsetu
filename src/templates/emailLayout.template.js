@@ -238,15 +238,16 @@ export const renderButton = ({ label, url } = {}) => {
  * If text is empty, renders nothing ('').
  *
  * @param {string} text
+ * @param {{ rawHtml?: boolean }} [options]
  * @returns {string}
  */
-export const renderNote = (text) => {
+export const renderNote = (text, { rawHtml = false } = {}) => {
   if (!text || !String(text).trim()) return '';
-  const safeText = escapeHtml(text.trim());
+  const renderedText = rawHtml ? String(text).trim() : escapeHtml(String(text).trim());
 
   return `<!-- footnote -->
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:22px;border-left:3px solid ${COLORS.accent};background:${COLORS.supportBg};"><tr>
-  <td style="padding:11px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;line-height:19px;color:#6b4313;">${safeText}</td>
+  <td style="padding:11px 14px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;line-height:19px;color:#6b4313;">${renderedText}</td>
 </tr></table>`;
 };
 
