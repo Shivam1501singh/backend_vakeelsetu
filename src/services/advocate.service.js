@@ -43,27 +43,26 @@ const getAdvocateDirectCoordinates = (advocate) => {
 
 /**
  * Resolves advocate coordinates in priority:
- * 1. officeLatitude / officeLongitude
- * 2. latitude / longitude
- * 3. pincode via cache-only batch lookup
+ * 1. Pincode via cache / geocode
+ * 2. officeLatitude / officeLongitude (fallback if pincode not available or unresolvable)
+ * 3. latitude / longitude (fallback)
  */
 const resolveAdvocateCoordinatesBatch = async (advocates) => {
-  const missingPincodes = new Set();
+  const pincodesToLookup = new Set();
   for (const adv of advocates) {
-    const direct = getAdvocateDirectCoordinates(adv);
-    if (!direct && adv.pincode) {
+    if (adv.pincode) {
       const cleanPin = String(adv.pincode).trim();
       if (/^[1-9]\d{5}$/.test(cleanPin)) {
-        missingPincodes.add(cleanPin);
+        pincodesToLookup.add(cleanPin);
       }
     }
   }
 
   const cacheMap = new Map();
-  if (missingPincodes.size > 0) {
+  if (pincodesToLookup.size > 0) {
     const rows = await prisma.pincodeLocation.findMany({
       where: {
-        pincode: { in: Array.from(missingPincodes) },
+        pincode: { in: Array.from(pincodesToLookup) },
         status: 'OK',
         latitude: { not: null },
         longitude: { not: null }
@@ -73,16 +72,34 @@ const resolveAdvocateCoordinatesBatch = async (advocates) => {
     for (const r of rows) {
       cacheMap.set(r.pincode, { latitude: r.latitude, longitude: r.longitude });
     }
+
+    const unresolvPincodes = Array.from(pincodesToLookup).filter(p => !cacheMap.has(p) && !PINCODE_COORDINATES[p]);
+    if (unresolvPincodes.length > 0) {
+      await Promise.allSettled(unresolvPincodes.map(async (pin) => {
+        try {
+          const loc = await getPincodeLocation(pin);
+          if (loc && loc.found && loc.latitude !== null && loc.longitude !== null) {
+            cacheMap.set(pin, { latitude: loc.latitude, longitude: loc.longitude });
+          }
+        } catch {
+          // graceful fallback
+        }
+      }));
+    }
   }
 
   return advocates.map(adv => {
-    const direct = getAdvocateDirectCoordinates(adv);
-    if (direct) return direct;
+    // 1. Priority: Pincode Location
     if (adv.pincode) {
       const cleanPin = String(adv.pincode).trim();
       if (cacheMap.has(cleanPin)) return cacheMap.get(cleanPin);
       if (PINCODE_COORDINATES[cleanPin]) return PINCODE_COORDINATES[cleanPin];
     }
+
+    // 2. Fallback: Direct Coordinates
+    const direct = getAdvocateDirectCoordinates(adv);
+    if (direct) return direct;
+
     return null;
   });
 };

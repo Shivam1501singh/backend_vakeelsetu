@@ -41,8 +41,6 @@ export const isValidPincode = (pincode) => {
  * Execute fallbacks in strict order:
  * 1. Stale cache row with status OK
  * 2. Hardcoded PINCODE_COORDINATES
- * 3. Advocate DB lookup
- * 4. User DB lookup
  */
 const resolveFallbacks = async (cleanPincode, staleCacheRow) => {
   // 1. Stale cache row
@@ -66,43 +64,57 @@ const resolveFallbacks = async (cleanPincode, staleCacheRow) => {
     };
   }
 
-  // 3. Database lookup - Advocate
-  const advocateLoc = await prisma.advocate.findFirst({
-    where: {
-      pincode: cleanPincode,
-      latitude: { not: null },
-      longitude: { not: null }
-    },
-    select: { latitude: true, longitude: true }
-  });
-  if (advocateLoc && advocateLoc.latitude !== null && advocateLoc.longitude !== null) {
-    return {
-      found: true,
-      latitude: advocateLoc.latitude,
-      longitude: advocateLoc.longitude,
-      source: 'FALLBACK'
-    };
-  }
-
-  // 4. Database lookup - User
-  const userLoc = await prisma.user.findFirst({
-    where: {
-      pincode: cleanPincode,
-      latitude: { not: null },
-      longitude: { not: null }
-    },
-    select: { latitude: true, longitude: true }
-  });
-  if (userLoc && userLoc.latitude !== null && userLoc.longitude !== null) {
-    return {
-      found: true,
-      latitude: userLoc.latitude,
-      longitude: userLoc.longitude,
-      source: 'FALLBACK'
-    };
-  }
-
   return { found: false, reason: 'UNAVAILABLE' };
+};
+
+const resolveNominatim = async (cleanPincode) => {
+  try {
+    const res = await axios.get('https://nominatim.openstreetmap.org/search', {
+      params: { postalcode: cleanPincode, country: 'India', format: 'json' },
+      headers: { 'User-Agent': 'VakeelsetuBackend/1.0' },
+      timeout: 5000
+    });
+    if (Array.isArray(res.data) && res.data.length > 0) {
+      const item = res.data[0];
+      const lat = parseFloat(item.lat);
+      const lon = parseFloat(item.lon);
+      if (!isNaN(lat) && !isNaN(lon)) {
+        try {
+          await prisma.pincodeLocation.upsert({
+            where: { pincode: cleanPincode },
+            update: {
+              latitude: lat,
+              longitude: lon,
+              formattedAddress: item.display_name || null,
+              source: 'NOMINATIM',
+              status: 'OK',
+              fetchedAt: new Date()
+            },
+            create: {
+              pincode: cleanPincode,
+              latitude: lat,
+              longitude: lon,
+              formattedAddress: item.display_name || null,
+              source: 'NOMINATIM',
+              status: 'OK',
+              fetchedAt: new Date()
+            }
+          });
+        } catch (dbErr) {
+          console.warn(`[Geocoding] Could not cache NOMINATIM location for ${cleanPincode}:`, dbErr.message);
+        }
+        return {
+          found: true,
+          latitude: lat,
+          longitude: lon,
+          source: 'NOMINATIM'
+        };
+      }
+    }
+  } catch (err) {
+    console.warn(`[Geocoding] Nominatim lookup failed for pincode ${cleanPincode}:`, err.message);
+  }
+  return null;
 };
 
 const _resolvePincodeLocation = async (cleanPincode) => {
@@ -150,7 +162,13 @@ const _resolvePincodeLocation = async (cleanPincode) => {
   if (!apiKey) {
     if (!hasLoggedKeyWarning) {
       hasLoggedKeyWarning = true;
-      console.warn('[Geocoding] GOOGLE_MAPS_API_KEY is missing. Skipping Google Geocoding, using fallbacks only.');
+      console.warn('[Geocoding] GOOGLE_MAPS_API_KEY is missing. Trying Nominatim, then fallbacks.');
+    }
+    const nominatimRes = await resolveNominatim(cleanPincode);
+    if (nominatimRes) {
+      const duration = Date.now() - startTime;
+      console.log(`[Geocoding] pincode=${cleanPincode} source=NOMINATIM status=OK duration=${duration}ms`);
+      return nominatimRes;
     }
     const fallbackRes = await resolveFallbacks(cleanPincode, cached);
     const duration = Date.now() - startTime;
@@ -260,7 +278,14 @@ const _resolvePincodeLocation = async (cleanPincode) => {
     console.warn(`[Geocoding] Google Geocoding call failed for pincode ${cleanPincode} (${errorStatus})`);
   }
 
-  // 3. Fallbacks when Google is unavailable or errored
+  // 3. Fallbacks: Try Nominatim, then static fallbacks
+  const nominatimRes = await resolveNominatim(cleanPincode);
+  if (nominatimRes) {
+    const duration = Date.now() - startTime;
+    console.log(`[Geocoding] pincode=${cleanPincode} source=NOMINATIM status=OK duration=${duration}ms`);
+    return nominatimRes;
+  }
+
   const fallbackRes = await resolveFallbacks(cleanPincode, cached);
   const duration = Date.now() - startTime;
   console.log(`[Geocoding] pincode=${cleanPincode} source=${fallbackRes.source || 'NONE'} duration=${duration}ms`);
