@@ -7,6 +7,7 @@ import {
   newAppointmentAdvocateTemplate,
   consultancyBookedUserTemplate
 } from '../templates/bookingEmail.template.js';
+import { profileUnderReviewTemplate } from '../templates/advocateAccountEmail.template.js';
 import {
   sendPushNotification,
   sendOtpPushNotification,
@@ -433,4 +434,68 @@ export const sendConsultancyConfirmationEmail = async (consultancyRequestId) => 
     return { success: false, message: error.message };
   }
 };
+
+/**
+ * Sends a "Your profile is under review" email to the advocate when their profile is submitted for verification.
+ * Informational only (no retry cron / no DB tracking column).
+ * Awaited with an 8-second timeout. Never throws.
+ *
+ * @param {string} advocateId Advocate UUID
+ * @returns {Promise<{ success: boolean, message?: string }>}
+ */
+export const sendProfileUnderReviewEmail = async (advocateId) => {
+  if (!advocateId) {
+    return { success: false, message: 'advocateId is required' };
+  }
+
+  let advocateEmail = '';
+  try {
+    const advocate = await prisma.advocate.findUnique({
+      where: { id: advocateId }
+    });
+
+    if (!advocate) {
+      console.warn(`[Email Service] Advocate ${advocateId} not found.`);
+      return { success: false, message: 'Advocate not found' };
+    }
+
+    advocateEmail = (advocate.email || '').trim();
+    if (!advocateEmail) {
+      console.info(`[Email Service] Skipping profile under review email for advocate ${advocateId}: no email on record.`);
+      return { success: true, message: 'No email on record' };
+    }
+
+    const { subject, html, text, attachments } = profileUnderReviewTemplate({
+      advocate,
+      submittedAt: advocate.submittedForApprovalAt || new Date()
+    });
+
+    const withTimeout = (promise, ms = 8000) => {
+      let timer;
+      const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Profile under review email timed out after ${ms}ms`)), ms);
+      });
+      return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+    };
+
+    await withTimeout(
+      sendBrandedMail({
+        to: advocateEmail,
+        subject,
+        html,
+        text,
+        attachments,
+        emailType: 'ADVOCATE_PROFILE_UNDER_REVIEW'
+      }),
+      8000
+    );
+
+    console.log(`[Email Service] ADVOCATE_PROFILE_UNDER_REVIEW sent to ${maskEmail(advocateEmail)} for advocateId: ${advocateId}`);
+    return { success: true };
+  } catch (error) {
+    console.error(`[Email Service] ADVOCATE_PROFILE_UNDER_REVIEW failed for ${maskEmail(advocateEmail)} (advocateId: ${advocateId}):`, error.message);
+    return { success: false, message: error.message };
+  }
+};
+
 

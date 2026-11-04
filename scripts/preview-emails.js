@@ -7,6 +7,7 @@ import {
   newAppointmentAdvocateTemplate,
   consultancyBookedUserTemplate
 } from '../src/templates/bookingEmail.template.js';
+import { profileUnderReviewTemplate } from '../src/templates/advocateAccountEmail.template.js';
 
 const outputDir = path.resolve(process.cwd(), 'tmp/email-previews');
 fs.mkdirSync(outputDir, { recursive: true });
@@ -115,6 +116,19 @@ const consultancyUser = consultancyBookedUserTemplate({
   userName: 'Rahul Verma'
 });
 
+// 4. Dummy Advocate Profile Submission Data
+const dummyAdvocateSubmission = {
+  fullName: 'Adv. Priya Sharma',
+  barCouncilId: 'D/1234/2018',
+  email: 'advocate@example.com',
+  phone: '+919876543221'
+};
+
+const profileUnderReview = profileUnderReviewTemplate({
+  advocate: dummyAdvocateSubmission,
+  submittedAt: new Date('2026-11-04T11:10:00.000Z') // 4:40 PM IST
+});
+
 // Write all preview files
 const previews = [
   { filename: 'otp-registration.html', content: otpRegistration.html },
@@ -122,7 +136,8 @@ const previews = [
   { filename: 'otp-reset.html', content: otpReset.html },
   { filename: 'booking-user.html', content: bookingUser.html },
   { filename: 'booking-advocate.html', content: bookingAdvocate.html },
-  { filename: 'consultancy-user.html', content: consultancyUser.html }
+  { filename: 'consultancy-user.html', content: consultancyUser.html },
+  { filename: 'profile-under-review.html', content: profileUnderReview.html }
 ];
 
 console.log('Generating branded email preview HTML files...\n');
@@ -132,5 +147,5 @@ for (const p of previews) {
   console.log(`✓ Created: ${filePath}`);
 }
 
-console.log(`\nAll 6 email previews written to ${outputDir}/`);
+console.log(`\nAll 7 email previews written to ${outputDir}/`);
 

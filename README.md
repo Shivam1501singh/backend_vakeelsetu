@@ -13490,6 +13490,7 @@ VakeelSetu email notifications use a modern, modular template system built with 
 - `src/templates/emailLayout.template.js`: Master layout shell, branding constants (`BRAND`, `COLORS`), and shared rendering helpers.
 - `src/templates/otpEmail.template.js`: Verification, login, and password reset OTP email templates.
 - `src/templates/bookingEmail.template.js`: Advocate consultation booking confirmed (user) and new appointment (advocate) templates.
+- `src/templates/advocateAccountEmail.template.js`: Advocate account and profile lifecycle email templates (profile under review, approval/rejection).
 - `src/services/email.service.js`: Nodemailer singleton transporter, branded sender helper with automatic logo CID attachment, backward-compatible OTP dispatcher, and atomic booking confirmation dispatcher.
 - `scripts/preview-emails.js`: CLI tool to generate visual HTML preview files with dummy data (`tmp/email-previews/*.html`).
 
@@ -13541,6 +13542,7 @@ Visual metadata and contact details are read dynamically at runtime via `getBran
 | **Booking Confirmed (User)** | `bookingConfirmedUserTemplate({ booking, payment })` | Post-payment confirmation in `syncPaymentFromRazorpay` | Client / User | Subject: *Booking confirmed – {Advocate}, {Date} {Time} IST*<br/>Snapshot fee breakdown, Total paid, In-person office address + Google Maps link, "View My Bookings" CTA. |
 | **New Appointment (Advocate)** | `newAppointmentAdvocateTemplate({ booking })` | Post-payment confirmation in `syncPaymentFromRazorpay` | Booked Advocate | Subject: *New appointment – {Date} {Time} IST ({Mode})*<br/>Client name, phone (`tel:` link), email, net advocate consultation fee, "Open My Appointments" CTA. |
 | **Consultancy Booked (User)** | `consultancyBookedUserTemplate({ consultancy, payment, userName })` | Post-payment confirmation in `syncPaymentFromRazorpay` (`purpose === 'CONSULTANCY'`) | Client / User (checkout email, fallback to account email) | Subject: *Consultancy booked – {Call \| Video Call} • {duration} min*<br/>Green status pill, Booking ID, Package, Contact phone/email, Booked on (IST), Payment ID, Amount paid, "View My Bookings" CTA. |
+| **Profile under review (advocate)** | `profileUnderReviewTemplate({ advocate, submittedAt })` | `POST /api/advocate/profile/submit-for-approval` (first submission + resubmission after REJECTED; NOT for profile changes) | Submitting Advocate (registered email) | Subject: *Your VakeelSetu profile is under review*<br/>Amber "Under review" status pill, submitted date/time (IST), details table with name, monospace Bar Council ID, email, masked phone (`+91 98XXXXXX21`), and "Under review" status chip. No button, no note box, no retry cron. |
 
 #### Delivery & Exactly-Once Rules:
 1. **Atomic DB Claiming:** Each email recipient has an independent timestamp column:
@@ -13554,6 +13556,21 @@ Visual metadata and contact details are read dynamically at runtime via `getBran
    - `PAID` consultancy requests created in last 48h with `confirmationEmailSentAt: null`.
    Automatically dispatches any missing confirmation emails.
 5. **Missing Recipient Email:** If a booking or consultancy does not have an email on record (neither checkout email nor account email), the send is cleanly skipped and logged at `info` level without throwing.
+
+#### Advocate Profile Under Review Email Specifications:
+- **Trigger Points:**
+  - Sent on **first submission** for admin verification (`approvalStatus: 'PENDING'` with `submittedForApprovalAt: null` transitioning to `submittedForApprovalAt: new Date()`).
+  - Sent on **resubmission after rejection** (`approvalStatus: 'REJECTED'` transitioning back to `approvalStatus: 'PENDING'`).
+  - **NOT sent on:** duplicate submit (already pending and submitted), failed submit (validation errors, incomplete profile, blocked account), draft profile changes submitted by already-`APPROVED` advocates, or admin actions.
+- **Recipient:** The advocate's registered email (`advocate.email`). If no email exists on record, skipped and logged at `info` level.
+- **Masked Phone Number:** Displayed as `+91 98XXXXXX21` (first 2 and last 2 digits visible, middle 6 digits masked).
+- **Design Elements:** Amber "⏳ Under review" pill, dark status & submission time box (IST), key-value details table, closing reassurance copy. **No button and no footnote/note box.**
+- **Error & Timeout Resilience (No Retry Cron):** Informational email dispatched with an 8-second timeout (`withTimeout`). Failures or timeouts are logged with masked recipient and error details; they never disrupt or fail the HTTP response (`200 OK`). No database timestamp or retry cron is used for this informational email.
+- **Manual Testing Steps:**
+  1. Register a new advocate locally via `POST /api/auth/advocate/register-session` and OTP verification.
+  2. Complete the advocate profile fields (name, bar council ID, photo, about, pricing, address/city/state/pincode).
+  3. Submit for verification via `POST /api/advocate/profile/submit-for-approval`.
+  4. Check the local console log for `[Email Service] ADVOCATE_PROFILE_UNDER_REVIEW sent` or inspect the outgoing inbox / preview at `tmp/email-previews/profile-under-review.html`.
 
 ---
 

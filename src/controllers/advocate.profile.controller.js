@@ -3,6 +3,7 @@ import { advocateProfileUpdateSchema } from '../validators/advocate.validator.js
 import { uploadBufferToCloudinary, deleteFromCloudinary } from '../services/cloudinary.service.js';
 import { computeEffectiveOnlineStatus } from '../utils/advocateStatus.js';
 import { formatPricingSummary } from '../services/advocateBooking/pricing.js';
+import { sendProfileUnderReviewEmail } from '../services/email.service.js';
 
 /**
  * Approval-required fields for APPROVED advocates.
@@ -306,6 +307,14 @@ export const submitForApproval = async (req, res, next) => {
     }
 
     // Advocate NOT approved -> Standard initial profile verification submission
+    // Duplicate submission guard: already submitted and currently under review
+    if (advocate.approvalStatus === 'PENDING' && advocate.submittedForApprovalAt) {
+      return res.status(400).json({
+        success: false,
+        message: 'Your profile has already been submitted and is currently under review.'
+      });
+    }
+
     if (!checkIsProfileComplete(advocate)) {
       return res.status(400).json({
         success: false,
@@ -321,6 +330,13 @@ export const submitForApproval = async (req, res, next) => {
         rejectionReason: null
       }
     });
+
+    // Trigger profile under review email (awaited with 8s timeout, non-blocking / never throws)
+    try {
+      await sendProfileUnderReviewEmail(advocateId);
+    } catch (emailErr) {
+      console.error(`[Advocate Profile] Error sending under review email for ${advocateId}:`, emailErr.message);
+    }
 
     return res.status(200).json({
       success: true,
