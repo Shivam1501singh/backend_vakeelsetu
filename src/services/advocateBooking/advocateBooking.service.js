@@ -80,9 +80,61 @@ export const getAdvocateBookingOptions = async (advocateId) => {
 };
 
 /**
+ * Validates requested duration and ensures booking ends on the same IST day.
+ */
+export const validateDurationAndDay = (mode, advocate, startAtDate, rawDurationMinutes) => {
+  const slotMinutes = parseInt(process.env.ADVOCATE_BOOKING_SLOT_MINUTES || '15', 10);
+
+  let durationMinutes;
+  if (mode === 'IN_PERSON') {
+    const fixedDuration = advocate.officeVisitDurationMinutes
+      ? parseInt(advocate.officeVisitDurationMinutes, 10)
+      : parseInt(process.env.ADVOCATE_IN_PERSON_MINUTES || '60', 10);
+
+    if (rawDurationMinutes !== undefined && rawDurationMinutes !== null && parseInt(rawDurationMinutes, 10) !== fixedDuration) {
+      const err = new Error('Office visit duration is fixed by the advocate.');
+      err.statusCode = 400;
+      err.code = 'INVALID_DURATION';
+      throw err;
+    }
+    durationMinutes = fixedDuration;
+  } else {
+    // VOICE_CALL or VIDEO_CALL
+    if (rawDurationMinutes === undefined || rawDurationMinutes === null) {
+      durationMinutes = slotMinutes;
+    } else {
+      const parsed = parseInt(rawDurationMinutes, 10);
+      if (isNaN(parsed) || parsed < slotMinutes || parsed % slotMinutes !== 0) {
+        const err = new Error('Duration must be in steps of 15 minutes.');
+        err.statusCode = 400;
+        err.code = 'INVALID_DURATION';
+        throw err;
+      }
+      durationMinutes = parsed;
+    }
+  }
+
+  // Same day check in IST: end <= 24:00 IST that day
+  const endAtDate = new Date(startAtDate.getTime() + durationMinutes * 60 * 1000);
+  const tz = process.env.BOOKING_TIMEZONE || DEFAULT_BOOKING_TIMEZONE;
+  const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const istDateStr = formatter.format(startAtDate); // YYYY-MM-DD
+  const nextDayStartUtc = new Date(new Date(`${istDateStr}T23:59:59.999+05:30`).getTime() + 1);
+
+  if (endAtDate.getTime() > nextDayStartUtc.getTime()) {
+    const err = new Error('The booking must end on the same day.');
+    err.statusCode = 400;
+    err.code = 'INVALID_DURATION';
+    throw err;
+  }
+
+  return durationMinutes;
+};
+
+/**
  * Quotes an appointment slot and checks real-time availability.
  */
-export const quoteBookingSlot = async (advocateId, { mode, startAt }, userId = null) => {
+export const quoteBookingSlot = async (advocateId, { mode, startAt, durationMinutes: rawDurationMinutes }, userId = null) => {
   const advocate = await prisma.advocate.findUnique({
     where: { id: advocateId }
   });
@@ -94,13 +146,22 @@ export const quoteBookingSlot = async (advocateId, { mode, startAt }, userId = n
   }
 
   assertAdvocateBookable(advocate);
-  const breakdown = quote(advocate, mode);
 
-  const { startAt: slotStart, endAt: slotEnd, durationMinutes } = validateStart(mode, startAt, breakdown.durationMinutes);
+  const startDate = new Date(startAt);
+  if (isNaN(startDate.getTime())) {
+    const error = new Error('Invalid ISO date format for startAt.');
+    error.statusCode = 400;
+    error.code = 'INVALID_SLOT';
+    throw error;
+  }
+
+  const durationMinutes = validateDurationAndDay(mode, advocate, startDate, rawDurationMinutes);
+  const breakdown = quote(advocate, mode, durationMinutes, startAt);
+  const { startAt: slotStart, endAt: slotEnd } = validateStart(mode, startAt, durationMinutes);
 
   const free = await isSlotFree(advocateId, slotStart, slotEnd);
   if (!free) {
-    const error = new Error('The selected time slot is no longer available. Please select another time.');
+    const error = new Error(`The advocate is not available for the full ${durationMinutes} minutes. Please choose a shorter duration or another time.`);
     error.statusCode = 409;
     error.code = 'SLOT_TAKEN';
     throw error;
@@ -124,7 +185,7 @@ export const quoteBookingSlot = async (advocateId, { mode, startAt }, userId = n
 /**
  * Creates or reuses a checkout order for an advocate appointment.
  */
-export const createAdvocateBookingCheckout = async ({ userId, advocateId, mode, startAt }) => {
+export const createAdvocateBookingCheckout = async ({ userId, advocateId, mode, startAt, durationMinutes: rawDurationMinutes }) => {
   if (!isPaymentsEnabled()) {
     const err = new Error('Payments are currently disabled on this platform.');
     err.statusCode = 400;
@@ -161,19 +222,29 @@ export const createAdvocateBookingCheckout = async ({ userId, advocateId, mode, 
   }
 
   assertAdvocateBookable(advocate);
-  const pricing = quote(advocate, mode);
-  const { startAt: slotStart, endAt: slotEnd, durationMinutes } = validateStart(mode, startAt, pricing.durationMinutes);
+
+  const startDate = new Date(startAt);
+  if (isNaN(startDate.getTime())) {
+    const error = new Error('Invalid ISO date format for startAt.');
+    error.statusCode = 400;
+    error.code = 'INVALID_SLOT';
+    throw error;
+  }
+
+  const durationMinutes = validateDurationAndDay(mode, advocate, startDate, rawDurationMinutes);
+  const pricing = quote(advocate, mode, durationMinutes, startAt);
+  const { startAt: slotStart, endAt: slotEnd } = validateStart(mode, startAt, durationMinutes);
 
   const now = new Date();
+  let oldHoldToRelease = null;
 
-  // 1. Reuse Rule: Check if this user already has an active HOLD for the exact same advocate+mode+startAt
+  // 1. Reuse Rule: Check if this user already has an active HOLD for the same advocate and startAt
   const existingPayment = await prisma.payment.findFirst({
     where: {
       userId,
       purpose: 'ADVOCATE_BOOKING',
       advocateBooking: {
         advocateId,
-        mode,
         startAt: slotStart,
         status: 'HOLD'
       },
@@ -209,45 +280,56 @@ export const createAdvocateBookingCheckout = async ({ userId, advocateId, mode, 
     }
 
     if (synced.status === 'CREATED' || synced.status === 'FAILED') {
-      // Reuse the existing Razorpay order
-      const updatedBooking = await prisma.advocateBooking.update({
-        where: { id: synced.advocateBookingId },
-        data: {
-          userName: user.fullName || '',
-          userPhone: user.phone,
-          userEmail: user.email
-        }
-      });
+      const isSameMode = synced.advocateBooking?.mode === mode;
+      const isSameDuration = synced.advocateBooking?.durationMinutes === durationMinutes;
 
-      return {
-        statusCode: 200,
-        response: {
-          success: true,
-          checkout: {
-            checkoutId: synced.id,
-            razorpayOrderId: synced.razorpayOrderId,
-            amount: synced.amount,
-            currency: synced.currency,
-            keyId: getRazorpayKeyId(),
-            status: synced.status,
-            expiresAt: synced.expiresAt,
-            booking: {
-              id: updatedBooking.id,
-              mode: updatedBooking.mode,
-              startAt: updatedBooking.startAt,
-              endAt: updatedBooking.endAt,
-              durationMinutes: updatedBooking.durationMinutes,
-              subject: updatedBooking.subject,
-              breakdown: pricing
-            },
-            prefill: {
-              name: user.fullName || '',
-              email: user.email,
-              contact: user.phone
+      if (isSameMode && isSameDuration) {
+        // Reuse the existing Razorpay order and HOLD
+        const updatedBooking = await prisma.advocateBooking.update({
+          where: { id: synced.advocateBookingId },
+          data: {
+            userName: user.fullName || '',
+            userPhone: user.phone,
+            userEmail: user.email
+          }
+        });
+
+        return {
+          statusCode: 200,
+          response: {
+            success: true,
+            checkout: {
+              checkoutId: synced.id,
+              razorpayOrderId: synced.razorpayOrderId,
+              amount: synced.amount,
+              currency: synced.currency,
+              keyId: getRazorpayKeyId(),
+              status: synced.status,
+              expiresAt: synced.expiresAt,
+              booking: {
+                id: updatedBooking.id,
+                mode: updatedBooking.mode,
+                startAt: updatedBooking.startAt,
+                endAt: updatedBooking.endAt,
+                durationMinutes: updatedBooking.durationMinutes,
+                subject: updatedBooking.subject,
+                breakdown: pricing
+              },
+              prefill: {
+                name: user.fullName || '',
+                email: user.email,
+                contact: user.phone
+              }
             }
           }
-        }
-      };
+        };
+      } else {
+        // Different duration or mode: mark old hold to be released in the transaction
+        oldHoldToRelease = {
+          paymentId: synced.id,
+          bookingId: synced.advocateBookingId
+        };
+      }
     }
   }
 
@@ -270,7 +352,8 @@ export const createAdvocateBookingCheckout = async ({ userId, advocateId, mode, 
         purpose: 'ADVOCATE_BOOKING',
         userId,
         advocateId,
-        mode
+        mode,
+        durationMinutes: String(durationMinutes)
       }
     });
   } catch (rzpErr) {
@@ -290,13 +373,25 @@ export const createAdvocateBookingCheckout = async ({ userId, advocateId, mode, 
           FOR UPDATE
         `;
 
+        // If replacing an old HOLD with different duration or mode, cancel/release it first
+        if (oldHoldToRelease) {
+          await tx.advocateBooking.update({
+            where: { id: oldHoldToRelease.bookingId },
+            data: { status: 'EXPIRED' }
+          });
+          await tx.payment.update({
+            where: { id: oldHoldToRelease.paymentId },
+            data: { status: 'FAILED' }
+          });
+        }
+
         // Check user conflict across all advocates
         await checkUserSlotConflict(userId, slotStart, slotEnd, tx);
 
         // Check advocate slot availability
         const slotFree = await isSlotFree(advocateId, slotStart, slotEnd, tx);
         if (!slotFree) {
-          const err = new Error('The selected time slot is no longer available. Please select another time.');
+          const err = new Error(`The advocate is not available for the full ${durationMinutes} minutes. Please choose a shorter duration or another time.`);
           err.statusCode = 409;
           err.code = 'SLOT_TAKEN';
           throw err;

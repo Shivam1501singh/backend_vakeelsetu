@@ -12001,30 +12001,42 @@ sequenceDiagram
 
 All financial amounts in database and API payloads are strictly stored and computed in **paise integers** (`100 paise = ₹1.00`).
 
-| Mode | Duration | Rate Field on Advocate | Calculation Formula |
-|---|---|---|---|
-| `VOICE_CALL` | **15 minutes** (fixed) | `voiceCallPricePer15Min` (₹ / 15 min) | `feePaise = round(voiceCallPricePer15Min * 100)` |
-| `VIDEO_CALL` | **15 minutes** (fixed) | `videoCallPricePer15Min` (₹ / 15 min) | `feePaise = round(videoCallPricePer15Min * 100)` |
-| `IN_PERSON` | `advocate.officeVisitDurationMinutes` (>= 15 min) | `offlineVisitingFee` (₹ flat) | `feePaise = round(offlineVisitingFee * 100)` |
+| Mode | Base Duration | Extendable? | Step Size | Rate Field on Advocate | Calculation Formula |
+|---|---|---|---|---|---|
+| `VOICE_CALL` | **15 minutes** (default) | **Yes (+15 min steps)** | 15 min | `voiceCallPricePer15Min` (₹ / 15 min) | `fee = voiceCallPricePer15Min * (durationMinutes / 15)` |
+| `VIDEO_CALL` | **15 minutes** (default) | **Yes (+15 min steps)** | 15 min | `videoCallPricePer15Min` (₹ / 15 min) | `fee = videoCallPricePer15Min * (durationMinutes / 15)` |
+| `IN_PERSON` | `advocate.officeVisitDurationMinutes` (>= 15 min) | **No (Fixed)** | Fixed | `offlineVisitingFee` (₹ flat) | `fee = offlineVisitingFee` (fixed flat fee) |
 
 > **Historical Snapshot Preservation:**
 > Existing bookings in `AdvocateBooking` permanently retain their historical `durationMinutes`, `startAt`, `endAt`, `feePaise`, `gstPaise`, `platformFeePaise`, and `totalPaise`. They are immutable and never re-evaluated against subsequent advocate rate changes.
 
+#### Duration Extension Rules:
+- **Voice and Video Calls are Extendable:** The user selects a start slot (default **15 min**) and can extend or reduce it in **+15 min / −15 min steps** (15, 30, 45, 60, ...).
+- **One Booking Locks Full Range:** A single booking from `startAt` to `startAt + durationMinutes` locks that entire time range. Both the advocate's availability and the user's schedule are blocked for the full duration.
+- **Price Calculation:** `fee = pricePer15Min * (durationMinutes / 15)`. **No discounts.** GST (18%) applies to the total consultation fee. Platform fee (flat ₹25) applies **once per booking**, not per 15-minute step.
+- **No Business Maximum Duration:** Any duration is permitted subject to technical sanity checks:
+  1. Multiple of 15 min ($\ge 15$).
+  2. The booking must **end on the same IST day** it starts (end time $\le$ 24:00 IST that day).
+  3. Total amount $\le$ Razorpay maximum per-payment limit (`RAZORPAY_MAX_PAYMENT_AMOUNT_RUPEES`, default ₹5,00,000).
+- **In-Person is Fixed:** `IN_PERSON` visits are NOT extendable. Their duration is strictly the advocate's configured `officeVisitDurationMinutes`.
+- **Backward Compatible:** If `durationMinutes` is omitted from quote or checkout, it defaults to 15 (Voice/Video) or the advocate's fixed duration (In-Person).
+
 #### Breakdown & Taxes:
-- **Advocate Fee (`feePaise`):** Stored directly in paise. Minimum is ₹1 (100 paise).
-- **GST (`gstPaise`):** `round(feePaise * (BOOKING_GST_PERCENT / 100))` (Default `18%`). Tax applies **only to the advocate fee**.
-- **Platform Fee (`platformFeePaise`):** `round(BOOKING_PLATFORM_FEE * 100)` (Default `₹25` = `2500 paise`). **No GST** is charged on the platform fee.
+- **Advocate Fee (`feePaise`):** `Math.round(fee * 100)`. Stored directly in paise. Minimum is ₹1 (100 paise).
+- **GST (`gstPaise`):** `Math.round(feePaise * (BOOKING_GST_PERCENT / 100))` (Default `18%`). Tax applies **only to the advocate fee**.
+- **Platform Fee (`platformFeePaise`):** `Math.round(BOOKING_PLATFORM_FEE * 100)` (Default `₹25` = `2500 paise`). **No GST** is charged on the platform fee.
 - **Total Amount (`totalAmountPaise`):** `feePaise + gstPaise + platformFeePaise`.
 
-#### Example 1 (Voice Call @ ₹450 per 15 min):
-- Advocate Fee: `450 * 100 = 45000 paise` (`₹450.00`)
-- GST (18%): `round(45000 * 0.18) = 8100 paise` (`₹81.00`)
-- Platform fee: `2500 paise` (`₹25.00`)
-- Total: `45000 + 8100 + 2500 = 55600 paise` (`₹556.00`)
+#### Example 1 (Voice Call @ ₹510 per 15 min extended to 30 min):
+- Multiplier: `30 / 15 = 2`
+- Advocate Fee: `510 * 2 = ₹1,020.00` (`102000 paise`)
+- GST (18%): `round(102000 * 0.18) = 18360 paise` (`₹183.60`)
+- Platform Fee: `2500 paise` (`₹25.00` flat once)
+- Total: `102000 + 18360 + 2500 = 122860 paise` (`₹1,228.60`)
 
-#### Example 2 (In-Person Consultation: 45 min @ ₹1,500):
+#### Example 2 (In-Person Consultation: 60 min @ ₹1,500):
 - Advocate Fee: `1500 * 100 = 150000 paise` (`₹1,500.00`)
-- Duration: `45 minutes` (from `advocate.officeVisitDurationMinutes`)
+- Duration: `60 minutes` (from `advocate.officeVisitDurationMinutes`, not extendable)
 - GST (18%): `round(150000 * 0.18) = 27000 paise` (`₹270.00`)
 - Platform fee: `2500 paise` (`₹25.00`)
 - Total: `150000 + 27000 + 2500 = 179500 paise` (`₹1,795.00`)
@@ -12115,61 +12127,94 @@ All financial amounts in database and API payloads are strictly stored and compu
     "id": "442f6fa6-d27a-40a7-9d85-7c03dc69c1f8",
     "fullName": "Adv. Priya Patel",
     "profilePhotoUrl": null,
-    "bookable": true,
-    "modes": [
-      {
-        "mode": "VOICE_CALL",
-        "label": "Voice Call",
-        "durationMinutes": 15,
-        "pricePer15Min": 510,
-        "feePaise": 51000,
-        "fee": 510
-      },
-      {
-        "mode": "VIDEO_CALL",
-        "label": "Video Call",
-        "durationMinutes": 15,
-        "pricePer15Min": 750,
-        "feePaise": 75000,
-        "fee": 750
-      },
-      {
-        "mode": "IN_PERSON",
-        "label": "In-Person Consultation",
-        "durationMinutes": 60,
-        "feePaise": 200000,
-        "fee": 2000
-      }
-    ],
-    "pricingConfig": {
+    "bestPracticeArea": "Property & Real Estate"
+  },
+  "bookable": true,
+  "modes": [
+    {
+      "mode": "VOICE_CALL",
+      "label": "Voice Call",
+      "priceLabel": "₹510 / 15 min",
+      "durationMinutes": 15,
+      "extendable": true,
+      "stepMinutes": 15,
+      "minDurationMinutes": 15,
+      "pricePerStep": 510,
+      "fee": 510,
+      "feePaise": 51000,
+      "gst": 91.8,
       "gstPercent": 18,
-      "platformFeeRupees": 25,
-      "platformFeePaise": 2500
+      "gstPaise": 9180,
+      "platformFee": 25,
+      "platformFeePaise": 2500,
+      "total": 626.8,
+      "totalPaise": 62680
+    },
+    {
+      "mode": "VIDEO_CALL",
+      "label": "Video Call",
+      "priceLabel": "₹750 / 15 min",
+      "durationMinutes": 15,
+      "extendable": true,
+      "stepMinutes": 15,
+      "minDurationMinutes": 15,
+      "pricePerStep": 750,
+      "fee": 750,
+      "feePaise": 75000,
+      "gst": 135,
+      "gstPercent": 18,
+      "gstPaise": 13500,
+      "platformFee": 25,
+      "platformFeePaise": 2500,
+      "total": 910,
+      "totalPaise": 91000
+    },
+    {
+      "mode": "IN_PERSON",
+      "label": "In-Person Meeting",
+      "priceLabel": "₹2,000 / 60 min",
+      "durationMinutes": 60,
+      "extendable": false,
+      "stepMinutes": null,
+      "minDurationMinutes": 60,
+      "pricePerStep": null,
+      "fee": 2000,
+      "feePaise": 200000,
+      "gst": 360,
+      "gstPercent": 18,
+      "gstPaise": 36000,
+      "platformFee": 25,
+      "platformFeePaise": 2500,
+      "total": 2385,
+      "totalPaise": 238500
     }
-  }
+  ],
+  "voiceCallPricePer15Min": 510,
+  "videoCallPricePer15Min": 750,
+  "offlineVisitingFee": 2000,
+  "officeVisitDurationMinutes": 60,
+  "slotMinutes": 15,
+  "inPersonMinutes": 60,
+  "minLeadMinutes": 30,
+  "maxDaysAhead": 30,
+  "timezone": "Asia/Kolkata"
 }
 ```
-*(Note: `subjects` removed from booking options; may be added back later).*
 
 ---
 
 #### B. Get Busy Slots (`GET /api/advocates/:id/busy-slots`)
-- **URL:** `/api/advocates/442f6fa6-d27a-40a7-9d85-7c03dc69c1f8/busy-slots?from=2026-10-25T00:00:00.000Z&to=2026-10-26T00:00:00.000Z`
+- **URL:** `/api/advocates/442f6fa6-d27a-40a7-9d85-7c03dc69c1f8/busy-slots?date=2026-10-25`
 - **Response (200 OK):**
 ```json
 {
   "success": true,
-  "advocateId": "442f6fa6-d27a-40a7-9d85-7c03dc69c1f8",
-  "from": "2026-10-25T00:00:00.000Z",
-  "to": "2026-10-26T00:00:00.000Z",
-  "busySlots": [
+  "date": "2026-10-25",
+  "timezone": "Asia/Kolkata",
+  "busy": [
     {
-      "startAt": "2026-10-25T05:00:00.000Z",
-      "endAt": "2026-10-25T06:00:00.000Z"
-    },
-    {
-      "startAt": "2026-10-25T08:30:00.000Z",
-      "endAt": "2026-10-25T08:45:00.000Z"
+      "startAt": "2026-10-25T04:30:00.000Z",
+      "endAt": "2026-10-25T05:00:00.000Z"
     }
   ]
 }
@@ -12179,36 +12224,42 @@ All financial amounts in database and API payloads are strictly stored and compu
 
 #### C. Get Quote (`POST /api/advocates/:id/booking-quote`)
 - **URL:** `/api/advocates/442f6fa6-d27a-40a7-9d85-7c03dc69c1f8/booking-quote`
-- **Request Body:**
+- **Request Body (30 min extension):**
 ```json
 {
   "mode": "VOICE_CALL",
-  "startAt": "2026-10-25T06:00:00.000Z"
+  "startAt": "2026-10-25T06:00:00.000Z",
+  "durationMinutes": 30
 }
 ```
 - **Response (200 OK):**
 ```json
 {
   "success": true,
-  "quote": {
-    "advocateId": "442f6fa6-d27a-40a7-9d85-7c03dc69c1f8",
+  "available": true,
+  "startAt": "2026-10-25T06:00:00.000Z",
+  "endAt": "2026-10-25T06:30:00.000Z",
+  "durationMinutes": 30,
+  "mode": "VOICE_CALL",
+  "breakdown": {
     "mode": "VOICE_CALL",
-    "durationMinutes": 15,
-    "startAt": "2026-10-25T06:00:00.000Z",
-    "endAt": "2026-10-25T06:15:00.000Z",
-    "pricing": {
-      "feePaise": 51000,
-      "fee": 510,
-      "gstPercent": 18,
-      "gstPaise": 9180,
-      "gst": 91.8,
-      "platformFeePaise": 2500,
-      "platformFee": 25,
-      "totalAmountPaise": 62680,
-      "totalAmount": 626.8,
-      "currency": "INR"
-    },
-    "isAvailable": true
+    "label": "Voice Call",
+    "priceLabel": "₹510 / 15 min",
+    "durationMinutes": 30,
+    "extendable": true,
+    "stepMinutes": 15,
+    "minDurationMinutes": 15,
+    "pricePerStep": 510,
+    "fee": 1020,
+    "feePaise": 102000,
+    "gst": 183.6,
+    "gstPercent": 18,
+    "gstPaise": 18360,
+    "platformFee": 25,
+    "platformFeePaise": 2500,
+    "total": 1228.6,
+    "totalPaise": 122860,
+    "endAt": "2026-10-25T06:30:00.000Z"
   }
 }
 ```
@@ -12217,49 +12268,60 @@ All financial amounts in database and API payloads are strictly stored and compu
 
 #### D. Create Checkout (`POST /api/user/advocate-bookings/checkout`)
 - **Headers:** `Authorization: Bearer {{user_token}}`
-- **Request Body:**
+- **Request Body (30 min extension):**
 ```json
 {
   "advocateId": "442f6fa6-d27a-40a7-9d85-7c03dc69c1f8",
   "mode": "VOICE_CALL",
-  "startAt": "2026-10-25T06:00:00.000Z"
+  "startAt": "2026-10-25T06:00:00.000Z",
+  "durationMinutes": 30
 }
 ```
-*(Note: `subject` removed; may be added back later. If passed by legacy clients, it is ignored without failure. New bookings set `subject = null` in the database).*
-```
-- **Response (200 OK):**
+- **Response (201 Created):**
 ```json
 {
   "success": true,
-  "booking": {
-    "id": "ef47a0f6-57ac-4e1b-a51f-e7c4c510f814",
-    "bookingId": null,
-    "status": "HOLD",
-    "mode": "VOICE_CALL",
-    "durationMinutes": 15,
-    "startAt": "2026-10-25T06:00:00.000Z",
-    "endAt": "2026-10-25T06:15:00.000Z",
-    "subject": "Property & Real Estate Dispute",
-    "notes": "Need advice regarding ancestral property partition",
-    "holdExpiresAt": "2026-10-24T10:00:00.000Z"
-  },
-  "pricing": {
-    "feePaise": 51000,
-    "fee": 510,
-    "gstPercent": 18,
-    "gstPaise": 9180,
-    "gst": 91.8,
-    "platformFeePaise": 2500,
-    "platformFee": 25,
-    "totalAmountPaise": 62680,
-    "totalAmount": 626.8,
-    "currency": "INR"
-  },
-  "razorpay": {
-    "orderId": "order_XXXXX12345",
-    "amount": 62680,
+  "checkout": {
+    "checkoutId": "payment-uuid",
+    "razorpayOrderId": "order_XXXXX12345",
+    "amount": 122860,
     "currency": "INR",
-    "keyId": "rzp_test_XXXX"
+    "keyId": "rzp_test_XXXX",
+    "status": "CREATED",
+    "expiresAt": "2026-10-24T10:00:00.000Z",
+    "booking": {
+      "id": "ef47a0f6-57ac-4e1b-a51f-e7c4c510f814",
+      "mode": "VOICE_CALL",
+      "startAt": "2026-10-25T06:00:00.000Z",
+      "endAt": "2026-10-25T06:30:00.000Z",
+      "durationMinutes": 30,
+      "subject": null,
+      "breakdown": {
+        "mode": "VOICE_CALL",
+        "label": "Voice Call",
+        "priceLabel": "₹510 / 15 min",
+        "durationMinutes": 30,
+        "extendable": true,
+        "stepMinutes": 15,
+        "minDurationMinutes": 15,
+        "pricePerStep": 510,
+        "fee": 1020,
+        "feePaise": 102000,
+        "gst": 183.6,
+        "gstPercent": 18,
+        "gstPaise": 18360,
+        "platformFee": 25,
+        "platformFeePaise": 2500,
+        "total": 1228.6,
+        "totalPaise": 122860,
+        "endAt": "2026-10-25T06:30:00.000Z"
+      }
+    },
+    "prefill": {
+      "name": "Rahul Verma",
+      "email": "rahul.verma@example.com",
+      "contact": "9876543210"
+    }
   }
 }
 ```
@@ -12441,86 +12503,72 @@ All financial amounts in database and API payloads are strictly stored and compu
 
 | Code | Status | Message / Reason | Action |
 |---|---|---|---|
-| `ADVOCATE_NOT_BOOKABLE` | `400 Bad Request` | `Advocate is currently not accepting bookings.` | Advocate is inactive, not approved, or has no booking fees configured. |
-| `MODE_NOT_AVAILABLE` | `400 Bad Request` | `Mode <MODE> is not available for this advocate.` | Advocate has not set a fee for this mode or set it to 0. |
-| `INVALID_SLOT` | `400 Bad Request` | `startAt must be aligned to ... minutes` / `must be at least 15 min in future` | Check slot alignment, lead time, and max 30-day window. |
-| `SLOT_TAKEN` | `409 Conflict` | `This time slot is no longer available. Please choose another.` | Another user holds or confirmed this slot. Choose another time slot. |
-| `USER_SLOT_CONFLICT` | `409 Conflict` | `You already have an appointment or active checkout at this time.` | User cannot double-book themselves across advocates. Check My Bookings. |
-| `PAYMENT_PROCESSING` | `409 Conflict` | `A payment attempt is currently being processed for this order.` | Wait for webhook or retry verification after a few seconds. |
-| `ALREADY_PAID` | `409 Conflict` | `This order has already been verified and paid.` | Order was already confirmed. Refresh booking status. |
-| `INVALID_SIGNATURE` | `400 Bad Request` | `Payment verification failed: Invalid signature.` | Razorpay HMAC SHA256 signature does not match secret. |
+| `INVALID_DURATION` | `400 Bad Request` | `Duration must be in steps of 15 minutes.` | Duration must be an integer multiple of 15 min and >= 15 min. |
+| `INVALID_DURATION` | `400 Bad Request` | `The booking must end on the same day.` | Booking end time cannot cross 24:00 midnight IST of the same start date. |
+| `INVALID_DURATION` | `400 Bad Request` | `Office visit duration is fixed by the advocate.` | `IN_PERSON` visits are not extendable and duration cannot be customized. |
+| `AMOUNT_TOO_HIGH` | `400 Bad Request` | `This booking is too long to pay in one payment. Please choose a shorter duration.` | Total booking amount exceeds Razorpay max payment limit (default ₹5,00,000). |
+| `ADVOCATE_NOT_BOOKABLE` | `400 Bad Request` | `Advocate is currently not available for bookings.` | Advocate is inactive, not approved, pending deletion, or has no fees configured. |
+| `MODE_NOT_AVAILABLE` | `400 Bad Request` | `The selected mode (<MODE>) is not offered by this advocate.` | Advocate has not set a positive fee for this mode. |
+| `INVALID_SLOT` | `400 Bad Request` | `Slot start time minute (...) must be a multiple of 15 minutes.` / `must be at least 30 minutes in future` | Check slot alignment, lead time, and max 30-day window. |
+| `SLOT_TAKEN` | `409 Conflict` | `The advocate is not available for the full {N} minutes. Please choose a shorter duration or another time.` | Advocate has a conflicting confirmed booking or active hold covering all or part of the requested time range. |
+| `USER_SLOT_CONFLICT` | `400 Bad Request` | `You already have another consultation scheduled during this time slot.` | User cannot double-book themselves across advocates. Check My Bookings. |
+| `PAYMENT_PROCESSING` | `409 Conflict` | `Your previous payment is still being processed by the bank. Please wait — do not pay again.` | Wait for bank processing or retry verification after a few seconds. |
+| `ALREADY_PAID` | `200 OK` | `Payment for this appointment was already completed.` | Order was already confirmed. Refresh booking status. |
+| `INVALID_SIGNATURE` | `400 Bad Request` | `Invalid payment signature.` | Razorpay HMAC SHA256 signature does not match secret. |
 
 ---
 
-### 8. Step-by-Step Postman Testing Workflow
+### 8. Postman Testing Workflow: Duration Extension & Slot Locking
 
-Use this end-to-end workflow to verify all Advocate Booking features in Postman:
+Use this step-by-step Postman flow to verify +15 min extensions, full-interval locking, same-day rules, and HOLD release:
 
-#### Step 1: Discover Bookable Advocates
-1. Call `GET {{BACKEND_URL}}/api/advocates`.
-2. Inspect advocate items. Note that each advocate includes `bookable: true/false` and `bookingModes: ["VOICE_CALL", "VIDEO_CALL", "IN_PERSON"]`.
-3. Pick a bookable advocate and save their ID to `{{advocate_id}}`.
+#### Step 1: Discover Booking Options & Extension Metadata
+- Send `GET {{BACKEND_URL}}/api/advocates/{{advocate_id}}/booking-options`.
+- **Verify:**
+  - `VOICE_CALL` and `VIDEO_CALL` include `"extendable": true`, `"stepMinutes": 15`, `"minDurationMinutes": 15`, `"pricePerStep": <price>`.
+  - `IN_PERSON` includes `"extendable": false`, `"stepMinutes": null`, `"minDurationMinutes": <officeVisitDurationMinutes>`, `"pricePerStep": null`.
 
-#### Step 2: Fetch Booking Options
-1. Send `GET {{BACKEND_URL}}/api/advocates/{{advocate_id}}/booking-options`.
-2. Verify available modes, duration, rates, GST percent (18%), platform fee (₹25), and subject list.
+#### Step 2: Quote Duration Steps (15, 30, 45 min)
+- Send `POST {{BACKEND_URL}}/api/advocates/{{advocate_id}}/booking-quote` with:
+  - 15 min: `{"mode": "VOICE_CALL", "startAt": "2026-11-05T04:30:00.000Z", "durationMinutes": 15}` $\rightarrow$ fee ₹510, total ₹626.80.
+  - 30 min: `{"mode": "VOICE_CALL", "startAt": "2026-11-05T04:30:00.000Z", "durationMinutes": 30}` $\rightarrow$ fee ₹1,020, GST ₹183.60, platform fee ₹25, total ₹1,228.60 (`122860 paise`).
+  - 45 min: `{"mode": "VOICE_CALL", "startAt": "2026-11-05T04:30:00.000Z", "durationMinutes": 45}` $\rightarrow$ fee ₹1,530, GST ₹275.40, platform fee ₹25, total ₹1,830.40.
+- **Verify:** Platform fee is charged once (₹25), GST is 18% on fee, and `endAt` reflects `startAt + durationMinutes`.
 
-#### Step 3: Fetch Busy Slots
-1. Send `GET {{BACKEND_URL}}/api/advocates/{{advocate_id}}/busy-slots?from=2026-10-25T00:00:00.000Z&to=2026-10-26T00:00:00.000Z`.
-2. Observe any existing confirmed appointments or active holds.
+#### Step 3: Checkout for 30 Min & Inspect Busy Slots
+- Send `POST {{BACKEND_URL}}/api/user/advocate-bookings/checkout` with `durationMinutes: 30` (e.g. `startAt: 10:00 AM IST` $\rightarrow$ `endAt: 10:30 AM IST`).
+- Verify response returns `201 Created` with `booking.durationMinutes: 30` and `booking.endAt: "10:30"`.
+- Send `GET {{BACKEND_URL}}/api/advocates/{{advocate_id}}/busy-slots?date=YYYY-MM-DD`.
+- **Verify:** The busy slot list shows the full range `10:00:00.000Z` to `10:30:00.000Z`.
 
-#### Step 4: Get a Price Quote
-1. Send `POST {{BACKEND_URL}}/api/advocates/{{advocate_id}}/booking-quote` with:
-   ```json
-   { "mode": "VOICE_CALL", "startAt": "2026-10-25T06:00:00.000Z" }
-   ```
-2. Verify pricing math: `fee + gst + platformFee = totalAmount`. Verify `isAvailable: true`.
+#### Step 4: Another User Quote at 10:15 (Overlapping Slot)
+- From another user or unauthenticated client, send `POST {{BACKEND_URL}}/api/advocates/{{advocate_id}}/booking-quote` for `startAt: 10:15 AM IST` (15 min).
+- **Verify:** Fails with `409 Conflict`, `code: "SLOT_TAKEN"`, message: `"The advocate is not available for the full 15 minutes. Please choose a shorter duration or another time."`
 
-#### Step 5: Initiate Checkout (Hold Creation)
-1. Login as standard user (`POST /api/auth/user/login`). Set `{{user_token}}`.
-2. Send `POST {{BACKEND_URL}}/api/user/advocate-bookings/checkout` with `advocateId`, `mode`, and `startAt` (subject removed; may be added back later).
-3. Verify status `200 OK`.
-4. Save `booking.id` to `{{booking_db_id}}` and `razorpay.orderId` to `{{rzp_order_id}}`. Note `holdExpiresAt` (10 minutes in future).
+#### Step 5: Extend Slot When Next Slot is Partially Booked
+- Suppose slot 10:30 is already booked by another user.
+- A user requests a 45-min booking starting at `10:00 AM IST` (which would end at `10:45 AM IST`).
+- **Verify:** Fails with `409 Conflict`, `code: "SLOT_TAKEN"`, message: `"The advocate is not available for the full 45 minutes. Please choose a shorter duration or another time."`
 
-#### Step 6: Verify Concurrency / Hold Blocking
-1. While the hold is active, repeat `POST /api/advocates/{{advocate_id}}/booking-quote` for the same slot.
-2. Verify `isAvailable: false`.
-3. Attempt another checkout for the same slot from a different user account.
-4. Verify response is `409 Conflict` with `code: "SLOT_TAKEN"`.
+#### Step 6: In-Person with Custom Duration Rejected
+- Send `POST {{BACKEND_URL}}/api/advocates/{{advocate_id}}/booking-quote` with `mode: "IN_PERSON"` and `durationMinutes: 30` (where advocate's fixed duration is 60).
+- **Verify:** Fails with `400 Bad Request`, `code: "INVALID_DURATION"`, message: `"Office visit duration is fixed by the advocate."`
 
-#### Step 7: Verify Cross-Mode Overlap Protection
-1. Attempt a checkout for `IN_PERSON` (60 min) starting at `05:30:00.000Z` or `06:00:00.000Z`.
-2. Verify response is `409 Conflict` with `code: "SLOT_TAKEN"`.
+#### Step 7: Booking Crossing Midnight IST Rejected
+- Send quote/checkout for `startAt: 23:45 IST` with `durationMinutes: 30` (ends at `00:15 IST` next day).
+- **Verify:** Fails with `400 Bad Request`, `code: "INVALID_DURATION"`, message: `"The booking must end on the same day."`
 
-#### Step 8: Verify Payment & Confirm Booking
-1. Send `POST {{BACKEND_URL}}/api/payments/verify` with `razorpay_order_id: {{rzp_order_id}}`, `razorpay_payment_id: "pay_test_12345"`, and a valid HMAC signature.
-2. Verify response is `200 OK` and returns `booking.status: "CONFIRMED"` with formatted `bookingId` (e.g. `VLB-2026J4X8K9P`).
+#### Step 8: Backward Compatibility When Duration is Omitted
+- Send `POST {{BACKEND_URL}}/api/advocates/{{advocate_id}}/booking-quote` without `durationMinutes`.
+- **Verify:** Automatically defaults to `15` for Voice/Video and exact advocate visit duration for In-Person.
 
-#### Step 9: Inspect User "My Bookings"
-1. Send `GET {{BACKEND_URL}}/api/user/bookings?type=ALL`.
-2. Verify both consultancy and advocate bookings appear in the list with `bookingType: "ADVOCATE"` and `statusGroup: "UPCOMING"`.
-3. Send `GET {{BACKEND_URL}}/api/user/bookings?type=ADVOCATE` to filter exclusively for advocate bookings.
-4. Send `GET {{BACKEND_URL}}/api/user/bookings/{{booking_db_id}}`. Verify full detail, payment receipt, and lifecycle `timeline`.
-
-#### Step 10: Inspect Advocate "My Appointments"
-1. Login as the booked advocate (`POST /api/auth/advocate/login`). Set `{{advocate_token}}`.
-2. Send `GET {{BACKEND_URL}}/api/advocate/appointments?filter=UPCOMING`.
-3. Verify the appointment is present. Confirm advocate sees user's phone number and email to initiate contact.
-4. Confirm advocate sees their net fee (`advocateFee`), not the platform convenience fee.
-
-#### Step 11: Mark Appointment Complete
-1. Attempt `PATCH {{BACKEND_URL}}/api/advocate/appointments/{{booking_db_id}}/complete` before `startAt`.
-2. Verify `400 Bad Request` (`Cannot mark as completed before the scheduled start time`).
-3. When `now >= startAt` (or for an appointment scheduled in the past):
-   - Send `PATCH {{BACKEND_URL}}/api/advocate/appointments/{{booking_db_id}}/complete`.
-   - Verify `200 OK` and `appointment.status: "COMPLETED"`.
-4. Call it a second time. Verify idempotency (`200 OK` without error).
-
-#### Step 12: Admin Management & Detail
-1. Login as Administrator (`POST /api/admin/login`). Set `{{admin_token}}`.
-2. Send `GET {{BACKEND_URL}}/api/admin/advocate-bookings?search=VLB-`.
-3. Verify list returns all advocate bookings with status counts, advocate and user contact info.
-4. Send `GET {{BACKEND_URL}}/api/admin/advocate-bookings/{{booking_db_id}}`.
+#### Step 9: Change Duration on Checkout Retry (Old HOLD Released)
+- User calls checkout for 10:00 AM with `durationMinutes: 15` (creates HOLD A for 15 min).
+- User decides to change to `durationMinutes: 30` and calls checkout again for 10:00 AM with `durationMinutes: 30`.
+- **Verify:**
+  - Old 15-min HOLD A is cancelled/marked `EXPIRED` within the transaction.
+  - New 30-min HOLD B is created with new Razorpay order for ₹1,228.60.
+  - No `USER_SLOT_CONFLICT` error is raised against the user's own old hold.
 5. Verify detail includes payment attempts, razorpay IDs, refund status, and event timeline.
 
 #### Step 13: Admin Refund

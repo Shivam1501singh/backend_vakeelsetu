@@ -52,7 +52,7 @@ const formatPriceLabelValue = (num) => {
  * Computes the financial breakdown for a given advocate and booking mode.
  * Everything is calculated in integer paise to eliminate floating-point precision issues.
  */
-export const calculatePricing = (advocate, mode) => {
+export const calculatePricing = (advocate, mode, customDurationMinutes = null, startAt = null) => {
   if (!advocate) return null;
 
   const gstPercent = parseInt(process.env.BOOKING_GST_PERCENT || '18', 10);
@@ -63,26 +63,39 @@ export const calculatePricing = (advocate, mode) => {
   let durationMinutes = 0;
   let feePaise = 0;
   let priceLabel = '';
+  let extendable = false;
+  let stepMinutes = null;
+  let minDurationMinutes = null;
+  let pricePerStep = null;
 
   if (mode === 'VOICE_CALL') {
     if (!advocate.voiceCallPricePer15Min || Number(advocate.voiceCallPricePer15Min) <= 0) {
       return null;
     }
     const pricePer15Min = Number(advocate.voiceCallPricePer15Min);
-    durationMinutes = slotMinutes;
-    // fee = pricePer15Min * (slotMinutes / 15)
-    const fee = pricePer15Min * (slotMinutes / 15);
+    durationMinutes = customDurationMinutes ? parseInt(customDurationMinutes, 10) : slotMinutes;
+    const steps = durationMinutes / slotMinutes;
+    const fee = pricePer15Min * steps;
     feePaise = Math.round(fee * 100);
     priceLabel = `₹${formatPriceLabelValue(pricePer15Min)} / 15 min`;
+    extendable = true;
+    stepMinutes = slotMinutes;
+    minDurationMinutes = slotMinutes;
+    pricePerStep = parseFloat(pricePer15Min.toFixed(2));
   } else if (mode === 'VIDEO_CALL') {
     if (!advocate.videoCallPricePer15Min || Number(advocate.videoCallPricePer15Min) <= 0) {
       return null;
     }
     const pricePer15Min = Number(advocate.videoCallPricePer15Min);
-    durationMinutes = slotMinutes;
-    const fee = pricePer15Min * (slotMinutes / 15);
+    durationMinutes = customDurationMinutes ? parseInt(customDurationMinutes, 10) : slotMinutes;
+    const steps = durationMinutes / slotMinutes;
+    const fee = pricePer15Min * steps;
     feePaise = Math.round(fee * 100);
     priceLabel = `₹${formatPriceLabelValue(pricePer15Min)} / 15 min`;
+    extendable = true;
+    stepMinutes = slotMinutes;
+    minDurationMinutes = slotMinutes;
+    pricePerStep = parseFloat(pricePer15Min.toFixed(2));
   } else if (mode === 'IN_PERSON') {
     if (!advocate.offlineVisitingFee || Number(advocate.offlineVisitingFee) <= 0) {
       return null;
@@ -98,6 +111,10 @@ export const calculatePricing = (advocate, mode) => {
 
     feePaise = Math.round(flatFee * 100);
     priceLabel = `₹${formatPriceLabelValue(flatFee)} / ${durationMinutes} min`;
+    extendable = false;
+    stepMinutes = null;
+    minDurationMinutes = durationMinutes;
+    pricePerStep = null;
   } else {
     return null;
   }
@@ -105,11 +122,32 @@ export const calculatePricing = (advocate, mode) => {
   const gstPaise = Math.round((feePaise * gstPercent) / 100);
   const totalPaise = feePaise + gstPaise + platformFeePaise;
 
+  const maxPaymentRupees = parseInt(process.env.RAZORPAY_MAX_PAYMENT_AMOUNT_RUPEES || '500000', 10);
+  const maxPaymentPaise = maxPaymentRupees * 100;
+  if (totalPaise > maxPaymentPaise) {
+    const error = new Error('This booking is too long to pay in one payment. Please choose a shorter duration.');
+    error.statusCode = 400;
+    error.code = 'AMOUNT_TOO_HIGH';
+    throw error;
+  }
+
+  let endAt = null;
+  if (startAt) {
+    const sDate = new Date(startAt);
+    if (!isNaN(sDate.getTime())) {
+      endAt = new Date(sDate.getTime() + durationMinutes * 60 * 1000).toISOString();
+    }
+  }
+
   return {
     mode,
     label: MODE_LABELS[mode] || mode,
     priceLabel,
     durationMinutes,
+    extendable,
+    stepMinutes,
+    minDurationMinutes,
+    pricePerStep,
     ratePerMinute: null,
     ratePerMinutePaise: null,
     fee: parseFloat((feePaise / 100).toFixed(2)),
@@ -120,7 +158,8 @@ export const calculatePricing = (advocate, mode) => {
     platformFee: platformFeeRupees,
     platformFeePaise,
     total: parseFloat((totalPaise / 100).toFixed(2)),
-    totalPaise
+    totalPaise,
+    ...(endAt ? { endAt } : {})
   };
 };
 
@@ -161,10 +200,10 @@ export const getBookableModes = (advocate) => {
 /**
  * Returns the exact quote breakdown for an advocate and mode, or throws 400 MODE_NOT_AVAILABLE.
  */
-export const quote = (advocate, mode) => {
+export const quote = (advocate, mode, durationMinutes = null, startAt = null) => {
   assertAdvocateBookable(advocate);
 
-  const pricing = calculatePricing(advocate, mode);
+  const pricing = calculatePricing(advocate, mode, durationMinutes, startAt);
   if (!pricing) {
     const error = new Error(`The selected mode (${mode}) is not offered by this advocate.`);
     error.statusCode = 400;

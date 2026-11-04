@@ -4,7 +4,8 @@ export const bookingQuoteSchema = z.object({
   mode: z.enum(['VOICE_CALL', 'VIDEO_CALL', 'IN_PERSON'], {
     errorMap: () => ({ message: 'Invalid booking mode. Must be VOICE_CALL, VIDEO_CALL, or IN_PERSON.' })
   }),
-  startAt: z.string({ required_error: 'startAt is required.' }).min(1, 'startAt cannot be empty.')
+  startAt: z.string({ required_error: 'startAt is required.' }).min(1, 'startAt cannot be empty.'),
+  durationMinutes: z.coerce.number().int().optional()
 });
 
 export const advocateCheckoutSchema = z.object({
@@ -12,7 +13,8 @@ export const advocateCheckoutSchema = z.object({
   mode: z.enum(['VOICE_CALL', 'VIDEO_CALL', 'IN_PERSON'], {
     errorMap: () => ({ message: 'Invalid booking mode. Must be VOICE_CALL, VIDEO_CALL, or IN_PERSON.' })
   }),
-  startAt: z.string({ required_error: 'startAt is required.' }).min(1, 'startAt cannot be empty.')
+  startAt: z.string({ required_error: 'startAt is required.' }).min(1, 'startAt cannot be empty.'),
+  durationMinutes: z.coerce.number().int().optional()
 });
 
 export const advocateAppointmentQuerySchema = z.object({
