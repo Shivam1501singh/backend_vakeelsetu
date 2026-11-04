@@ -14038,3 +14038,215 @@ node scripts/backfill-advocate-earnings.js --dry-run
 # 4. Apply backfill to database (Executed by Administrator)
 node scripts/backfill-advocate-earnings.js --apply
 ```
+
+---
+
+## 38. Advocate Search by Pincode (Expanding Radius) — Postman Guide
+
+### 1. How It Works
+When a client searches advocates using a 6-digit Indian `pincode` (`GET /api/advocates?pincode=201301`):
+1. **Pincode Resolution:** The search pincode is resolved to coordinates via `getPincodeLocation` (DB cache hit $\rightarrow$ Google Geocoding API if missed $\rightarrow$ stale cache $\rightarrow$ static metro map $\rightarrow$ user/advocate DB coordinates fallback).
+2. **Advocate Location Priority:** Each advocate in the candidate set is located using:
+   - Priority 1: `officeLatitude` / `officeLongitude` (office coordinates)
+   - Priority 2: `latitude` / `longitude` (direct coordinates)
+   - Priority 3: `pincode` via **cache-only batch lookup** (no Google calls per advocate during searches, ensuring sub-10ms response times)
+   - Priority 4: `UNKNOWN_DISTANCE` if none exist.
+3. **Expanding Radius Tiers:** Every advocate is categorized into an outward expanding radius tier:
+
+| Tier | `distanceTier` | `distanceLabel` | Criteria |
+|:---:|:---|:---|:---|
+| 1 | `SAME_PINCODE` | Same pincode | Advocate's pincode matches search pincode (distance may be null if coords missing) |
+| 2 | `WITHIN_5_KM` | Within 5 km | Distance $\le 5.00$ km |
+| 3 | `WITHIN_10_KM` | Within 10 km | $5.00 < \text{Distance} \le 10.00$ km |
+| 4 | `WITHIN_25_KM` | Within 25 km | $10.00 < \text{Distance} \le 25.00$ km |
+| 5 | `WITHIN_50_KM` | Within 50 km | $25.00 < \text{Distance} \le 50.00$ km |
+| 6 | `WITHIN_100_KM` | Within 100 km | $50.00 < \text{Distance} \le 100.00$ km |
+| 7 | `BEYOND_100_KM` | More than 100 km away | $\text{Distance} > 100.00$ km |
+| 8 | `UNKNOWN_DISTANCE` | Distance not available | Advocate has no resolvable location |
+
+4. **Result Ordering:**
+   - **Default search (no explicit sort):** Sorted by `distanceTier` priority (1 through 8), then by `distance` ascending (nearest first within tier), with `averageRating` descending then `id` ascending as deterministic tie-breakers.
+   - **Explicit sort (`sort=rating|experience|casesHandled`):** The explicit sort orders the results across the whole filtered set, with `distance`, `distanceTier`, and `distanceLabel` calculated and returned on every item.
+   - **All advocates returned:** No advocates are hidden or filtered out by distance; far away and unknown-distance advocates are appended at the end.
+5. **Stable Pagination:** Applied in memory after sorting the filtered set, guaranteeing that navigating to page 2 seamlessly continues the list with zero duplicates.
+
+---
+
+### 2. Environment Variables & Google Cloud Security Checklist
+
+#### Environment Configuration (`.env`)
+```env
+# Google Maps Geocoding API (Server-side ONLY)
+GOOGLE_MAPS_API_KEY=AIzaSy...
+PINCODE_CACHE_TTL_DAYS=30
+```
+
+#### Google Cloud Security Checklist
+- [x] **Enable ONLY Geocoding API:** In the Google Cloud Console, enable only the "Geocoding API". Disable all other APIs (Maps JavaScript API, Places API, Directions API).
+- [x] **API Key Restrictions:** Restrict the key to API restriction: `Geocoding API`. Set Application restriction to `IP addresses` (the server's outbound elastic IPs) or `None` if running serverless, but **never HTTP referrers**.
+- [x] **Server-Side Only:** This API key must **never** be shared with frontend applications (React/mobile apps), committed to version control, or exposed in client bundles.
+- [x] **Set Budget Alert & Daily Quota:** In Google Cloud Billing, configure a monthly budget alert (e.g., $10) and set a daily request cap in Geocoding API Quotas (e.g., 1,000 requests/day) to prevent unexpected overages.
+
+---
+
+### 3. Caching Architecture & Pre-Warming
+
+#### Caching Table: `PincodeLocation`
+- Caches coordinates and formatted addresses locally in PostgreSQL.
+- **30-Day TTL:** Google's terms permit temporary caching for up to 30 days (`PINCODE_CACHE_TTL_DAYS=30`). Stale records older than 30 days serve as fallbacks if Google is temporarily unreachable.
+- **Negative Caching (7 Days):** Non-existent or invalid pincodes returning `ZERO_RESULTS` are cached with `status: "NOT_FOUND"` for 7 days to shield against repeated lookups.
+- **In-Flight Deduplication:** Concurrent requests for the same pincode share a single in-memory promise, preventing duplicate API requests.
+
+#### Cache Pre-Warming Script (`scripts/warm-pincode-cache.js`)
+```bash
+# 1. Dry run (Read-only check; prints candidates without calling Google)
+node scripts/warm-pincode-cache.js --dry-run
+
+# 2. Apply geocoding (Executed by Admin to pre-warm advocate pincodes)
+node scripts/warm-pincode-cache.js --apply --limit=500
+```
+> [!TIP]
+> **Recommended Production Schedule:** Run `node scripts/warm-pincode-cache.js --apply` once a month via an automated cron job or CI scheduled task to maintain a warm cache within the 30-day Google terms window.
+
+---
+
+### 4. Sample Requests & Responses
+
+#### A. Search Advocates by Valid Pincode
+- **Method:** `GET`
+- **URL:** `{{baseUrl}}/api/advocates?pincode=201301&page=1&limit=2`
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "location": {
+    "pincode": "201301",
+    "resolved": true,
+    "source": "CACHE"
+  },
+  "areaSummary": {
+    "SAME_PINCODE": 1,
+    "WITHIN_5_KM": 2,
+    "WITHIN_10_KM": 4,
+    "WITHIN_25_KM": 12,
+    "WITHIN_50_KM": 18,
+    "WITHIN_100_KM": 2,
+    "BEYOND_100_KM": 16,
+    "UNKNOWN_DISTANCE": 2
+  },
+  "advocates": [
+    {
+      "id": "673f8e5b-c2e3-4d7a-8b89-b1d8f7a6e111",
+      "fullName": "Adv. Rajesh Sharma",
+      "profilePhotoUrl": "https://res.cloudinary.com/.../profile.jpg",
+      "experienceYears": 14,
+      "casesHandled": 120,
+      "practiceAreas": ["Civil", "Corporate"],
+      "topCourtPractised": "Delhi High Court",
+      "bestPracticeArea": "Civil",
+      "courtPractice": ["Delhi High Court"],
+      "languagesSpoken": ["English", "Hindi"],
+      "state": "Uttar Pradesh",
+      "city": "Noida",
+      "voiceCallPricePer15Min": 500,
+      "videoCallPricePer15Min": 800,
+      "offlineVisitingFee": 1500,
+      "officeVisitDurationMinutes": 30,
+      "averageRating": 4.8,
+      "totalReviews": 24,
+      "officeAddress": "Sector 18, Noida",
+      "distance": 0,
+      "distanceTier": "SAME_PINCODE",
+      "distanceLabel": "Same pincode",
+      "likeCount": 15,
+      "isSaved": false,
+      "isLiked": false,
+      "isOnline": true,
+      "lastSeenAt": "2026-11-04T06:30:00.000Z",
+      "callAvailability": true,
+      "pricing": {
+        "voice": { "available": true, "pricePer15Min": 500 },
+        "video": { "available": true, "pricePer15Min": 800 },
+        "offline": { "available": true, "fee": 1500, "durationMinutes": 30 }
+      }
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 2,
+    "total": 57,
+    "totalPages": 29
+  }
+}
+```
+
+#### B. Invalid / Non-Existent Pincode (`000000` or `999999`)
+- **Method:** `GET`
+- **URL:** `{{baseUrl}}/api/advocates?pincode=000000`
+- **Response (`400 Bad Request`):**
+```json
+{
+  "success": false,
+  "message": "We couldn't find this pincode. Please check and try again."
+}
+```
+
+#### C. Graceful Fallback When Geocoding Service Is Unavailable
+- **Method:** `GET`
+- **URL:** `{{baseUrl}}/api/advocates?pincode=560001` (when Google is offline and no fallback available)
+- **Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "location": {
+    "pincode": "560001",
+    "resolved": false,
+    "source": null
+  },
+  "areaSummary": {
+    "SAME_PINCODE": 0,
+    "WITHIN_5_KM": 0,
+    "WITHIN_10_KM": 0,
+    "WITHIN_25_KM": 0,
+    "WITHIN_50_KM": 0,
+    "WITHIN_100_KM": 0,
+    "BEYOND_100_KM": 0,
+    "UNKNOWN_DISTANCE": 57
+  },
+  "advocates": [ ... advocates in default database order with distance: null, distanceTier: "UNKNOWN_DISTANCE", distanceLabel: "Distance not available" ... ],
+  "pagination": {
+    "page": 1,
+    "limit": 12,
+    "total": 57,
+    "totalPages": 5
+  }
+}
+```
+
+---
+
+### 5. Postman Verification Test Plan
+
+1. **Exact Pincode Match (`SAME_PINCODE` first):**
+   - Call `GET /api/advocates?pincode=110001`.
+   - Verify advocates with `pincode = "110001"` appear first with `distanceTier: "SAME_PINCODE"` and `distanceLabel: "Same pincode"`.
+2. **Expanding Radius Verification:**
+   - Call `GET /api/advocates?pincode=201301` (Noida).
+   - Verify advocates transition smoothly from `SAME_PINCODE` $\rightarrow$ `WITHIN_5_KM` $\rightarrow$ `WITHIN_10_KM` $\rightarrow$ `WITHIN_25_KM` etc.
+3. **Far Away Advocates Retained:**
+   - Call `GET /api/advocates?pincode=201301&page=5&limit=12`.
+   - Verify advocates located in Bengaluru, Mumbai, or Kochi appear in tier `BEYOND_100_KM` ("More than 100 km away") rather than being filtered out.
+4. **Pagination Consistency (Page 1 vs Page 2):**
+   - Request `GET /api/advocates?pincode=201301&page=1&limit=10`. Record the list of 10 advocate IDs.
+   - Request `GET /api/advocates?pincode=201301&page=2&limit=10`.
+   - Verify that Page 2 contains 0 IDs from Page 1 and strictly continues the tier and distance sequence.
+5. **Explicit Sort Overriding Distance Tier:**
+   - Call `GET /api/advocates?pincode=201301&sort=rating`.
+   - Verify that advocate items are sorted strictly by `averageRating` descending across all tiers, while each advocate still returns their computed `distance`, `distanceTier`, and `distanceLabel`.
+6. **Invalid Pincode Rejection:**
+   - Call `GET /api/advocates?pincode=000000` $\rightarrow$ Verify HTTP `400 Bad Request`.
+   - Call `GET /api/advocates?pincode=999999` $\rightarrow$ Verify HTTP `400 Bad Request` (`ZERO_RESULTS` negative cache).
+7. **Cache Hit Verification:**
+   - Repeat `GET /api/advocates?pincode=201301`.
+   - Verify in response that `location.source === "CACHE"` and server logs show `source=CACHE` with duration $< 5$ms.
+

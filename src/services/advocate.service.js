@@ -2,61 +2,17 @@ import prisma from '../lib/prisma.js';
 import { getTeamMates } from './advocateTeam.service.js';
 import { computeEffectiveOnlineStatus } from '../utils/advocateStatus.js';
 import { isAdvocateBookable, getBookableModes, formatPricingSummary } from './advocateBooking/pricing.js';
+import { getPincodeLocation, PINCODE_COORDINATES } from './geocoding.service.js';
 
-// Hardcoded mapping of coordinates for the common Indian pincodes used in the seed data/locations
-const PINCODE_COORDINATES = {
-  '110001': { latitude: 28.6304, longitude: 77.2177 }, // New Delhi (Connaught Place)
-  '110002': { latitude: 28.6438, longitude: 77.2415 }, // Daryaganj
-  '400001': { latitude: 18.9696, longitude: 72.8230 }, // Mumbai (Fort)
-  '400021': { latitude: 18.9256, longitude: 72.8242 }, // Nariman Point
-  '411001': { latitude: 18.5284, longitude: 73.8739 }, // Pune
-  '560001': { latitude: 12.9716, longitude: 77.5946 }, // Bengaluru
-  '560025': { latitude: 12.9619, longitude: 77.6015 }, // Richmond Town
-  '600001': { latitude: 13.0827, longitude: 80.2707 }, // Chennai
-  '700001': { latitude: 22.5726, longitude: 88.3639 }, // Kolkata
-  '201301': { latitude: 28.5800, longitude: 77.3300 }, // Noida
-  '226001': { latitude: 26.8467, longitude: 80.9462 }, // Lucknow
-  '380001': { latitude: 23.0225, longitude: 72.5714 }, // Ahmedabad
-  '302001': { latitude: 26.9124, longitude: 75.7873 }, // Jaipur
-  '500001': { latitude: 17.3850, longitude: 78.4867 }, // Hyderabad
-  '682001': { latitude: 9.9816, longitude: 76.2999 },  // Kochi
-  '682011': { latitude: 9.9700, longitude: 76.2800 }   // Kochi Ernakulam
-};
-
-const resolvePincodeCoordinates = async (pincode) => {
-  // 1. Static lookup
-  if (PINCODE_COORDINATES[pincode]) {
-    return PINCODE_COORDINATES[pincode];
-  }
-
-  // 2. Database lookup - check Advocate table
-  const advocateLoc = await prisma.advocate.findFirst({
-    where: {
-      pincode: pincode,
-      latitude: { not: null },
-      longitude: { not: null }
-    },
-    select: { latitude: true, longitude: true }
-  });
-  if (advocateLoc && advocateLoc.latitude !== null && advocateLoc.longitude !== null) {
-    return { latitude: advocateLoc.latitude, longitude: advocateLoc.longitude };
-  }
-
-  // 3. Database lookup - check User table
-  const userLoc = await prisma.user.findFirst({
-    where: {
-      pincode: pincode,
-      latitude: { not: null },
-      longitude: { not: null }
-    },
-    select: { latitude: true, longitude: true }
-  });
-  if (userLoc && userLoc.latitude !== null && userLoc.longitude !== null) {
-    return { latitude: userLoc.latitude, longitude: userLoc.longitude };
-  }
-
-  // Throw controlled error
-  throw new Error(`Invalid pincode. Location not found for pincode: ${pincode}`);
+const TIER_PRIORITY = {
+  SAME_PINCODE: 1,
+  WITHIN_5_KM: 2,
+  WITHIN_10_KM: 3,
+  WITHIN_25_KM: 4,
+  WITHIN_50_KM: 5,
+  WITHIN_100_KM: 6,
+  BEYOND_100_KM: 7,
+  UNKNOWN_DISTANCE: 8
 };
 
 const calculateHaversineDistance = (lat1, lon1, lat2, lon2) => {
@@ -73,14 +29,83 @@ const calculateHaversineDistance = (lat1, lon1, lat2, lon2) => {
   return R * c; // Distance in km
 };
 
-const getAdvocateCoordinates = (advocate) => {
-  if (advocate.latitude !== null && advocate.longitude !== null) {
+const getAdvocateDirectCoordinates = (advocate) => {
+  if (advocate.officeLatitude !== null && advocate.officeLatitude !== undefined &&
+      advocate.officeLongitude !== null && advocate.officeLongitude !== undefined) {
+    return { latitude: advocate.officeLatitude, longitude: advocate.officeLongitude };
+  }
+  if (advocate.latitude !== null && advocate.latitude !== undefined &&
+      advocate.longitude !== null && advocate.longitude !== undefined) {
     return { latitude: advocate.latitude, longitude: advocate.longitude };
   }
-  if (advocate.pincode && PINCODE_COORDINATES[advocate.pincode]) {
-    return PINCODE_COORDINATES[advocate.pincode];
-  }
   return null;
+};
+
+/**
+ * Resolves advocate coordinates in priority:
+ * 1. officeLatitude / officeLongitude
+ * 2. latitude / longitude
+ * 3. pincode via cache-only batch lookup
+ */
+const resolveAdvocateCoordinatesBatch = async (advocates) => {
+  const missingPincodes = new Set();
+  for (const adv of advocates) {
+    const direct = getAdvocateDirectCoordinates(adv);
+    if (!direct && adv.pincode) {
+      const cleanPin = String(adv.pincode).trim();
+      if (/^[1-9]\d{5}$/.test(cleanPin)) {
+        missingPincodes.add(cleanPin);
+      }
+    }
+  }
+
+  const cacheMap = new Map();
+  if (missingPincodes.size > 0) {
+    const rows = await prisma.pincodeLocation.findMany({
+      where: {
+        pincode: { in: Array.from(missingPincodes) },
+        status: 'OK',
+        latitude: { not: null },
+        longitude: { not: null }
+      },
+      select: { pincode: true, latitude: true, longitude: true }
+    });
+    for (const r of rows) {
+      cacheMap.set(r.pincode, { latitude: r.latitude, longitude: r.longitude });
+    }
+  }
+
+  return advocates.map(adv => {
+    const direct = getAdvocateDirectCoordinates(adv);
+    if (direct) return direct;
+    if (adv.pincode) {
+      const cleanPin = String(adv.pincode).trim();
+      if (cacheMap.has(cleanPin)) return cacheMap.get(cleanPin);
+      if (PINCODE_COORDINATES[cleanPin]) return PINCODE_COORDINATES[cleanPin];
+    }
+    return null;
+  });
+};
+
+const assignDistanceTier = (advPincode, searchPincode, distance) => {
+  if (
+    searchPincode &&
+    advPincode &&
+    String(advPincode).trim().toLowerCase() === String(searchPincode).trim().toLowerCase()
+  ) {
+    return { distanceTier: 'SAME_PINCODE', distanceLabel: 'Same pincode' };
+  }
+
+  if (distance !== null && distance !== undefined && !isNaN(distance)) {
+    if (distance <= 5.0) return { distanceTier: 'WITHIN_5_KM', distanceLabel: 'Within 5 km' };
+    if (distance <= 10.0) return { distanceTier: 'WITHIN_10_KM', distanceLabel: 'Within 10 km' };
+    if (distance <= 25.0) return { distanceTier: 'WITHIN_25_KM', distanceLabel: 'Within 25 km' };
+    if (distance <= 50.0) return { distanceTier: 'WITHIN_50_KM', distanceLabel: 'Within 50 km' };
+    if (distance <= 100.0) return { distanceTier: 'WITHIN_100_KM', distanceLabel: 'Within 100 km' };
+    return { distanceTier: 'BEYOND_100_KM', distanceLabel: 'More than 100 km away' };
+  }
+
+  return { distanceTier: 'UNKNOWN_DISTANCE', distanceLabel: 'Distance not available' };
 };
 
 /**
@@ -195,6 +220,8 @@ export const listAdvocates = async ({
     pincode: true,
     latitude: true,
     longitude: true,
+    officeLatitude: true,
+    officeLongitude: true,
     isOnline: true,
     lastSeenAt: true,
     callAvailability: true,
@@ -227,7 +254,10 @@ export const listAdvocates = async ({
         userCoords = { latitude: dbUser.latitude, longitude: dbUser.longitude };
       } else if (dbUser.pincode) {
         try {
-          userCoords = await resolvePincodeCoordinates(dbUser.pincode);
+          const uloc = await getPincodeLocation(dbUser.pincode);
+          if (uloc.found) {
+            userCoords = { latitude: uloc.latitude, longitude: uloc.longitude };
+          }
         } catch (err) {
           console.warn(`Could not resolve user coordinates for user pincode ${dbUser.pincode}:`, err);
         }
@@ -241,28 +271,175 @@ export const listAdvocates = async ({
     }
   }
 
-  // Determine reference coordinates for distance sorting
-  let refCoords = null;
+  // 4. Branch A: Search by Pincode with Expanding Radius
   if (pincode !== undefined && pincode !== null && pincode !== '') {
-    refCoords = await resolvePincodeCoordinates(pincode);
-  } else if (userCoords) {
-    refCoords = userCoords;
-  }
+    const cleanSearchPincode = String(pincode).trim();
+    const pinLoc = await getPincodeLocation(cleanSearchPincode);
 
-  // Sort by distance only if we have reference coordinates and no manual sort key is selected
-  const isSortingByDefault = !sort || sort === '';
-  const sortByDistance = refCoords && isSortingByDefault;
+    let refCoords = null;
+    let locationResolved = false;
+    let locationSource = null;
 
-  if (sortByDistance) {
-    // Get all matching advocates (without database pagination/sorting)
+    if (!pinLoc.found) {
+      if (pinLoc.reason === 'NOT_FOUND') {
+        const error = new Error("We couldn't find this pincode. Please check and try again.");
+        error.statusCode = 400;
+        throw error;
+      }
+      // pinLoc.reason === 'UNAVAILABLE' and no fallback: graceful degradation
+      locationResolved = false;
+      locationSource = null;
+      refCoords = null;
+    } else {
+      refCoords = { latitude: pinLoc.latitude, longitude: pinLoc.longitude };
+      locationResolved = true;
+      locationSource = pinLoc.source;
+    }
+
+    // Fetch all matching advocates to compute full-set areaSummary & stable tier ordering
     const allAdvocates = await prisma.advocate.findMany({
       where,
       select: selectFields
     });
 
-    // Calculate distance for each advocate
-    const advocatesWithDistance = allAdvocates.map(adv => {
-      const coords = getAdvocateCoordinates(adv);
+    const advCoordsList = await resolveAdvocateCoordinatesBatch(allAdvocates);
+
+    const advocatesWithDistance = allAdvocates.map((adv, idx) => {
+      const coords = advCoordsList[idx];
+      let distance = null;
+      if (refCoords && coords) {
+        const raw = calculateHaversineDistance(
+          refCoords.latitude,
+          refCoords.longitude,
+          coords.latitude,
+          coords.longitude
+        );
+        distance = parseFloat(raw.toFixed(2));
+      }
+      const { distanceTier, distanceLabel } = assignDistanceTier(adv.pincode, cleanSearchPincode, distance);
+      return { ...adv, distance, distanceTier, distanceLabel };
+    });
+
+    // Full-set area summary
+    const areaSummary = {
+      SAME_PINCODE: 0,
+      WITHIN_5_KM: 0,
+      WITHIN_10_KM: 0,
+      WITHIN_25_KM: 0,
+      WITHIN_50_KM: 0,
+      WITHIN_100_KM: 0,
+      BEYOND_100_KM: 0,
+      UNKNOWN_DISTANCE: 0
+    };
+    for (const adv of advocatesWithDistance) {
+      if (areaSummary[adv.distanceTier] !== undefined) {
+        areaSummary[adv.distanceTier]++;
+      }
+    }
+
+    // Sort: Explicit sort overrides tier order, but distances and labels remain
+    if (sort && allowedSortKeys[sort]) {
+      if (sort === 'rating') {
+        advocatesWithDistance.sort((a, b) => {
+          const diff = (Number(b.averageRating) || 0) - (Number(a.averageRating) || 0);
+          if (diff !== 0) return diff;
+          return String(a.id).localeCompare(String(b.id));
+        });
+      } else if (sort === 'experience') {
+        advocatesWithDistance.sort((a, b) => {
+          const diff = (b.experienceYears || 0) - (a.experienceYears || 0);
+          if (diff !== 0) return diff;
+          return String(a.id).localeCompare(String(b.id));
+        });
+      } else if (sort === 'casesHandled') {
+        advocatesWithDistance.sort((a, b) => {
+          const diff = (b.casesHandled || 0) - (a.casesHandled || 0);
+          if (diff !== 0) return diff;
+          return String(a.id).localeCompare(String(b.id));
+        });
+      }
+    } else {
+      // Default: Tier ascending -> distance ascending -> rating desc -> id asc
+      advocatesWithDistance.sort((a, b) => {
+        const tierA = TIER_PRIORITY[a.distanceTier] || 99;
+        const tierB = TIER_PRIORITY[b.distanceTier] || 99;
+        if (tierA !== tierB) return tierA - tierB;
+
+        const distA = a.distance !== null && a.distance !== undefined ? a.distance : Infinity;
+        const distB = b.distance !== null && b.distance !== undefined ? b.distance : Infinity;
+        if (distA !== distB) return distA - distB;
+
+        const ratingA = Number(a.averageRating) || 0;
+        const ratingB = Number(b.averageRating) || 0;
+        if (ratingB !== ratingA) return ratingB - ratingA;
+
+        return String(a.id).localeCompare(String(b.id));
+      });
+    }
+
+    const total = advocatesWithDistance.length;
+    const paginated = advocatesWithDistance.slice(skip, skip + take);
+
+    const cleanAdvocates = paginated.map(adv => {
+      const {
+        pincode: _p,
+        latitude: _lat,
+        longitude: _lng,
+        officeLatitude: _olat,
+        officeLongitude: _olng,
+        completeAddress: _ca,
+        _count,
+        ...cleanAdv
+      } = adv;
+      cleanAdv.officeAddress = adv.officeAddress || adv.completeAddress || null;
+      cleanAdv.likeCount = _count?.likes ?? 0;
+      cleanAdv.isSaved = savedLawyerIds.has(adv.id);
+      cleanAdv.isLiked = likedAdvocateIds.has(adv.id);
+      cleanAdv.isOnline = computeEffectiveOnlineStatus(adv.isOnline, adv.lastSeenAt);
+      cleanAdv.lastSeenAt = adv.lastSeenAt;
+      cleanAdv.callAvailability = adv.callAvailability ?? false;
+      cleanAdv.voiceCallPricePer15Min = adv.voiceCallPricePer15Min !== null ? Number(adv.voiceCallPricePer15Min) : null;
+      cleanAdv.videoCallPricePer15Min = adv.videoCallPricePer15Min !== null ? Number(adv.videoCallPricePer15Min) : null;
+      cleanAdv.offlineVisitingFee = adv.offlineVisitingFee !== null ? Number(adv.offlineVisitingFee) : null;
+      cleanAdv.officeVisitDurationMinutes = adv.officeVisitDurationMinutes !== null ? adv.officeVisitDurationMinutes : null;
+      cleanAdv.pricing = formatPricingSummary(adv);
+      cleanAdv.distance = adv.distance;
+      cleanAdv.distanceTier = adv.distanceTier;
+      cleanAdv.distanceLabel = adv.distanceLabel;
+      return cleanAdv;
+    });
+
+    return {
+      location: {
+        pincode: cleanSearchPincode,
+        resolved: locationResolved,
+        source: locationSource
+      },
+      areaSummary,
+      advocates: cleanAdvocates,
+      pagination: {
+        page: parseInt(page, 10),
+        limit: take,
+        total,
+        totalPages: Math.ceil(total / take)
+      }
+    };
+  }
+
+  // 5. Branch B: Standard Flow without pincode query
+  const refCoords = userCoords;
+  const isSortingByDefault = !sort || sort === '';
+  const sortByDistance = refCoords && isSortingByDefault;
+
+  if (sortByDistance) {
+    const allAdvocates = await prisma.advocate.findMany({
+      where,
+      select: selectFields
+    });
+    const advCoordsList = await resolveAdvocateCoordinatesBatch(allAdvocates);
+
+    const advocatesWithDistance = allAdvocates.map((adv, idx) => {
+      const coords = advCoordsList[idx];
       let distance = Infinity;
       if (coords) {
         distance = calculateHaversineDistance(
@@ -275,22 +452,24 @@ export const listAdvocates = async ({
       return { ...adv, distance };
     });
 
-    // Sort by distance ascending
     advocatesWithDistance.sort((a, b) => a.distance - b.distance);
 
-    // Apply pagination in memory
     const total = advocatesWithDistance.length;
     const paginated = advocatesWithDistance.slice(skip, skip + take);
 
-    // Clean up internal coordinates/pincode fields for privacy and format distance
     const cleanAdvocates = paginated.map(adv => {
-      const { pincode, latitude, longitude, completeAddress, _count, ...cleanAdv } = adv;
+      const {
+        pincode: _p,
+        latitude: _lat,
+        longitude: _lng,
+        officeLatitude: _olat,
+        officeLongitude: _olng,
+        completeAddress: _ca,
+        _count,
+        ...cleanAdv
+      } = adv;
       cleanAdv.officeAddress = adv.officeAddress || adv.completeAddress || null;
-      if (adv.distance !== Infinity) {
-        cleanAdv.distance = parseFloat(adv.distance.toFixed(2));
-      } else {
-        cleanAdv.distance = null;
-      }
+      cleanAdv.distance = adv.distance !== Infinity ? parseFloat(adv.distance.toFixed(2)) : null;
       cleanAdv.likeCount = _count?.likes ?? 0;
       cleanAdv.isSaved = savedLawyerIds.has(adv.id);
       cleanAdv.isLiked = likedAdvocateIds.has(adv.id);
@@ -316,7 +495,7 @@ export const listAdvocates = async ({
     };
   }
 
-  // 4. Default flow: Database-level pagination/sorting
+  // Database-level pagination/sorting
   const [total, advocates] = await prisma.$transaction([
     prisma.advocate.count({ where }),
     prisma.advocate.findMany({
@@ -328,12 +507,25 @@ export const listAdvocates = async ({
     })
   ]);
 
-  // Clean up coordinates and compute/attach distance if refCoords is available (e.g. user logged in but sorted by experience)
-  const cleanAdvocates = advocates.map(adv => {
-    const { pincode, latitude, longitude, completeAddress, _count, ...cleanAdv } = adv;
+  let advCoordsList = [];
+  if (refCoords) {
+    advCoordsList = await resolveAdvocateCoordinatesBatch(advocates);
+  }
+
+  const cleanAdvocates = advocates.map((adv, idx) => {
+    const {
+      pincode: _p,
+      latitude: _lat,
+      longitude: _lng,
+      officeLatitude: _olat,
+      officeLongitude: _olng,
+      completeAddress: _ca,
+      _count,
+      ...cleanAdv
+    } = adv;
     cleanAdv.officeAddress = adv.officeAddress || adv.completeAddress || null;
     if (refCoords) {
-      const coords = getAdvocateCoordinates(adv);
+      const coords = advCoordsList[idx];
       if (coords) {
         const distance = calculateHaversineDistance(
           refCoords.latitude,

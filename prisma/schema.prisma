@@ -1022,3 +1022,15 @@ model AdvocateWithdrawal {
   @@index([advocateId, status])
   @@index([status, createdAt])
 }
+
+model PincodeLocation {
+  pincode          String   @id
+  latitude         Float?
+  longitude        Float?
+  formattedAddress String?
+  source           String
+  status           String
+  fetchedAt        DateTime
+
+  @@index([fetchedAt])
+}

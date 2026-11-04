@@ -23,6 +23,11 @@ export const getAdvocatesDirectory = async (req, res, next) => {
 
     if (pincode !== undefined && pincode !== null && pincode !== '') {
       pincodeSchema.parse(pincode);
+      if (!/^[1-9]\d{5}$/.test(String(pincode).trim())) {
+        const error = new Error("We couldn't find this pincode. Please check and try again.");
+        error.statusCode = 400;
+        throw error;
+      }
     }
 
     // Extract user ID if authenticated user is a client/user
