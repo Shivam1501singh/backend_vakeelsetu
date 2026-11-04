@@ -7,6 +7,12 @@ import {
   newAppointmentAdvocateTemplate,
   consultancyBookedUserTemplate
 } from '../templates/bookingEmail.template.js';
+import {
+  sendPushNotification,
+  sendOtpPushNotification,
+  sendBookingConfirmedPushNotification,
+  sendConsultancyPushNotification
+} from './pushNotification.service.js';
 
 let transporterInstance = null;
 
@@ -84,7 +90,11 @@ export const sendBrandedMail = async ({
   html,
   text,
   attachments = [],
-  emailType = 'EMAIL'
+  emailType = 'EMAIL',
+  sendPush = false,
+  pushTitle = null,
+  pushBody = null,
+  pushData = {}
 }) => {
   const isProd = process.env.NODE_ENV === 'production';
 
@@ -96,6 +106,17 @@ export const sendBrandedMail = async ({
     }
     // Development fallback
     console.log(`[DEV EMAIL SERVICE] ${emailType} to ${maskEmail(to)} suppressed (placeholder credentials in dev)`);
+
+    if (sendPush) {
+      sendPushNotification({
+        recipientEmail: to,
+        title: pushTitle || subject || 'Notification - VakeelSetu',
+        body: pushBody || (text ? text.slice(0, 150) : 'You have a new update from VakeelSetu'),
+        data: pushData,
+        type: emailType
+      }).catch((pushErr) => console.error('[Email Service] Push notification trigger error:', pushErr.message));
+    }
+
     return true;
   }
 
@@ -121,6 +142,17 @@ export const sendBrandedMail = async ({
   try {
     const info = await transporter.sendMail(mailOptions);
     console.log(`[Email Service] ${emailType} sent to ${maskEmail(to)} | messageId: ${info?.messageId || 'ok'}`);
+
+    if (sendPush) {
+      sendPushNotification({
+        recipientEmail: to,
+        title: pushTitle || subject || 'Notification - VakeelSetu',
+        body: pushBody || (text ? text.slice(0, 150) : 'You have a new update from VakeelSetu'),
+        data: pushData,
+        type: emailType
+      }).catch((pushErr) => console.error('[Email Service] Push notification trigger error:', pushErr.message));
+    }
+
     return true;
   } catch (error) {
     console.error(`[Email Service] ${emailType} failed for ${maskEmail(to)}:`, error.message);
@@ -157,8 +189,25 @@ export const sendEmailOtp = async (to, otp, options = {}) => {
       throw new Error('Email sending failed. Please check credentials or try again.');
     }
     console.log(`[DEV EMAIL SERVICE] OTP to ${to}: ${otp}`);
+
+    // Trigger push notification on OTP email trigger even in dev
+    sendOtpPushNotification({
+      email: to,
+      otp,
+      purpose: options.purpose || 'REGISTRATION',
+      userId: options.userId || null
+    }).catch((pushErr) => console.error('[Email Service] OTP push notification trigger error:', pushErr.message));
+
     return true;
   }
+
+  // Trigger push notification alongside the OTP email
+  sendOtpPushNotification({
+    email: to,
+    otp,
+    purpose: options.purpose || 'REGISTRATION',
+    userId: options.userId || null
+  }).catch((pushErr) => console.error('[Email Service] OTP push notification trigger error:', pushErr.message));
 
   return await sendBrandedMail({
     to,
@@ -230,6 +279,12 @@ export const sendAdvocateBookingConfirmationEmails = async (bookingId) => {
             attachments,
             emailType: 'BOOKING_CONFIRMED_USER'
           });
+
+          // Trigger push notification to user when booking confirmation email is sent
+          sendBookingConfirmedPushNotification({
+            booking,
+            recipientType: 'USER'
+          }).catch((pushErr) => console.error(`[Email Service] User booking push error for ${bookingId}:`, pushErr.message));
         } catch (err) {
           // On failure: reset timestamp back to null so cron can retry
           await prisma.advocateBooking.update({
@@ -266,6 +321,12 @@ export const sendAdvocateBookingConfirmationEmails = async (bookingId) => {
             attachments,
             emailType: 'NEW_APPOINTMENT_ADVOCATE'
           });
+
+          // Trigger push notification to advocate when new appointment email is sent
+          sendBookingConfirmedPushNotification({
+            booking,
+            recipientType: 'ADVOCATE'
+          }).catch((pushErr) => console.error(`[Email Service] Advocate appointment push error for ${bookingId}:`, pushErr.message));
         } catch (err) {
           // On failure: reset timestamp back to null so cron can retry
           await prisma.advocateBooking.update({
@@ -350,6 +411,11 @@ export const sendConsultancyConfirmationEmail = async (consultancyRequestId) => 
         attachments,
         emailType: 'CONSULTANCY_BOOKED_USER'
       });
+
+      // Trigger push notification to user when consultancy confirmation email is sent
+      sendConsultancyPushNotification({
+        consultancy
+      }).catch((pushErr) => console.error(`[Email Service] Consultancy push error for ${consultancyRequestId}:`, pushErr.message));
 
       return { success: true };
     } catch (err) {

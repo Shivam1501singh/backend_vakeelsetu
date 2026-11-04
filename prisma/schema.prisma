@@ -1034,3 +1034,37 @@ model PincodeLocation {
 
   @@index([fetchedAt])
 }
+
+model DeviceToken {
+  id         String   @id @default(uuid())
+  token      String   @unique
+  userType   String?  // USER, ADVOCATE, ADMIN, GUEST
+  userId     String?
+  email      String?
+  deviceType String?  // android, ios, web
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId])
+  @@index([email])
+}
+
+model NotificationLog {
+  id             String   @id @default(uuid())
+  recipientEmail String?
+  userId         String?
+  userType       String?
+  title          String
+  body           String
+  data           Json?
+  type           String
+  status         String   @default("SENT") // SENT, FAILED, SKIPPED
+  errorMessage   String?
+  createdAt      DateTime @default(now())
+
+  @@index([recipientEmail])
+  @@index([userId])
+  @@index([createdAt])
+}
+
