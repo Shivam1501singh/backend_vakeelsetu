@@ -111,7 +111,7 @@ export const reconcilePaymentsCron = async (req, res) => {
     // Retry unsent consultancy confirmation emails in the last 48h
     const pendingConsultancyEmails = await prisma.consultancyRequest.findMany({
       where: {
-        createdAt: { gte: since48h },
+        createdAt: { gte: fortyEightHoursAgo },
         confirmationEmailSentAt: null,
         payment: {
           status: 'PAID'
