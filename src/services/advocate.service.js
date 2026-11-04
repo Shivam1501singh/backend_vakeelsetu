@@ -10,8 +10,8 @@ const TIER_PRIORITY = {
   WITHIN_10_KM: 3,
   WITHIN_25_KM: 4,
   WITHIN_50_KM: 5,
-  WITHIN_100_KM: 6,
-  BEYOND_100_KM: 7,
+  WITHIN_150_KM: 6,
+  BEYOND_150_KM: 7,
   UNKNOWN_DISTANCE: 8
 };
 
@@ -118,8 +118,8 @@ const assignDistanceTier = (advPincode, searchPincode, distance) => {
     if (distance <= 10.0) return { distanceTier: 'WITHIN_10_KM', distanceLabel: 'Within 10 km' };
     if (distance <= 25.0) return { distanceTier: 'WITHIN_25_KM', distanceLabel: 'Within 25 km' };
     if (distance <= 50.0) return { distanceTier: 'WITHIN_50_KM', distanceLabel: 'Within 50 km' };
-    if (distance <= 100.0) return { distanceTier: 'WITHIN_100_KM', distanceLabel: 'Within 100 km' };
-    return { distanceTier: 'BEYOND_100_KM', distanceLabel: 'More than 100 km away' };
+    if (distance <= 150.0) return { distanceTier: 'WITHIN_150_KM', distanceLabel: 'Within 150 km' };
+    return { distanceTier: 'BEYOND_150_KM', distanceLabel: 'More than 150 km away' };
   }
 
   return { distanceTier: 'UNKNOWN_DISTANCE', distanceLabel: 'Distance not available' };
@@ -337,18 +337,24 @@ export const listAdvocates = async ({
       return { ...adv, distance, distanceTier, distanceLabel };
     });
 
-    // Full-set area summary
+    // Filter advocates within 150 km when searching by pincode
+    const advocatesWithin150Km = refCoords
+      ? advocatesWithDistance.filter(adv => {
+          if (adv.distanceTier === 'SAME_PINCODE') return true;
+          return adv.distance !== null && adv.distance !== undefined && adv.distance <= 150.0;
+        })
+      : advocatesWithDistance;
+
+    // Full-set area summary (within 150 km)
     const areaSummary = {
       SAME_PINCODE: 0,
       WITHIN_5_KM: 0,
       WITHIN_10_KM: 0,
       WITHIN_25_KM: 0,
       WITHIN_50_KM: 0,
-      WITHIN_100_KM: 0,
-      BEYOND_100_KM: 0,
-      UNKNOWN_DISTANCE: 0
+      WITHIN_150_KM: 0
     };
-    for (const adv of advocatesWithDistance) {
+    for (const adv of advocatesWithin150Km) {
       if (areaSummary[adv.distanceTier] !== undefined) {
         areaSummary[adv.distanceTier]++;
       }
@@ -357,19 +363,19 @@ export const listAdvocates = async ({
     // Sort: Explicit sort overrides tier order, but distances and labels remain
     if (sort && allowedSortKeys[sort]) {
       if (sort === 'rating') {
-        advocatesWithDistance.sort((a, b) => {
+        advocatesWithin150Km.sort((a, b) => {
           const diff = (Number(b.averageRating) || 0) - (Number(a.averageRating) || 0);
           if (diff !== 0) return diff;
           return String(a.id).localeCompare(String(b.id));
         });
       } else if (sort === 'experience') {
-        advocatesWithDistance.sort((a, b) => {
+        advocatesWithin150Km.sort((a, b) => {
           const diff = (b.experienceYears || 0) - (a.experienceYears || 0);
           if (diff !== 0) return diff;
           return String(a.id).localeCompare(String(b.id));
         });
       } else if (sort === 'casesHandled') {
-        advocatesWithDistance.sort((a, b) => {
+        advocatesWithin150Km.sort((a, b) => {
           const diff = (b.casesHandled || 0) - (a.casesHandled || 0);
           if (diff !== 0) return diff;
           return String(a.id).localeCompare(String(b.id));
@@ -377,7 +383,7 @@ export const listAdvocates = async ({
       }
     } else {
       // Default: Tier ascending -> distance ascending -> rating desc -> id asc
-      advocatesWithDistance.sort((a, b) => {
+      advocatesWithin150Km.sort((a, b) => {
         const tierA = TIER_PRIORITY[a.distanceTier] || 99;
         const tierB = TIER_PRIORITY[b.distanceTier] || 99;
         if (tierA !== tierB) return tierA - tierB;
@@ -394,8 +400,8 @@ export const listAdvocates = async ({
       });
     }
 
-    const total = advocatesWithDistance.length;
-    const paginated = advocatesWithDistance.slice(skip, skip + take);
+    const total = advocatesWithin150Km.length;
+    const paginated = advocatesWithin150Km.slice(skip, skip + take);
 
     const cleanAdvocates = paginated.map(adv => {
       const {
