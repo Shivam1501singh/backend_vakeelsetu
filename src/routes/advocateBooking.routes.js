@@ -35,6 +35,14 @@ userAdvocateBookingRouter.get(
   advocateBookingController.getCheckoutStatus
 );
 
+userAdvocateBookingRouter.post(
+  '/checkout/:checkoutId/cancel',
+  requireAuth,
+  requireRole('USER'),
+  generalLimiter,
+  advocateBookingController.cancelCheckout
+);
+
 // -------------------------------------------------------------
 // Advocate "My Appointments" Routes (Requires ADVOCATE role)
 // -------------------------------------------------------------

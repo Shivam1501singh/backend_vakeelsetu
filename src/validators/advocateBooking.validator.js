@@ -37,3 +37,7 @@ export const adminAdvocateBookingQuerySchema = z.object({
   page: z.coerce.number().int().min(1).optional().default(1),
   limit: z.coerce.number().int().min(1).max(100).optional().default(10)
 });
+
+export const checkoutCancelParamsSchema = z.object({
+  checkoutId: z.string({ required_error: 'checkoutId is required' }).uuid('checkoutId must be a valid UUID')
+});

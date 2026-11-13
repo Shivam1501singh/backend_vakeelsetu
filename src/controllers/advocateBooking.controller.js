@@ -4,7 +4,8 @@ import * as advocateEarningsService from '../services/advocateEarnings.service.j
 import {
   bookingQuoteSchema,
   advocateCheckoutSchema,
-  advocateAppointmentQuerySchema
+  advocateAppointmentQuerySchema,
+  checkoutCancelParamsSchema
 } from '../validators/advocateBooking.validator.js';
 import { advocateWithdrawalRequestSchema } from '../validators/advocate.validator.js';
 import { checkoutVerifySchema } from '../validators/payment.validator.js';
@@ -33,8 +34,9 @@ export const getBusySlots = async (req, res, next) => {
   try {
     const { advocateId } = req.params;
     const { date } = req.query;
+    const userId = req.user?.id || null;
 
-    const result = await advocateBookingService.getAdvocateBusySlots(advocateId, date);
+    const result = await advocateBookingService.getAdvocateBusySlots(advocateId, date, userId);
     return res.status(200).json({
       success: true,
       ...result
@@ -192,6 +194,26 @@ export const getCheckoutStatus = async (req, res, next) => {
       payment: formatPayment(currentPayment),
       booking: currentPayment.advocateBooking || null
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * User: Cancel checkout and release hold safely
+ * POST /api/user/advocate-bookings/checkout/:checkoutId/cancel
+ */
+export const cancelCheckout = async (req, res, next) => {
+  try {
+    const { checkoutId } = checkoutCancelParamsSchema.parse(req.params);
+    const userId = req.user.id;
+
+    const result = await advocateBookingService.cancelAdvocateBookingCheckout({
+      checkoutId,
+      userId
+    });
+
+    return res.status(200).json(result);
   } catch (error) {
     next(error);
   }

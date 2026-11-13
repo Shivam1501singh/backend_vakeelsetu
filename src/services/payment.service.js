@@ -95,6 +95,12 @@ export const formatPayment = (payment) => {
   };
 };
 
+let testRzpClient = null;
+export const setPaymentRzpClient = (client) => {
+  testRzpClient = client;
+};
+const getEffectiveRzpClient = () => testRzpClient || getRazorpayClient();
+
 /**
  * Single source of truth for synchronizing payment state from Razorpay.
  * Idempotent, safe to call from verify API, webhook, or cron reconciler.
@@ -106,7 +112,7 @@ export const formatPayment = (payment) => {
  * @returns {Promise<object>} The updated Payment record
  */
 export const syncPaymentFromRazorpay = async ({ paymentId, razorpayOrderId }) => {
-  const rzpClient = getRazorpayClient();
+  const rzpClient = getEffectiveRzpClient();
   if (!rzpClient) {
     const err = new Error('Payments are not configured.');
     err.statusCode = 503;
@@ -295,7 +301,7 @@ export const syncPaymentFromRazorpay = async ({ paymentId, razorpayOrderId }) =>
                 where: { id: booking.id },
                 data: {
                   status: 'REFUND_PENDING',
-                  refundReason: 'SLOT_CONFLICT_AFTER_EXPIRY'
+                  refundReason: 'SLOT_NO_LONGER_AVAILABLE'
                 }
               });
 
@@ -303,14 +309,14 @@ export const syncPaymentFromRazorpay = async ({ paymentId, razorpayOrderId }) =>
                 where: { id: pId },
                 data: {
                   status: 'FAILED',
-                  failureReason: 'SLOT_CONFLICT_AFTER_EXPIRY'
+                  failureReason: 'SLOT_NO_LONGER_AVAILABLE'
                 }
               });
 
               try {
                 await rzpClient.payments.refund(firstCaptured.razorpayPaymentId, {
                   amount: firstCaptured.amount,
-                  notes: { reason: 'SLOT_CONFLICT_AFTER_EXPIRY', advocateBookingId: booking.id }
+                  notes: { reason: 'SLOT_NO_LONGER_AVAILABLE', advocateBookingId: booking.id }
                 });
               } catch (refErr) {
                 console.error('[Refund Error] Failed to auto-refund conflicted slot payment:', refErr.message);

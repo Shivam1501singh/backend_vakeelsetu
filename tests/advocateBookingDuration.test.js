@@ -278,6 +278,10 @@ describe('Advocate Booking Duration Extension (+15 min steps)', () => {
       prisma.advocate.findUnique = async () => mockAdvocate;
       prisma.user.findUnique = async () => ({ id: 'user-1', fullName: 'User One', email: 'u1@test.com', phone: '9999999999' });
 
+      const testFutureStart = new Date(Date.now() + 2 * 60 * 60 * 1000);
+      testFutureStart.setUTCMinutes(0, 0, 0);
+      const testFutureEnd = new Date(testFutureStart.getTime() + 15 * 60 * 1000);
+
       // Mock existing payment with 15 min duration
       const existingPayment = {
         id: 'pay-existing-1',
@@ -290,13 +294,14 @@ describe('Advocate Booking Duration Extension (+15 min steps)', () => {
         advocateBooking: {
           id: 'booking-existing-1',
           mode: 'VOICE_CALL',
-          startAt: new Date('2026-11-05T04:30:00.000Z'),
-          endAt: new Date('2026-11-05T04:45:00.000Z'),
+          startAt: testFutureStart,
+          endAt: testFutureEnd,
           durationMinutes: 15,
           subject: null
         }
       };
       prisma.payment.findFirst = async () => existingPayment;
+      prisma.payment.findMany = async () => [];
       prisma.payment.findUnique = async () => existingPayment;
       prisma.advocateBooking.update = async ({ data }) => ({
         ...existingPayment.advocateBooking,
@@ -322,7 +327,7 @@ describe('Advocate Booking Duration Extension (+15 min steps)', () => {
         userId: 'user-1',
         advocateId: mockAdvocate.id,
         mode: 'VOICE_CALL',
-        startAt: '2026-11-05T04:30:00.000Z',
+        startAt: testFutureStart.toISOString(),
         durationMinutes: 15
       });
       assert.equal(checkoutSame.statusCode, 200);

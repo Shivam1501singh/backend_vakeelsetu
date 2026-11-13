@@ -159,7 +159,7 @@ export const quoteBookingSlot = async (advocateId, { mode, startAt, durationMinu
   const breakdown = quote(advocate, mode, durationMinutes, startAt);
   const { startAt: slotStart, endAt: slotEnd } = validateStart(mode, startAt, durationMinutes);
 
-  const free = await isSlotFree(advocateId, slotStart, slotEnd);
+  const free = await isSlotFree(advocateId, slotStart, slotEnd, prisma, null, userId);
   if (!free) {
     const error = new Error(`The advocate is not available for the full ${durationMinutes} minutes. Please choose a shorter duration or another time.`);
     error.statusCode = 409;
@@ -168,7 +168,7 @@ export const quoteBookingSlot = async (advocateId, { mode, startAt, durationMinu
   }
 
   if (userId) {
-    await checkUserSlotConflict(userId, slotStart, slotEnd);
+    await checkUserSlotConflict(userId, slotStart, slotEnd, prisma, null, true);
   }
 
   return {
@@ -179,6 +179,170 @@ export const quoteBookingSlot = async (advocateId, { mode, startAt, durationMinu
     durationMinutes,
     mode,
     breakdown
+  };
+};
+
+let holdMinutesWarned = false;
+export const getAdvocateBookingHoldMinutes = () => {
+  const raw = process.env.ADVOCATE_BOOKING_HOLD_MINUTES;
+  if (!raw || String(raw).trim() === '') {
+    return 10;
+  }
+  const parsed = parseInt(raw, 10);
+  if (isNaN(parsed) || parsed < 3 || parsed > 30) {
+    if (!holdMinutesWarned) {
+      console.warn(`[Config Warning] Invalid ADVOCATE_BOOKING_HOLD_MINUTES "${raw}". Must be an integer between 3 and 30. Defaulting to 10.`);
+      holdMinutesWarned = true;
+    }
+    return 10;
+  }
+  return parsed;
+};
+
+export const resetHoldMinutesWarned = () => {
+  holdMinutesWarned = false;
+};
+
+let testRzpClient = null;
+export const setAdvocateBookingRzpClient = (client) => {
+  testRzpClient = client;
+};
+const getEffectiveRzpClient = () => testRzpClient || getRazorpayClient();
+
+/**
+ * Checks payments of a Razorpay order with a 5000ms timeout.
+ */
+export const checkRazorpayOrderPayments = async (orderId, rzpClient) => {
+  const client = rzpClient || getEffectiveRzpClient();
+  if (!client) {
+    return { status: 'TIMEOUT_OR_ERROR', payments: [] };
+  }
+  let timer;
+  try {
+    const fetchPromise = client.orders.fetchPayments(orderId);
+    const timeoutPromise = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Razorpay request timeout')), 5000);
+    });
+    const rzpResponse = await Promise.race([fetchPromise, timeoutPromise]);
+    clearTimeout(timer);
+    const items = (rzpResponse && rzpResponse.items) || [];
+    const hasCapturedOrAuthorized = items.some((p) => p.status === 'captured' || p.status === 'authorized');
+    if (hasCapturedOrAuthorized) {
+      return { status: 'PAID', payments: items };
+    }
+    const hasPending = items.some((p) => p.status === 'created');
+    if (hasPending) {
+      return { status: 'PENDING', payments: items };
+    }
+    return { status: 'RELEASE', payments: items };
+  } catch (err) {
+    if (timer) clearTimeout(timer);
+    console.error(`[Razorpay Check] Error for order ${orderId}:`, err.message);
+    return { status: 'TIMEOUT_OR_ERROR', payments: [] };
+  }
+};
+
+/**
+ * Cancels an advocate booking checkout safely.
+ */
+export const cancelAdvocateBookingCheckout = async ({ checkoutId, userId }) => {
+  const payment = await prisma.payment.findUnique({
+    where: { id: checkoutId },
+    include: { advocateBooking: true }
+  });
+
+  if (!payment || payment.userId !== userId || payment.purpose !== 'ADVOCATE_BOOKING') {
+    const error = new Error('Checkout not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  // 1. If already confirmed
+  if (payment.advocateBooking?.status === 'CONFIRMED' || payment.status === 'PAID') {
+    return {
+      success: true,
+      result: 'PAID',
+      message: 'Payment received. Your booking is confirmed.',
+      bookingId: payment.advocateBooking?.bookingId || undefined
+    };
+  }
+
+  // 2. If already closed/expired
+  if (
+    payment.advocateBooking?.status === 'EXPIRED' ||
+    payment.status === 'EXPIRED' ||
+    payment.status === 'FAILED'
+  ) {
+    return {
+      success: true,
+      result: 'ALREADY_CLOSED',
+      status: 'EXPIRED'
+    };
+  }
+
+  if (payment.advocateBooking?.status !== 'HOLD') {
+    return {
+      success: true,
+      result: 'ALREADY_CLOSED',
+      status: payment.advocateBooking?.status || 'EXPIRED'
+    };
+  }
+
+  // 3. Status is HOLD -> ask Razorpay
+  const rzpClient = getEffectiveRzpClient();
+  const rzpCheck = await checkRazorpayOrderPayments(payment.razorpayOrderId, rzpClient);
+
+  if (rzpCheck.status === 'PAID') {
+    const synced = await syncPaymentFromRazorpay({ paymentId: payment.id });
+    return {
+      success: true,
+      result: 'PAID',
+      message: 'Payment received. Your booking is confirmed.',
+      bookingId: synced.advocateBooking?.bookingId || payment.advocateBooking?.bookingId
+    };
+  }
+
+  if (rzpCheck.status === 'PENDING') {
+    return {
+      success: true,
+      result: 'PAYMENT_PROCESSING',
+      message: "Your payment is being confirmed. Please don't pay again."
+    };
+  }
+
+  if (rzpCheck.status === 'TIMEOUT_OR_ERROR') {
+    return {
+      success: true,
+      result: 'HOLD_KEPT',
+      message: "We couldn't confirm the payment status right now. The slot will be released automatically in a few minutes."
+    };
+  }
+
+  // rzpCheck.status === 'RELEASE': no payments, or only failed
+  await prisma.$transaction(async (tx) => {
+    const fresh = await tx.advocateBooking.findUnique({
+      where: { id: payment.advocateBookingId },
+      select: { id: true, status: true }
+    });
+    if (fresh && fresh.status === 'HOLD') {
+      await tx.advocateBooking.update({
+        where: { id: payment.advocateBookingId },
+        data: { status: 'EXPIRED' }
+      });
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: {
+          status: 'EXPIRED',
+          failureReason: 'USER_CANCELLED'
+        }
+      });
+    }
+  });
+
+  return {
+    success: true,
+    result: 'RELEASED',
+    message: 'Slot released.'
   };
 };
 
@@ -193,7 +357,7 @@ export const createAdvocateBookingCheckout = async ({ userId, advocateId, mode, 
     throw err;
   }
 
-  const rzpClient = getRazorpayClient();
+  const rzpClient = getEffectiveRzpClient();
   if (!rzpClient) {
     const err = new Error('Payments are not configured.');
     err.statusCode = 503;
@@ -333,8 +497,54 @@ export const createAdvocateBookingCheckout = async ({ userId, advocateId, mode, 
     }
   }
 
+  // 1.5 Safety check: Check for OTHER active HOLDs of this user (any advocate/time)
+  const otherActivePayments = await prisma.payment.findMany({
+    where: {
+      userId,
+      purpose: 'ADVOCATE_BOOKING',
+      status: 'CREATED',
+      expiresAt: { gt: now },
+      ...(existingPayment ? { id: { not: existingPayment.id } } : {}),
+      advocateBooking: {
+        status: 'HOLD'
+      }
+    },
+    include: { advocateBooking: true }
+  });
+
+  for (const otherPay of otherActivePayments) {
+    const check = await checkRazorpayOrderPayments(otherPay.razorpayOrderId, rzpClient);
+    if (check.status === 'PAID') {
+      await syncPaymentFromRazorpay({ paymentId: otherPay.id });
+      const err = new Error('Your previous payment is still being processed by the bank. Please wait — do not pay again.');
+      err.statusCode = 409;
+      err.code = 'PAYMENT_PROCESSING';
+      err.checkoutId = otherPay.id;
+      throw err;
+    }
+    if (check.status === 'PENDING') {
+      const err = new Error('Your previous payment is still being processed by the bank. Please wait — do not pay again.');
+      err.statusCode = 409;
+      err.code = 'PAYMENT_PROCESSING';
+      err.checkoutId = otherPay.id;
+      throw err;
+    }
+    if (check.status === 'RELEASE') {
+      await prisma.$transaction(async (tx) => {
+        await tx.advocateBooking.update({
+          where: { id: otherPay.advocateBookingId },
+          data: { status: 'EXPIRED' }
+        });
+        await tx.payment.update({
+          where: { id: otherPay.id },
+          data: { status: 'EXPIRED', failureReason: 'USER_CANCELLED' }
+        });
+      });
+    }
+  }
+
   // 2. New Booking Checkout
-  const holdMinutes = parseInt(process.env.ADVOCATE_BOOKING_HOLD_MINUTES || '10', 10);
+  const holdMinutes = getAdvocateBookingHoldMinutes();
   const holdExpiresAt = new Date(Date.now() + holdMinutes * 60 * 1000);
 
   // Execute in transaction with row lock on Advocate to serialize concurrent checkouts
@@ -385,11 +595,11 @@ export const createAdvocateBookingCheckout = async ({ userId, advocateId, mode, 
           });
         }
 
-        // Check user conflict across all advocates
-        await checkUserSlotConflict(userId, slotStart, slotEnd, tx);
+        // Check user conflict across all advocates (ignoring user's own holds since they are being replaced/released)
+        await checkUserSlotConflict(userId, slotStart, slotEnd, tx, null, true);
 
-        // Check advocate slot availability
-        const slotFree = await isSlotFree(advocateId, slotStart, slotEnd, tx);
+        // Check advocate slot availability (excluding this user's own hold for this advocate if any)
+        const slotFree = await isSlotFree(advocateId, slotStart, slotEnd, tx, null, userId);
         if (!slotFree) {
           const err = new Error(`The advocate is not available for the full ${durationMinutes} minutes. Please choose a shorter duration or another time.`);
           err.statusCode = 409;

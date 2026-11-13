@@ -12364,7 +12364,59 @@ All financial amounts in database and API payloads are strictly stored and compu
 
 ---
 
-#### F. Advocate My Appointments (`GET /api/advocate/appointments`)
+#### F. Cancel Checkout & Release Slot HOLD (`POST /api/user/advocate-bookings/checkout/:checkoutId/cancel`)
+- **Headers:** `Authorization: Bearer {{user_token}}`
+- **Path Parameter:** `checkoutId` (UUID returned during checkout creation)
+- **Rate Limit:** Standard authenticated general rate limit
+- **Behavior:** Safely checks Razorpay order payments before releasing the hold. Ensures that in-flight UPI payments or already completed payments are never accidentally released.
+- **Responses (200 OK):**
+  - **Slot Released (no payment / failed payment):**
+    ```json
+    {
+      "success": true,
+      "result": "RELEASED",
+      "message": "Slot released."
+    }
+    ```
+  - **Payment In-Flight (UPI pending confirmation):**
+    ```json
+    {
+      "success": true,
+      "result": "PAYMENT_PROCESSING",
+      "message": "Your payment is being confirmed. Please don't pay again."
+    }
+    ```
+  - **Payment Already Captured / Authorized:**
+    ```json
+    {
+      "success": true,
+      "result": "PAID",
+      "message": "Payment received. Your booking is confirmed.",
+      "bookingId": "VLB-2026NOV123456"
+    }
+    ```
+  - **Razorpay Error or Timeout (Hold kept for safety):**
+    ```json
+    {
+      "success": true,
+      "result": "HOLD_KEPT",
+      "message": "We couldn't confirm the payment status right now. The slot will be released automatically in a few minutes."
+    }
+    ```
+  - **Already Closed / Expired:**
+    ```json
+    {
+      "success": true,
+      "result": "ALREADY_CLOSED",
+      "status": "EXPIRED"
+    }
+    ```
+- **Error Responses:**
+  - `404 Not Found`: If checkout does not exist or belongs to another user (`{ "success": false, "message": "Checkout not found." }`).
+
+---
+
+#### G. Advocate My Appointments (`GET /api/advocate/appointments`)
 - **Headers:** `Authorization: Bearer {{advocate_token}}`
 - **Query Params:** `?filter=UPCOMING&page=1&limit=10`
 - **Response (200 OK):**
@@ -12416,7 +12468,7 @@ All financial amounts in database and API payloads are strictly stored and compu
 
 ---
 
-#### G. Mark Appointment Complete (`PATCH /api/advocate/appointments/:id/complete`)
+#### H. Mark Appointment Complete (`PATCH /api/advocate/appointments/:id/complete`)
 - **Headers:** `Authorization: Bearer {{advocate_token}}`
 - **Response (200 OK):**
 ```json
@@ -12434,7 +12486,7 @@ All financial amounts in database and API payloads are strictly stored and compu
 
 ---
 
-#### H. Admin Advocate Bookings List (`GET /api/admin/advocate-bookings`)
+#### I. Admin Advocate Bookings List (`GET /api/admin/advocate-bookings`)
 - **Headers:** `Authorization: Bearer {{admin_token}}` (requires `advocate_bookings:view`)
 - **Query Params:** `?page=1&limit=10&search=VLB-2026`
 - **Response (200 OK):**
@@ -12575,6 +12627,66 @@ Use this step-by-step Postman flow to verify +15 min extensions, full-interval l
 1. Send `POST {{BACKEND_URL}}/api/payments/admin/refund` with `{ "paymentId": "<payment_id>", "reason": "Advocate unavailable" }`.
 2. Verify payment status updates to `REFUNDED` and booking status updates to `REFUNDED`.
 3. Verify the appointment now appears under `?filter=REFUNDED` in advocate appointments and `statusGroup: "CANCELLED"` in user My Bookings.
+
+---
+
+### 9. Safe Hold Release & "Payment Popup Closed" Workflow
+
+#### 1. Background & The UPI Race Condition Guard
+When a user begins booking an advocate, a temporary `HOLD` is placed on the slot for 10 minutes (`ADVOCATE_BOOKING_HOLD_MINUTES`) to prevent double-booking. When users close or dismiss the Razorpay modal on the client side:
+- **Closing the popup does NOT mean no payment occurred.** For UPI or net banking transactions, the payment may already be authorized on the user's mobile app and captured seconds later.
+- Releasing the slot blindly without querying Razorpay could result in User B booking the same slot, causing a race condition and duplicate booking.
+- Therefore, the cancel API (`POST /api/user/advocate-bookings/checkout/:checkoutId/cancel`) queries Razorpay via `orders.fetchPayments(orderId)` before releasing any slot.
+
+#### 2. The 5 Cancel Result States
+1. **`RELEASED`**: Razorpay confirms no payment attempts exist, or all attempts failed. Slot is immediately freed by updating booking and payment to `EXPIRED` (`failureReason: 'USER_CANCELLED'`).
+2. **`PAYMENT_PROCESSING`**: Razorpay reports a payment attempt in `created` status (in-flight UPI). Hold is preserved to prevent double booking.
+3. **`PAID`**: Razorpay reports payment as `captured` or `authorized`. Payment is synced, booking confirmed, and assigned a `bookingId`.
+4. **`HOLD_KEPT`**: Razorpay request timed out (5s limit) or errored. The hold is safely kept and will expire naturally via lazy check or cron.
+5. **`ALREADY_CLOSED`**: The checkout or booking was already closed (`EXPIRED` or `FAILED`). Idempotent response.
+
+#### 3. Own-Hold Rules (Quote, Checkout, Busy Slots)
+- **Same Slot & Same Configuration:** If the same user retries checkout for the same advocate, start time, mode, and duration, the existing Razorpay order and HOLD are reused.
+- **Starting a New Checkout for Another Slot:** Any other active HOLDs for this user across any advocate are automatically checked with Razorpay:
+  - If paid or in-flight $\rightarrow$ aborts with `409 Conflict` (`PAYMENT_PROCESSING`).
+  - If no payments or failed $\rightarrow$ auto-released (`EXPIRED`).
+- **Conflict Checks (`checkUserSlotConflict` & `isSlotFree`):** The user's own active replaceable holds are excluded from triggering `USER_SLOT_CONFLICT` or `SLOT_TAKEN` during quote and checkout.
+- **Busy Slots (`GET /api/advocates/:id/busy-slots?date=YYYY-MM-DD`):**
+  - **Anonymous requests:** Return `busy: [{ startAt, endAt }]` including all confirmed and held slots.
+  - **Authenticated requests (with User Bearer Token):** The user's own active HOLDs are separated into `myHolds: [{ startAt, endAt, checkoutId, expiresAt }]` and excluded from `busy`, enabling frontend to display the user's reserved slot distinctly.
+
+#### 4. Late Payment Safety Net (`syncPaymentFromRazorpay`)
+If a payment arrives for an appointment whose hold has already expired or been released:
+1. Re-check slot availability inside transaction with advocate row lock (`SELECT ... FOR UPDATE`).
+2. **If slot is still free:** Confirm booking (`status: 'CONFIRMED'`), assign `bookingId`, send confirmation emails, and log earnings.
+3. **If slot was taken by someone else:** Update booking to `REFUND_PENDING` with reason `SLOT_NO_LONGER_AVAILABLE`, update payment to `FAILED`, and trigger an immediate full auto-refund via Razorpay API.
+
+#### 5. Environment Variable Reference
+- `ADVOCATE_BOOKING_HOLD_MINUTES`: Duration (in minutes) of active slot reservation. Default is `10`. Valid integer range is `3` to `30`. Any out-of-range value logs a warning and defaults to `10`.
+
+#### 6. Postman Testing Guide (Razorpay Test Mode)
+1. **Scenario 1 (Cancel without paying $\rightarrow$ Instant Release):**
+   - Call checkout $\rightarrow$ note `checkoutId` and slot `startAt`.
+   - Call `GET /api/advocates/:id/busy-slots` $\rightarrow$ slot is marked in `busy`.
+   - Call `POST /api/user/advocate-bookings/checkout/:checkoutId/cancel` $\rightarrow$ returns `200` with `"result": "RELEASED"`.
+   - Call `GET /api/advocates/:id/busy-slots` $\rightarrow$ slot is immediately free!
+2. **Scenario 2 (Immediate Re-booking by Same User):**
+   - Book a slot, cancel it via the cancel API, then immediately call quote or checkout again for the same slot $\rightarrow$ succeeds without conflict.
+3. **Scenario 3 (Pay then Cancel $\rightarrow$ Booking Confirmed):**
+   - Call checkout $\rightarrow$ simulate or complete payment in Razorpay test mode.
+   - Call cancel API $\rightarrow$ returns `200` with `"result": "PAID"`, `"bookingId": "VLB-..."` and booking is confirmed.
+4. **Scenario 4 (Idempotent Cancel):**
+   - Call cancel API on an already released checkout $\rightarrow$ returns `"result": "ALREADY_CLOSED"`, `"status": "EXPIRED"`.
+5. **Scenario 5 (Unauthorized Cancel $\rightarrow$ 404):**
+   - Attempt to call cancel API with User B's token on User A's `checkoutId` $\rightarrow$ returns `404 Not Found`.
+6. **Scenario 6 (Auto-release of Hold A when Booking Slot B):**
+   - Create checkout for Slot A (10:00 AM).
+   - Create checkout for Slot B (11:00 AM).
+   - Slot A is automatically checked with Razorpay and released.
+7. **Scenario 7 (Late Payment Simulation):**
+   - Create checkout for Slot A $\rightarrow$ cancel it.
+   - Another user books Slot A $\rightarrow$ Slot A is taken.
+   - Webhook or sync runs for original payment $\rightarrow$ system auto-refunds original user with `SLOT_NO_LONGER_AVAILABLE`.
 
 ---
 

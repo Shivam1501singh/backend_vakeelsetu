@@ -23,7 +23,7 @@ router.post('/:advocateId/team-request', requireAuth, requireRole('ADVOCATE'), r
 
 // 2. Advocate Booking Public & User routes (Defined before /:id)
 router.get('/:advocateId/booking-options', optionalAuth, advocateBookingController.getBookingOptions);
-router.get('/:advocateId/busy-slots', advocateBookingController.getBusySlots);
+router.get('/:advocateId/busy-slots', optionalAuth, advocateBookingController.getBusySlots);
 router.post('/:advocateId/booking-quote', requireAuth, requireRole('USER'), advocateBookingController.getBookingQuote);
 
 // 3. Public / Optional Auth directory and profile routes

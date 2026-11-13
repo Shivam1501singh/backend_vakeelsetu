@@ -99,8 +99,16 @@ export const validateStart = (mode, startAtInput, customDurationMinutes = null) 
 /**
  * Checks if a time interval [startAt, endAt) is free for an advocate.
  * Expired HOLD records are lazily treated as free.
+ * If excludeUserIdHold is provided, active HOLDs belonging to this user are not treated as conflicting.
  */
-export const isSlotFree = async (advocateId, startAt, endAt, tx = prisma, excludeBookingId = null) => {
+export const isSlotFree = async (
+  advocateId,
+  startAt,
+  endAt,
+  tx = prisma,
+  excludeBookingId = null,
+  excludeUserIdHold = null
+) => {
   const now = new Date();
 
   const conflictingBooking = await tx.advocateBooking.findFirst({
@@ -113,7 +121,8 @@ export const isSlotFree = async (advocateId, startAt, endAt, tx = prisma, exclud
         { status: { in: ['CONFIRMED', 'COMPLETED', 'REFUND_PENDING'] } },
         {
           status: 'HOLD',
-          holdExpiresAt: { gt: now }
+          holdExpiresAt: { gt: now },
+          ...(excludeUserIdHold ? { userId: { not: excludeUserIdHold } } : {})
         }
       ]
     },
@@ -125,8 +134,16 @@ export const isSlotFree = async (advocateId, startAt, endAt, tx = prisma, exclud
 
 /**
  * Ensures that the user does not have any overlapping bookings (across ANY advocate).
+ * If ignoreUserHolds is true, the user's own active HOLDs are ignored (e.g. during reuse/replacement).
  */
-export const checkUserSlotConflict = async (userId, startAt, endAt, tx = prisma, excludeBookingId = null) => {
+export const checkUserSlotConflict = async (
+  userId,
+  startAt,
+  endAt,
+  tx = prisma,
+  excludeBookingId = null,
+  ignoreUserHolds = false
+) => {
   const now = new Date();
 
   const conflictingBooking = await tx.advocateBooking.findFirst({
@@ -137,10 +154,14 @@ export const checkUserSlotConflict = async (userId, startAt, endAt, tx = prisma,
       ...(excludeBookingId ? { id: { not: excludeBookingId } } : {}),
       OR: [
         { status: { in: ['CONFIRMED', 'COMPLETED', 'REFUND_PENDING'] } },
-        {
-          status: 'HOLD',
-          holdExpiresAt: { gt: now }
-        }
+        ...(ignoreUserHolds
+          ? []
+          : [
+              {
+                status: 'HOLD',
+                holdExpiresAt: { gt: now }
+              }
+            ])
       ]
     },
     select: { id: true, startAt: true, endAt: true }
@@ -188,9 +209,20 @@ const getUtcDateFromTz = (dateStr, timeStr, timeZone) => {
 
 /**
  * Retrieves the busy intervals for an advocate for a given date (YYYY-MM-DD) in BOOKING_TIMEZONE.
- * Returns strictly no user data.
+ * If userId is provided, user's own active HOLDs are separated into `myHolds`.
  */
-export const getAdvocateBusySlots = async (advocateId, dateString, tx = prisma) => {
+export const getAdvocateBusySlots = async (advocateId, dateString, txOrUserId = prisma, maybeUserId = null) => {
+  let tx = prisma;
+  let userId = null;
+  if (typeof txOrUserId === 'string') {
+    userId = txOrUserId;
+  } else if (txOrUserId && txOrUserId.advocateBooking) {
+    tx = txOrUserId;
+    userId = maybeUserId;
+  } else {
+    userId = maybeUserId;
+  }
+
   const tz = process.env.BOOKING_TIMEZONE || DEFAULT_BOOKING_TIMEZONE;
 
   // Validate YYYY-MM-DD
@@ -220,20 +252,49 @@ export const getAdvocateBusySlots = async (advocateId, dateString, tx = prisma) 
       ]
     },
     select: {
+      id: true,
+      userId: true,
       startAt: true,
-      endAt: true
+      endAt: true,
+      status: true,
+      holdExpiresAt: true,
+      payment: {
+        select: { id: true }
+      }
     },
     orderBy: {
       startAt: 'asc'
     }
   });
 
-  return {
+  const busy = [];
+  const myHolds = [];
+
+  for (const b of busyBookings) {
+    if (userId && b.status === 'HOLD' && b.userId === userId) {
+      myHolds.push({
+        startAt: b.startAt.toISOString(),
+        endAt: b.endAt.toISOString(),
+        checkoutId: b.payment?.id || null,
+        expiresAt: b.holdExpiresAt ? b.holdExpiresAt.toISOString() : null
+      });
+    } else {
+      busy.push({
+        startAt: b.startAt.toISOString(),
+        endAt: b.endAt.toISOString()
+      });
+    }
+  }
+
+  const result = {
     date: dateString,
     timezone: tz,
-    busy: busyBookings.map((b) => ({
-      startAt: b.startAt.toISOString(),
-      endAt: b.endAt.toISOString()
-    }))
+    busy
   };
+
+  if (userId) {
+    result.myHolds = myHolds;
+  }
+
+  return result;
 };
