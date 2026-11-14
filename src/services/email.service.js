@@ -10,7 +10,6 @@ import {
 import { profileUnderReviewTemplate } from '../templates/advocateAccountEmail.template.js';
 import {
   sendPushNotification,
-  sendOtpPushNotification,
   sendBookingConfirmedPushNotification,
   sendConsultancyPushNotification
 } from './pushNotification.service.js';
@@ -190,25 +189,8 @@ export const sendEmailOtp = async (to, otp, options = {}) => {
       throw new Error('Email sending failed. Please check credentials or try again.');
     }
     console.log(`[DEV EMAIL SERVICE] OTP to ${to}: ${otp}`);
-
-    // Trigger push notification on OTP email trigger even in dev
-    sendOtpPushNotification({
-      email: to,
-      otp,
-      purpose: options.purpose || 'REGISTRATION',
-      userId: options.userId || null
-    }).catch((pushErr) => console.error('[Email Service] OTP push notification trigger error:', pushErr.message));
-
     return true;
   }
-
-  // Trigger push notification alongside the OTP email
-  sendOtpPushNotification({
-    email: to,
-    otp,
-    purpose: options.purpose || 'REGISTRATION',
-    userId: options.userId || null
-  }).catch((pushErr) => console.error('[Email Service] OTP push notification trigger error:', pushErr.message));
 
   return await sendBrandedMail({
     to,
