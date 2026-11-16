@@ -317,6 +317,9 @@ model Advocate {
   earningLedgerEntries AdvocateEarningLedger[]
   payoutAccount        AdvocatePayoutAccount?
   withdrawals          AdvocateWithdrawal[]
+  testPassedAt         DateTime?
+  testInvites          AdvocateTestInvite[]
+  testAttempts         AdvocateTestAttempt[]
 }
 
 model AdvocatePasswordReset {
@@ -1067,4 +1070,59 @@ model NotificationLog {
   @@index([userId])
   @@index([createdAt])
 }
+
+model AdvocateTestQuestion {
+  id            String    @id @default(uuid())
+  question      String    @db.Text
+  options       Json      // ["A text","B text","C text","D text"]  exactly 4
+  correctOption Int       // 0..3
+  isActive      Boolean   @default(true)
+  deletedAt     DateTime? // soft delete (keeps attempt history)
+  createdBy     String?
+  updatedBy     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([isActive, deletedAt])
+}
+
+model AdvocateTestInvite {
+  id         String               @id @default(uuid())
+  advocateId String
+  tokenHash  String               @unique
+  reason     String               // INITIAL | RESCHEDULE
+  status     String               // SCHEDULED | SENT | USED | EXPIRED | CANCELLED
+  sendAt     DateTime             // when the email should go out
+  sentAt     DateTime?
+  expiresAt  DateTime?            // sentAt + 72h (set when sent)
+  createdAt  DateTime             @default(now())
+
+  advocate   Advocate             @relation(fields: [advocateId], references: [id], onDelete: Cascade)
+  attempt    AdvocateTestAttempt?
+
+  @@index([advocateId, createdAt])
+  @@index([status, sendAt])
+}
+
+model AdvocateTestAttempt {
+  id             String             @id @default(uuid())
+  advocateId     String
+  inviteId       String             @unique   // one attempt per link
+  questions      Json               // snapshot: [{ questionId, question, options:[...shuffled], correctIndex }] (server only)
+  answers        Json?              // [{ index, selected }]
+  startedAt      DateTime
+  deadlineAt     DateTime           // startedAt + 20 min
+  submittedAt    DateTime?
+  autoSubmitted  Boolean            @default(false)
+  totalQuestions Int
+  correctCount   Int?
+  wrongCount     Int?
+  passed         Boolean?
+
+  advocate       Advocate           @relation(fields: [advocateId], references: [id], onDelete: Cascade)
+  invite         AdvocateTestInvite @relation(fields: [inviteId], references: [id], onDelete: Cascade)
+
+  @@index([advocateId, startedAt])
+}
+
 

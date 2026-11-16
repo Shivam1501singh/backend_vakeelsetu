@@ -32,6 +32,13 @@ router.patch('/advocates/:advocateId/status', requireAuth, requirePermission('ad
 router.patch('/advocates/:advocateId/call-availability', requireAuth, requirePermission('advocates:update_status'), generalLimiter, adminController.updateAdvocateCallAvailability);
 router.patch('/advocates/:advocateId/cancel-deletion', requireAuth, requirePermission('advocates:delete'), generalLimiter, adminController.cancelAdvocateDeletion);
 router.delete('/advocates/:advocateId/permanent', requireAuth, requirePermission('advocates:delete'), generalLimiter, adminController.permanentDeleteAdvocate);
+router.get('/advocates/:advocateId/test-attempts', requireAuth, requirePermission('advocates:view', 'tests:manage'), generalLimiter, adminController.getAdvocateTestAttempts);
+
+// Advocate Qualification Test Question Bank (tests:manage)
+router.get('/test-questions', requireAuth, requirePermission('tests:manage'), generalLimiter, adminController.listTestQuestions);
+router.post('/test-questions', requireAuth, requirePermission('tests:manage'), generalLimiter, adminController.createTestQuestion);
+router.patch('/test-questions/:id', requireAuth, requirePermission('tests:manage'), generalLimiter, adminController.updateTestQuestion);
+router.delete('/test-questions/:id', requireAuth, requirePermission('tests:manage'), generalLimiter, adminController.deleteTestQuestion);
 
 // Advocate Withdrawals & Payouts Management
 router.get('/withdrawals', requireAuth, requirePermission('payouts:view'), generalLimiter, adminController.listAdminWithdrawals);

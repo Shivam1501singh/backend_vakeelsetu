@@ -59,6 +59,7 @@ import { getUserLikedAdvocates } from './controllers/advocateLike.controller.js'
 //satya
 import legalAiRoutes from './routes/legalAi.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
+import advocateTestRoutes from './routes/advocateTest.routes.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -111,6 +112,7 @@ app.use('/api/auth/advocate', advocateAuthRoutes);
 app.use('/api/auth', oauthRoutes); // mounts google auth callback routes
 app.use('/auth', oauthRoutes); // supports non-prefixed /auth routes for mobile clients
 app.use('/api/advocate/profile', advocateProfileRoutes);
+app.use('/api/advocate-test', advocateTestRoutes);
 app.use('/api/help', helpRouter);
 app.use('/api/admin/help', adminHelpRouter);
 app.use('/api/advocates', advocateRoutes);

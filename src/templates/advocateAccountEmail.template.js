@@ -2,6 +2,7 @@ import {
   escapeHtml,
   renderDetailRows,
   renderEmailLayout,
+  renderButton,
   COLORS
 } from './emailLayout.template.js';
 
@@ -172,4 +173,112 @@ export const profileUnderReviewTemplate = ({ advocate = {}, submittedAt = new Da
 
   return { subject, html, text, attachments };
 };
+
+/**
+ * Generates test link email for advocate qualification test (INITIAL or RESCHEDULE).
+ *
+ * @param {object} params
+ * @param {string} [params.name]
+ * @param {string} [params.link]
+ * @param {Date|string} [params.expiresAt]
+ * @param {'INITIAL'|'RESCHEDULE'} [params.reason='INITIAL']
+ * @returns {{ subject: string, html: string, text: string, attachments: Array }}
+ */
+export const advocateTestLinkTemplate = ({
+  name = '',
+  link = '',
+  expiresAt = new Date(),
+  reason = 'INITIAL'
+} = {}) => {
+  const isReschedule = String(reason).toUpperCase() === 'RESCHEDULE';
+  const subject = isReschedule
+    ? 'Your VakeelSetu test has been rescheduled'
+    : 'Complete your VakeelSetu advocate test';
+
+  const preheader = '20 questions · 20 minutes · pass with 15 correct';
+  const fullName = (name || '').trim();
+  const dateStr = formatSubmittedDateIst(expiresAt);
+  const timeStr = formatSubmittedTimeIst(expiresAt);
+
+  const introMessage = isReschedule
+    ? 'Your advocate qualification test has been rescheduled. Please complete the test using the link below to proceed with your verification on VakeelSetu.'
+    : 'Thank you for submitting your profile for verification on VakeelSetu. Before your profile can be approved, you are required to complete a qualification test.';
+
+  const greetingHtml = fullName
+    ? `<p style="margin:10px 0 0;font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:22px;color:${COLORS.textMuted};">Dear <strong style="color:${COLORS.textMain};">${escapeHtml(fullName)}</strong>,<br/>${escapeHtml(introMessage)}</p>`
+    : `<p style="margin:10px 0 0;font-family:'Segoe UI',Arial,sans-serif;font-size:14px;line-height:22px;color:${COLORS.textMuted};">${escapeHtml(introMessage)}</p>`;
+
+  // Rules Box
+  const rulesBoxHtml = `<!-- rules box -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:20px;border-radius:12px;background:${COLORS.cardBg};border:1px solid ${COLORS.cardBorder};">
+  <tr>
+    <td style="padding:16px 20px;font-family:'Segoe UI',Arial,sans-serif;">
+      <div style="font-size:11px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:${COLORS.primary};">Test Rules</div>
+      <div style="margin-top:8px;font-size:15px;font-weight:700;color:${COLORS.textMain};">20 questions &middot; 20 minutes &middot; pass with 15 correct</div>
+      <p style="margin:8px 0 0;font-size:13px;line-height:20px;color:${COLORS.textMuted};">
+        When opening the link, you will be asked to log in with your <strong>Bar Council ID</strong> and <strong>registered phone number</strong>.
+      </p>
+    </td>
+  </tr>
+</table>`;
+
+  const buttonHtml = renderButton({
+    label: 'Start Test',
+    url: link
+  });
+
+  const validityNoticeHtml = `
+    <p style="margin:24px 0 0;font-family:'Segoe UI',Arial,sans-serif;font-size:13px;line-height:20px;text-align:center;color:${COLORS.textMuted};">
+      This link is valid until <strong>${escapeHtml(dateStr)} ${escapeHtml(timeStr)}</strong> (72 hours).
+    </p>
+  `;
+
+  const bodyHtml = `
+    <!-- header badge -->
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+      <td bgcolor="${COLORS.pillAmberBg}" style="padding:5px 12px;border-radius:20px;background:${COLORS.pillAmberBg};font-family:'Segoe UI',Arial,sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:${COLORS.pillAmberText};">&#9997;&nbsp; Qualification Test</td>
+    </tr></table>
+
+    <h1 style="margin:14px 0 0;font-family:'Segoe UI',Arial,sans-serif;font-size:22px;line-height:29px;font-weight:800;color:${COLORS.textMain};">Advocate Qualification Test</h1>
+
+    ${greetingHtml}
+
+    ${rulesBoxHtml}
+
+    ${buttonHtml}
+
+    ${validityNoticeHtml}
+
+    <p style="margin:20px 0 0;font-family:'Segoe UI',Arial,sans-serif;font-size:12.5px;line-height:19px;color:${COLORS.textMuted};">
+      Please ensure you have an uninterrupted internet connection for 20 minutes before starting. Once started, the timer cannot be paused.
+    </p>
+  `;
+
+  const { html, attachments } = renderEmailLayout({
+    title: subject,
+    preheader,
+    bodyHtml,
+    showSupport: true,
+    tagline: 'Advocate Partner'
+  });
+
+  const greetingText = fullName ? `Dear ${fullName},\n\n` : '';
+  const text = [
+    subject,
+    '',
+    `${greetingText}${introMessage}`,
+    '',
+    'Test Rules: 20 questions · 20 minutes · pass with 15 correct',
+    'Log in with your Bar Council ID and registered phone number.',
+    '',
+    `Start your test here: ${link}`,
+    '',
+    `This link is valid until ${dateStr} ${timeStr} (72 hours).`,
+    '',
+    'Please ensure you have an uninterrupted internet connection before starting.'
+  ].join('\n');
+
+  return { subject, html, text, attachments };
+};
+
 

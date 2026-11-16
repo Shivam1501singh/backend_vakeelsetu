@@ -14427,3 +14427,360 @@ node scripts/warm-pincode-cache.js --apply --limit=500
    - Repeat `GET /api/advocates?pincode=201301`.
    - Verify in response that `location.source === "CACHE"` and server logs show `source=CACHE` with duration $< 5$ms.
 
+---
+
+## 39. Advocate Qualification Test — Postman Guide
+
+### 1. Business Rules & Architecture Overview
+1. **When Test Link Is Sent:**
+   - When an advocate submits their profile for approval via `POST /api/advocate/profile/submit-for-approval` (first time or re-submission after rejection) and has not yet passed the test (`testPassedAt` is null), a qualification test link is emailed.
+   - The submit response returns a `test` object instructing the frontend to show the verification popup: *"Your profile has been submitted for approval. Before that, you need to complete a test. The link has been sent to your email."*
+2. **Validity:** The test link is valid for **72 hours** from dispatch.
+3. **Login / Verification:** The public link page requires **Bar Council ID + registered phone number**.
+   - Input normalization: trimmed, case-insensitive Bar Council ID, last 10 digits for phone.
+   - Token SHA-256 hash lookup protects against credential enumeration.
+4. **The Test:**
+   - **20 questions** selected randomly from active, non-deleted question bank items.
+   - Question sequence **and option sequences (A..D)** are shuffled per attempt and permanently stored in snapshot format.
+   - **20 minutes total**, enforced server-side.
+   - Correct answers are **never** returned to the client.
+5. **Result & Scoring:**
+   - $\ge 15$ correct: Test passed. Sets `advocate.testPassedAt = now`.
+   - $< 15$ correct: Test failed. Advocate receives a *"Request reschedule"* button.
+   - Unanswered questions strictly count as wrong.
+6. **Reschedule:**
+   - Advocate clicks "Request reschedule" after failure or upon visiting an expired link.
+   - Page displays *"Your test will be rescheduled within 2 hours."*
+   - A new link is automatically dispatched by the background cron **1 hour later** (`sendAt = now + 60 min`).
+   - Unlimited test attempts allowed until passed.
+7. **Passing Exemption:** Once `testPassedAt` is set, an advocate never has to test again (even after profile updates or admin rejection and resubmission).
+8. **Admin Discretion:** Admin sees attempt history and correct/wrong scores on advocate profiles. Admin approval is **never blocked** by test status.
+9. **Pre-deploy Advocates:** Advocates approved or already pending before this deployment are marked with `test.status: "NOT_REQUIRED"`.
+
+---
+
+### 2. Flow Diagram
+```
+                     Advocate Profile Submission (submitForApproval)
+                                         |
+                       +-----------------+-----------------+
+                       |                                   |
+              testPassedAt set?                  testPassedAt is null
+                       |                                   |
+               test: { required: false }           Active SENT link exists?
+                                                     |              |
+                                                    Yes             No
+                                                     |              |
+                                             test: { link... }   SCHEDULED invite exists?
+                                                                   |           |
+                                                                  Yes          No
+                                                                   |           |
+                                                         test: { sched... }  Create INITIAL invite
+                                                                               |
+                                                                       Send email (8s timeout)
+                                                                       Success -> SENT (72h expiry)
+                                                                       Failure -> SCHEDULED (Cron retries)
+```
+
+---
+
+### 3. Environment Variables
+Add to `.env`:
+```env
+# Advocate Qualification Test
+FRONTEND_ADVOCATE_TEST_PATH="/advocate-test"
+ADVOCATE_TEST_QUESTION_COUNT=20
+ADVOCATE_TEST_PASS_MARK=15
+ADVOCATE_TEST_DURATION_MINUTES=20
+ADVOCATE_TEST_LINK_VALID_HOURS=72
+ADVOCATE_TEST_RESCHEDULE_DELAY_MINUTES=60
+```
+
+---
+
+### 4. Background Cron Reconciliation
+The 15-minute reconciliation cron (`GET /api/internal/cron/payments-reconcile`) executes 3 automated steps:
+1. **Send Due Invites:** Finds invites with `status = "SCHEDULED" AND sendAt <= now`. Generates fresh 32-byte base64url token, computes SHA-256 hash, dispatches email, and transitions to `status = "SENT", sentAt = now, expiresAt = now + 72h`.
+2. **Expire Stale Links:** Finds invites with `status = "SENT" AND expiresAt < now AND attempt is null` and sets `status = "EXPIRED"`.
+3. **Auto-finalize Abandoned Attempts:** Finds attempts with `submittedAt is null AND deadlineAt < (now - 60s grace)`. Automatically scores with saved answers, marks `autoSubmitted = true`, and finalizes the attempt.
+
+---
+
+### 5. API Endpoint Specifications
+
+#### 5.1 Advocate Test Login
+`POST /api/advocate-test/login`
+- **Rate Limit:** 5 failed attempts per 15 min per token + IP ($\rightarrow$ HTTP 429).
+- **Request:**
+```json
+{
+  "token": "4f9d2c8e1a7b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d",
+  "barCouncilId": "D/1234/2020",
+  "phone": "9876543210"
+}
+```
+- **Responses:**
+  - **Ready to start (HTTP 200):**
+    ```json
+    {
+      "success": true,
+      "status": "READY",
+      "testSession": "eyJhbGciOi...",
+      "rules": {
+        "questions": 20,
+        "minutes": 20,
+        "passMark": 15
+      }
+    }
+    ```
+  - **Attempt in progress (HTTP 200):**
+    ```json
+    {
+      "success": true,
+      "status": "IN_PROGRESS",
+      "testSession": "eyJhbGciOi...",
+      "attemptId": "c3e98b0a-..."
+    }
+    ```
+  - **Attempt completed (HTTP 200):**
+    ```json
+    {
+      "success": true,
+      "status": "COMPLETED",
+      "result": { "correct": 13, "wrong": 7, "total": 20, "passed": false },
+      "canRequestReschedule": true
+    }
+    ```
+  - **Already Passed (HTTP 200):**
+    ```json
+    {
+      "success": true,
+      "status": "ALREADY_PASSED",
+      "passedAt": "2026-11-16T15:00:00.000Z"
+    }
+    ```
+  - **Link Expired (HTTP 410):**
+    ```json
+    {
+      "success": false,
+      "code": "LINK_EXPIRED",
+      "message": "This test link has expired. Please request a reschedule.",
+      "canRequestReschedule": true
+    }
+    ```
+
+#### 5.2 Start Test
+`POST /api/advocate-test/start`
+- **Headers:** `Authorization: Bearer <testSession>`
+- **Response (HTTP 200):**
+```json
+{
+  "success": true,
+  "attemptId": "c3e98b0a-6d3f-4e9b-b6c8-123456789abc",
+  "serverNow": "2026-11-16T15:30:00.000Z",
+  "deadlineAt": "2026-11-16T15:50:00.000Z",
+  "questions": [
+    {
+      "index": 0,
+      "question": "Under which section of CrPC is anticipatory bail granted?",
+      "options": [
+        { "key": "A", "text": "Section 437" },
+        { "key": "B", "text": "Section 438" },
+        { "key": "C", "text": "Section 439" },
+        { "key": "D", "text": "Section 482" }
+      ]
+    }
+  ],
+  "savedAnswers": []
+}
+```
+
+#### 5.3 Autosave Answers
+`PUT /api/advocate-test/answers`
+- **Headers:** `Authorization: Bearer <testSession>`
+- **Request:**
+```json
+{
+  "answers": [
+    { "index": 0, "selected": "B" },
+    { "index": 1, "selected": null }
+  ]
+}
+```
+- **Response (HTTP 200):**
+```json
+{
+  "success": true,
+  "savedAt": "2026-11-16T15:35:10.000Z"
+}
+```
+
+#### 5.4 Submit Test
+`POST /api/advocate-test/submit`
+- **Headers:** `Authorization: Bearer <testSession>`
+- **Request:**
+```json
+{
+  "answers": [
+    { "index": 0, "selected": "B" }
+  ]
+}
+```
+- **Response (Passed - HTTP 200):**
+```json
+{
+  "success": true,
+  "correct": 16,
+  "wrong": 4,
+  "total": 20,
+  "passed": true,
+  "message": "You have passed the test.",
+  "canRequestReschedule": false
+}
+```
+- **Response (Failed - HTTP 200):**
+```json
+{
+  "success": true,
+  "correct": 13,
+  "wrong": 7,
+  "total": 20,
+  "passed": false,
+  "message": "Test completed.",
+  "canRequestReschedule": true
+}
+```
+
+#### 5.5 Request Reschedule
+`POST /api/advocate-test/request-reschedule`
+- **Authentication:** `Authorization: Bearer <testSession>` OR Body: `{ "token": "...", "barCouncilId": "...", "phone": "..." }`
+- **Response (HTTP 200):**
+```json
+{
+  "success": true,
+  "scheduled": true,
+  "message": "Your test will be rescheduled within 2 hours."
+}
+```
+
+#### 5.6 Admin Question Bank CRUD (`tests:manage`)
+- **List Questions:** `GET /api/admin/test-questions?status=active&search=bail&page=1&limit=20`
+  ```json
+  {
+    "success": true,
+    "data": [
+      {
+        "id": "q1",
+        "question": "Under which section of CrPC is anticipatory bail granted?",
+        "options": ["Section 437", "Section 438", "Section 439", "Section 482"],
+        "correctOption": 1,
+        "isActive": true
+      }
+    ],
+    "counts": { "active": 25, "inactive": 2 },
+    "minimumRequired": 20,
+    "pagination": { "page": 1, "limit": 20, "total": 27, "totalPages": 2 }
+  }
+  ```
+- **Create Question:** `POST /api/admin/test-questions`
+  ```json
+  {
+    "question": "What is the maximum term of imprisonment under Section 420 IPC?",
+    "options": ["3 years", "5 years", "7 years", "10 years"],
+    "correctOption": 2,
+    "isActive": true
+  }
+  ```
+- **Update Question:** `PATCH /api/admin/test-questions/:id`
+  ```json
+  {
+    "question": "Updated question text",
+    "isActive": false
+  }
+  ```
+- **Soft Delete Question:** `DELETE /api/admin/test-questions/:id`
+  ```json
+  {
+    "success": true,
+    "message": "Question deleted successfully.",
+    "warning": "Fewer than 20 active questions — tests can't start."
+  }
+  ```
+
+#### 5.7 Admin Advocate Test History
+`GET /api/admin/advocates/:advocateId/test-attempts`
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "att-uuid-1",
+      "inviteId": "inv-uuid-1",
+      "startedAt": "2026-11-16T15:30:00.000Z",
+      "deadlineAt": "2026-11-16T15:50:00.000Z",
+      "submittedAt": "2026-11-16T15:45:00.000Z",
+      "autoSubmitted": false,
+      "totalQuestions": 20,
+      "correctCount": 16,
+      "wrongCount": 4,
+      "passed": true
+    }
+  ]
+}
+```
+
+---
+
+### 6. Error Reference Table
+
+| Status Code | Code / Error | Meaning / Scenario |
+|---|---|---|
+| **401** | `INVALID_CREDENTIALS` | Token mismatch or phone/Bar Council ID does not match invite record. |
+| **410** | `LINK_EXPIRED` | Test invite token has expired (past 72 hours) and has not been attempted. Includes `canRequestReschedule: true`. |
+| **429** | `TOO_MANY_ATTEMPTS` | Exceeded 5 failed login attempts per 15 minutes per token + IP. |
+| **503** | `TEST_UNAVAILABLE` | Question bank has fewer than 20 active, non-deleted questions available. |
+| **409** | `ALREADY_PASSED` | Advocate has already passed test (`testPassedAt` set); cannot restart or reschedule. |
+| **400** | `ZodError / BAD_REQUEST` | Validation error (e.g. invalid question format, duplicate options). |
+| **403** | `FORBIDDEN` | Missing required RBAC permissions (`tests:manage`). |
+
+---
+
+### 7. Step-by-Step Postman Testing Flow
+
+1. **Admin Populates Question Bank:**
+   - Log in as Admin or Staff with `tests:manage` permission.
+   - Call `POST /api/admin/test-questions` $\ge 20$ times with diverse questions and 4 distinct options each.
+   - Verify `GET /api/admin/test-questions` shows `counts.active >= 20`.
+2. **Advocate Submits Profile for Approval:**
+   - Log in as an advocate with a complete profile.
+   - Call `POST /api/advocate/profile/submit-for-approval`.
+   - Verify response has `success: true` and includes `test.required: true`, `test.emailSentTo: "ad***@gmail.com"`, and `test.expiresAt`.
+   - Inspect email inbox / SMTP stub to retrieve the generated test link: `http://localhost:5173/advocate-test?token=...`.
+3. **Test Login with Wrong Phone / Credentials:**
+   - Call `POST /api/advocate-test/login` with the plain token and an incorrect phone number.
+   - Verify HTTP `401 Unauthorized` with `{ code: "INVALID_CREDENTIALS", message: "The details don't match this test link." }`.
+4. **Test Login & Start Examination:**
+   - Call `POST /api/advocate-test/login` with correct Bar Council ID and registered phone.
+   - Verify HTTP `200 OK` with `status: "READY"` and receive `testSession` JWT.
+   - Call `POST /api/advocate-test/start` using `Authorization: Bearer <testSession>`.
+   - Verify 20 questions are returned with options `A, B, C, D` and that **no correct answers** are leaked.
+5. **Autosave & Submit with Pass Result:**
+   - Call `PUT /api/advocate-test/answers` with partial answers.
+   - Call `POST /api/advocate-test/submit` with 16 or more correct selections.
+   - Verify HTTP `200 OK` with `passed: true`, `correct: 16`, `wrong: 4`.
+6. **Failed Attempt & Reschedule Request:**
+   - Submit an attempt with $< 15$ correct selections.
+   - Verify response returns `passed: false` and `canRequestReschedule: true`.
+   - Call `POST /api/advocate-test/request-reschedule` $\rightarrow$ returns `{ success: true, message: "Your test will be rescheduled within 2 hours." }`.
+   - Trigger the reconcile cron (`GET /api/internal/cron/payments-reconcile`) after `sendAt` $\rightarrow$ verifies new rescheduled link is emailed.
+7. **Expired Link Reschedule:**
+   - Access an expired test link $\rightarrow$ receive HTTP `410 LINK_EXPIRED`.
+   - Call `POST /api/advocate-test/request-reschedule` with `{ token, barCouncilId, phone }`.
+   - Verify new invite is scheduled.
+8. **Admin Detail & Non-Blocking Approval Verification:**
+   - Call `GET /api/admin/advocates/:advocateId`.
+   - Verify `test` object reflects latest score, best score, and attempt counts.
+   - Call `PATCH /api/admin/advocates/:advocateId/approve`.
+   - Verify profile approval succeeds regardless of whether advocate passed or failed.
+
+

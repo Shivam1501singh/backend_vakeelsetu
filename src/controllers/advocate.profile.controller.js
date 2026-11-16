@@ -3,7 +3,16 @@ import { advocateProfileUpdateSchema } from '../validators/advocate.validator.js
 import { uploadBufferToCloudinary, deleteFromCloudinary } from '../services/cloudinary.service.js';
 import { computeEffectiveOnlineStatus } from '../utils/advocateStatus.js';
 import { formatPricingSummary } from '../services/advocateBooking/pricing.js';
-import { sendProfileUnderReviewEmail } from '../services/email.service.js';
+import {
+  sendProfileUnderReviewEmail,
+  maskEmail,
+  sendAdvocateTestLinkEmail
+} from '../services/email.service.js';
+import {
+  generateSecureToken,
+  hashToken,
+  getTestConfig
+} from '../services/advocateTest.service.js';
 
 /**
  * Approval-required fields for APPROVED advocates.
@@ -338,9 +347,108 @@ export const submitForApproval = async (req, res, next) => {
       console.error(`[Advocate Profile] Error sending under review email for ${advocateId}:`, emailErr.message);
     }
 
+    // Advocate Qualification Test workflow
+    let testInfo = { required: false };
+    if (advocate.testPassedAt) {
+      testInfo = { required: false, passed: true };
+    } else {
+      const now = new Date();
+      // Check for active link (status SENT and not expired, no attempt)
+      const activeInvite = await prisma.advocateTestInvite.findFirst({
+        where: {
+          advocateId,
+          status: 'SENT',
+          expiresAt: { gt: now },
+          attempt: null
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+
+      if (activeInvite) {
+        testInfo = {
+          required: true,
+          linkAlreadySent: true,
+          expiresAt: activeInvite.expiresAt
+        };
+      } else {
+        // Check for SCHEDULED invite
+        const scheduledInvite = await prisma.advocateTestInvite.findFirst({
+          where: {
+            advocateId,
+            status: 'SCHEDULED'
+          },
+          orderBy: { createdAt: 'desc' }
+        });
+
+        if (scheduledInvite) {
+          testInfo = {
+            required: true,
+            scheduled: true
+          };
+        } else {
+          // Create INITIAL invite
+          const config = getTestConfig();
+          const plainToken = generateSecureToken();
+          const tokenHash = hashToken(plainToken);
+          const expiresAt = new Date(now.getTime() + config.linkValidHours * 60 * 60 * 1000);
+
+          const newInvite = await prisma.advocateTestInvite.create({
+            data: {
+              advocateId,
+              tokenHash,
+              reason: 'INITIAL',
+              status: 'SCHEDULED',
+              sendAt: now
+            }
+          });
+
+          // Send email now (awaited, 8s timeout)
+          let emailSent = false;
+          try {
+            const emailResult = await sendAdvocateTestLinkEmail({
+              advocateId,
+              token: plainToken,
+              expiresAt,
+              reason: 'INITIAL'
+            });
+            emailSent = Boolean(emailResult?.success);
+          } catch (mailErr) {
+            console.error(`[Advocate Profile] Failed to send test link email for ${advocateId}:`, mailErr.message);
+          }
+
+          if (emailSent) {
+            await prisma.advocateTestInvite.update({
+              where: { id: newInvite.id },
+              data: {
+                status: 'SENT',
+                sentAt: now,
+                expiresAt
+              }
+            });
+            testInfo = {
+              required: true,
+              emailSentTo: maskEmail(advocate.email),
+              expiresAt,
+              message:
+                'Your profile has been submitted for approval. Before that, you need to complete a test. The link has been sent to your email.'
+            };
+          } else {
+            // Keep status SCHEDULED; cron will send with fresh token
+            testInfo = {
+              required: true,
+              scheduled: true,
+              message:
+                'Your profile has been submitted for approval. Your qualification test link will be emailed shortly.'
+            };
+          }
+        }
+      }
+    }
+
     return res.status(200).json({
       success: true,
-      message: 'Your profile has been submitted for admin approval'
+      message: 'Your profile has been submitted for admin approval',
+      test: testInfo
     });
   } catch (error) {
     next(error);

@@ -52,6 +52,9 @@ export const DEFAULT_PERMISSIONS = [
   { code: 'advocates:update_status', name: 'Update Advocate Status', module: 'ADVOCATES', description: 'Permission to block/activate advocates and toggle call availability' },
   { code: 'advocates:delete', name: 'Manage Advocate Deletion', module: 'ADVOCATES', description: 'Permission to cancel or execute permanent advocate deletions' },
 
+  // Advocate Qualification Tests
+  { code: 'tests:manage', name: 'Manage Advocate Tests', module: 'ADVOCATE_TESTS', description: 'Permission to manage advocate qualification tests and question bank' },
+
   // Feedback Management
   { code: 'feedback:view', name: 'View Feedback', module: 'FEEDBACK', description: 'Permission to view submitted user feedback' },
   { code: 'feedback:delete', name: 'Delete Feedback', module: 'FEEDBACK', description: 'Permission to delete feedback items' },

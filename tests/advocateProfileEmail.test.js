@@ -15,13 +15,19 @@ import * as advocateProfileController from '../src/controllers/advocate.profile.
 
 describe('Advocate Profile Under Review Email & Trigger Tests', () => {
   let originalPrismaAdvocate;
+  let originalPrismaTestInvite;
 
   beforeEach(() => {
     originalPrismaAdvocate = { ...prisma.advocate };
+    originalPrismaTestInvite = { ...prisma.advocateTestInvite };
+    prisma.advocateTestInvite.findFirst = async () => null;
+    prisma.advocateTestInvite.create = async ({ data }) => ({ id: 'inv-test-stub', ...data });
+    prisma.advocateTestInvite.update = async ({ data }) => ({ id: 'inv-test-stub', ...data });
   });
 
   afterEach(() => {
     prisma.advocate = originalPrismaAdvocate;
+    prisma.advocateTestInvite = originalPrismaTestInvite;
     setTransporter(null);
   });
 

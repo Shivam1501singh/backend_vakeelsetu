@@ -2,6 +2,7 @@ import prisma from '../lib/prisma.js';
 import { syncPaymentFromRazorpay } from '../services/payment.service.js';
 import { getRazorpayClient } from '../config/razorpay.js';
 import { sendAdvocateBookingConfirmationEmails, sendConsultancyConfirmationEmail } from '../services/email.service.js';
+import { processTestCronJobs } from '../services/advocateTest.service.js';
 
 /**
  * Validates the Vercel Cron Bearer secret
@@ -132,12 +133,26 @@ export const reconcilePaymentsCron = async (req, res) => {
       }
     }
 
+    // Process Advocate Qualification Test background jobs (send due invites, expire links, auto-submit)
+    let testCronResults = { invitesSent: 0, linksExpired: 0, attemptsAutoSubmitted: 0, errors: [] };
+    try {
+      testCronResults = await processTestCronJobs();
+      if (testCronResults.errors && testCronResults.errors.length > 0) {
+        errors.push(...testCronResults.errors);
+      }
+    } catch (testCronErr) {
+      errors.push({ task: 'advocate_test_cron', error: testCronErr.message });
+    }
+
     return res.status(200).json({
       success: true,
       reconciledCount,
       expiredCount,
       emailsRetriedCount,
       consultancyEmailsRetriedCount,
+      testInvitesSent: testCronResults.invitesSent,
+      testLinksExpired: testCronResults.linksExpired,
+      testAttemptsAutoSubmitted: testCronResults.attemptsAutoSubmitted,
       errors
     });
   } catch (error) {

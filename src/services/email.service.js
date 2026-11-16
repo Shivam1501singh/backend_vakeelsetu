@@ -7,7 +7,10 @@ import {
   newAppointmentAdvocateTemplate,
   consultancyBookedUserTemplate
 } from '../templates/bookingEmail.template.js';
-import { profileUnderReviewTemplate } from '../templates/advocateAccountEmail.template.js';
+import {
+  profileUnderReviewTemplate,
+  advocateTestLinkTemplate
+} from '../templates/advocateAccountEmail.template.js';
 import {
   sendPushNotification,
   sendBookingConfirmedPushNotification,
@@ -479,5 +482,90 @@ export const sendProfileUnderReviewEmail = async (advocateId) => {
     return { success: false, message: error.message };
   }
 };
+
+/**
+ * Resolves the frontend URL with path fallback for Advocate Qualification Test.
+ * @param {string} token
+ * @returns {string}
+ */
+export const getAdvocateTestLink = (token) => {
+  const clientBase = (process.env.FRONTEND_URL || process.env.WEB_CLIENT_URL || process.env.CLIENT_URL || 'http://localhost:5173').replace(/\/+$/, '');
+  const path = (process.env.FRONTEND_ADVOCATE_TEST_PATH || '/advocate-test').replace(/^\/?/, '/');
+  return `${clientBase}${path}?token=${encodeURIComponent(token)}`;
+};
+
+/**
+ * Sends Advocate Qualification Test Link Email (Initial or Reschedule).
+ *
+ * @param {object} params
+ * @param {string} params.advocateId
+ * @param {string} params.token Plain secret token (never logged)
+ * @param {Date|string} [params.expiresAt]
+ * @param {'INITIAL'|'RESCHEDULE'} [params.reason='INITIAL']
+ * @returns {Promise<{ success: boolean, message?: string }>}
+ */
+export const sendAdvocateTestLinkEmail = async ({
+  advocateId,
+  token,
+  expiresAt,
+  reason = 'INITIAL'
+}) => {
+  if (!advocateId || !token) {
+    return { success: false, message: 'advocateId and token are required' };
+  }
+
+  let advocateEmail = '';
+  try {
+    const advocate = await prisma.advocate.findUnique({
+      where: { id: advocateId }
+    });
+
+    if (!advocate) {
+      console.warn(`[Email Service] Advocate ${advocateId} not found.`);
+      return { success: false, message: 'Advocate not found' };
+    }
+
+    advocateEmail = (advocate.email || '').trim();
+    if (!advocateEmail) {
+      console.info(`[Email Service] Skipping advocate test email for ${advocateId}: no email on record.`);
+      return { success: true, message: 'No email on record' };
+    }
+
+    const link = getAdvocateTestLink(token);
+    const { subject, html, text, attachments } = advocateTestLinkTemplate({
+      name: advocate.fullName,
+      link,
+      expiresAt: expiresAt || new Date(Date.now() + 72 * 60 * 60 * 1000),
+      reason
+    });
+
+    const withTimeout = (promise, ms = 8000) => {
+      let timer;
+      const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Advocate test email timed out after ${ms}ms`)), ms);
+      });
+      return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+    };
+
+    await withTimeout(
+      sendBrandedMail({
+        to: advocateEmail,
+        subject,
+        html,
+        text,
+        attachments,
+        emailType: reason === 'RESCHEDULE' ? 'ADVOCATE_TEST_RESCHEDULE' : 'ADVOCATE_TEST_INITIAL'
+      }),
+      8000
+    );
+
+    console.log(`[Email Service] ADVOCATE_TEST_${reason} sent to ${maskEmail(advocateEmail)} for advocateId: ${advocateId}`);
+    return { success: true };
+  } catch (error) {
+    console.error(`[Email Service] ADVOCATE_TEST_${reason} failed for ${maskEmail(advocateEmail)} (advocateId: ${advocateId}):`, error.message);
+    return { success: false, message: error.message };
+  }
+};
+
 
 

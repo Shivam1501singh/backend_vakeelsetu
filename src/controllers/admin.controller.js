@@ -14,8 +14,11 @@ import {
   rejectProfileChangeSchema,
   adminMarkPaidWithdrawalSchema,
   adminRejectWithdrawalSchema,
-  adminWithdrawalListQuerySchema
+  adminWithdrawalListQuerySchema,
+  createTestQuestionSchema,
+  updateTestQuestionSchema
 } from '../validators/admin.validator.js';
+import { getTestConfig } from '../services/advocateTest.service.js';
 import * as advocateEarningsService from '../services/advocateEarnings.service.js';
 import { APPROVAL_FIELDS, FIELD_LABELS } from './advocate.profile.controller.js';
 import * as blogValidator from '../validators/blog.validator.js';
@@ -658,7 +661,16 @@ export const listPendingAdvocates = async (req, res, next) => {
   try {
     const advocates = await prisma.advocate.findMany({
       where: { approvalStatus: 'PENDING' },
-      orderBy: { submittedForApprovalAt: 'desc' }
+      orderBy: { submittedForApprovalAt: 'desc' },
+      include: {
+        testInvites: {
+          orderBy: { createdAt: 'desc' },
+          include: { attempt: true }
+        },
+        testAttempts: {
+          orderBy: { startedAt: 'desc' }
+        }
+      }
     });
 
     const data = advocates.map(adv => ({
@@ -696,7 +708,8 @@ export const listPendingAdvocates = async (req, res, next) => {
       callAvailability: adv.callAvailability ?? false,
       accountStatus: adv.status,
       submittedForApprovalAt: adv.submittedForApprovalAt,
-      createdAt: adv.createdAt
+      createdAt: adv.createdAt,
+      test: formatAdvocateTestSummary(adv)
     }));
 
     return res.status(200).json({
@@ -706,6 +719,99 @@ export const listPendingAdvocates = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+};
+
+/**
+ * Formats advocate qualification test metadata for admin responses.
+ *
+ * @param {object} advocate
+ * @returns {object|null}
+ */
+export const formatAdvocateTestSummary = (advocate) => {
+  if (!advocate) return null;
+
+  const testInvites = Array.isArray(advocate.testInvites) ? advocate.testInvites : [];
+  const testAttempts = Array.isArray(advocate.testAttempts) ? advocate.testAttempts : [];
+
+  // Pre-existing pending or approved advocates without any test activity
+  if (!advocate.testPassedAt && testInvites.length === 0 && testAttempts.length === 0) {
+    return {
+      status: 'NOT_REQUIRED',
+      attemptsCount: 0,
+      latest: null,
+      best: null,
+      passedAt: null,
+      linkExpiresAt: null
+    };
+  }
+
+  const attemptsCount = testAttempts.length;
+  let latest = null;
+  let best = null;
+
+  if (attemptsCount > 0) {
+    const sortedAttempts = [...testAttempts].sort(
+      (a, b) => new Date(b.startedAt || 0) - new Date(a.startedAt || 0)
+    );
+    const latestAttempt = sortedAttempts[0];
+
+    if (latestAttempt.submittedAt) {
+      latest = {
+        correct: latestAttempt.correctCount ?? 0,
+        wrong: latestAttempt.wrongCount ?? 0,
+        total: latestAttempt.totalQuestions,
+        passed: Boolean(latestAttempt.passed),
+        submittedAt: latestAttempt.submittedAt,
+        autoSubmitted: Boolean(latestAttempt.autoSubmitted)
+      };
+    }
+
+    const submittedAttempts = sortedAttempts.filter(
+      (a) => a.submittedAt !== null && a.correctCount !== null
+    );
+    if (submittedAttempts.length > 0) {
+      const bestAttempt = submittedAttempts.reduce((max, cur) =>
+        (cur.correctCount ?? 0) > (max.correctCount ?? 0) ? cur : max
+      );
+      best = {
+        correct: bestAttempt.correctCount ?? 0,
+        wrong: bestAttempt.wrongCount ?? 0,
+        total: bestAttempt.totalQuestions
+      };
+    }
+  }
+
+  const now = new Date();
+  let status = 'NOT_SENT';
+  const latestInvite = testInvites[0];
+
+  if (advocate.testPassedAt) {
+    status = 'PASSED';
+  } else if (latestInvite) {
+    if (latestInvite.status === 'SCHEDULED') {
+      status = latestInvite.reason === 'RESCHEDULE' ? 'RESCHEDULE_REQUESTED' : 'NOT_SENT';
+    } else if (latestInvite.attempt && !latestInvite.attempt.submittedAt) {
+      status = 'IN_PROGRESS';
+    } else if (latestInvite.attempt && latestInvite.attempt.submittedAt) {
+      status = latestInvite.attempt.passed ? 'PASSED' : 'FAILED';
+    } else if (
+      latestInvite.status === 'EXPIRED' ||
+      (latestInvite.status === 'SENT' && latestInvite.expiresAt && now > new Date(latestInvite.expiresAt))
+    ) {
+      status = 'LINK_EXPIRED';
+    } else if (latestInvite.status === 'SENT') {
+      status = 'LINK_SENT';
+    }
+  }
+
+  return {
+    status,
+    attemptsCount,
+    latest,
+    best,
+    passedAt: advocate.testPassedAt || null,
+    linkExpiresAt: latestInvite?.expiresAt || null
+  };
 };
 
 /**
@@ -741,6 +847,7 @@ export const formatAdvocateReviewData = (advocate) => {
   } : null;
 
   const pricing = formatPricingSummary(advocate);
+  const test = formatAdvocateTestSummary(advocate);
 
   return {
     ...safeAdvocate,
@@ -770,7 +877,8 @@ export const formatAdvocateReviewData = (advocate) => {
       longitude: officeLongitude,
       updatedAt: officeLocationUpdatedAt
     },
-    profileChange
+    profileChange,
+    test
   };
 };
 
@@ -803,7 +911,16 @@ export const listRejectedAdvocates = async (req, res, next) => {
         where,
         orderBy: { rejectedAt: 'desc' },
         skip,
-        take: limit
+        take: limit,
+        include: {
+          testInvites: {
+            orderBy: { createdAt: 'desc' },
+            include: { attempt: true }
+          },
+          testAttempts: {
+            orderBy: { startedAt: 'desc' }
+          }
+        }
       })
     ]);
 
@@ -844,7 +961,8 @@ export const listRejectedAdvocates = async (req, res, next) => {
       submittedForApprovalAt: adv.submittedForApprovalAt,
       accountStatus: adv.status,
       callAvailability: adv.callAvailability ?? false,
-      createdAt: adv.createdAt
+      createdAt: adv.createdAt,
+      test: formatAdvocateTestSummary(adv)
     }));
 
     return res.status(200).json({
@@ -875,6 +993,13 @@ export const getAdvocateReviewProfile = async (req, res, next) => {
       include: {
         _count: {
           select: { likes: true, reviews: true }
+        },
+        testInvites: {
+          orderBy: { createdAt: 'desc' },
+          include: { attempt: true }
+        },
+        testAttempts: {
+          orderBy: { startedAt: 'desc' }
         }
       }
     });
@@ -912,6 +1037,13 @@ export const updateAdvocateProfileByAdmin = async (req, res, next) => {
       include: {
         _count: {
           select: { likes: true, reviews: true }
+        },
+        testInvites: {
+          orderBy: { createdAt: 'desc' },
+          include: { attempt: true }
+        },
+        testAttempts: {
+          orderBy: { startedAt: 'desc' }
         }
       }
     });
@@ -1857,5 +1989,222 @@ export const getAdminAdvocateEarnings = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * List advocate qualification test questions (admin view, includes correctOption).
+ * GET /api/admin/test-questions?status=active|inactive|all&search=&page=&limit=
+ */
+export const listTestQuestions = async (req, res, next) => {
+  try {
+    const { status = 'all', search } = req.query;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const skip = (page - 1) * limit;
+
+    const where = { deletedAt: null };
+
+    if (status === 'active') {
+      where.isActive = true;
+    } else if (status === 'inactive') {
+      where.isActive = false;
+    }
+
+    if (search && search.trim()) {
+      where.question = { contains: search.trim(), mode: 'insensitive' };
+    }
+
+    const [total, questions, activeCount, inactiveCount] = await Promise.all([
+      prisma.advocateTestQuestion.count({ where }),
+      prisma.advocateTestQuestion.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit
+      }),
+      prisma.advocateTestQuestion.count({ where: { isActive: true, deletedAt: null } }),
+      prisma.advocateTestQuestion.count({ where: { isActive: false, deletedAt: null } })
+    ]);
+
+    const config = getTestConfig();
+
+    return res.status(200).json({
+      success: true,
+      data: questions,
+      counts: {
+        active: activeCount,
+        inactive: inactiveCount
+      },
+      minimumRequired: config.questionCount,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Create new test question for the question bank.
+ * POST /api/admin/test-questions
+ */
+export const createTestQuestion = async (req, res, next) => {
+  try {
+    const validated = createTestQuestionSchema.parse(req.body);
+
+    const question = await prisma.advocateTestQuestion.create({
+      data: {
+        question: validated.question,
+        options: validated.options,
+        correctOption: validated.correctOption,
+        isActive: validated.isActive !== undefined ? validated.isActive : true,
+        createdBy: req.user?.id || null
+      }
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: question
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Update test question in the question bank.
+ * PATCH /api/admin/test-questions/:id
+ */
+export const updateTestQuestion = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const validated = updateTestQuestionSchema.parse(req.body);
+
+    const existing = await prisma.advocateTestQuestion.findUnique({
+      where: { id }
+    });
+
+    if (!existing || existing.deletedAt) {
+      return res.status(404).json({
+        success: false,
+        message: 'Question not found.'
+      });
+    }
+
+    const dataToUpdate = {
+      ...validated,
+      updatedBy: req.user?.id || null
+    };
+
+    const updated = await prisma.advocateTestQuestion.update({
+      where: { id },
+      data: dataToUpdate
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: updated
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Soft delete question from the question bank.
+ * DELETE /api/admin/test-questions/:id
+ */
+export const deleteTestQuestion = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const existing = await prisma.advocateTestQuestion.findUnique({
+      where: { id }
+    });
+
+    if (!existing || existing.deletedAt) {
+      return res.status(404).json({
+        success: false,
+        message: 'Question not found.'
+      });
+    }
+
+    await prisma.advocateTestQuestion.update({
+      where: { id },
+      data: {
+        deletedAt: new Date(),
+        isActive: false,
+        updatedBy: req.user?.id || null
+      }
+    });
+
+    const config = getTestConfig();
+    const remainingActive = await prisma.advocateTestQuestion.count({
+      where: { isActive: true, deletedAt: null }
+    });
+
+    let warning;
+    if (remainingActive < config.questionCount) {
+      warning = `Fewer than ${config.questionCount} active questions — tests can't start.`;
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Question deleted successfully.',
+      ...(warning ? { warning } : {})
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * List advocate's qualification test attempts history.
+ * GET /api/admin/advocates/:advocateId/test-attempts
+ */
+export const getAdvocateTestAttempts = async (req, res, next) => {
+  try {
+    const { advocateId } = req.params;
+
+    const advocate = await prisma.advocate.findUnique({
+      where: { id: advocateId }
+    });
+
+    if (!advocate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Advocate not found.'
+      });
+    }
+
+    const attempts = await prisma.advocateTestAttempt.findMany({
+      where: { advocateId },
+      orderBy: { startedAt: 'desc' },
+      select: {
+        id: true,
+        inviteId: true,
+        startedAt: true,
+        deadlineAt: true,
+        submittedAt: true,
+        autoSubmitted: true,
+        totalQuestions: true,
+        correctCount: true,
+        wrongCount: true,
+        passed: true
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: attempts
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 
 
