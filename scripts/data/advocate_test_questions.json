@@ -1,0 +1,443 @@
+[
+  {
+    "question": "Fundamental Rights are contained in which Part of the Constitution of India?",
+    "options": [
+      "Part II",
+      "Part III",
+      "Part IV",
+      "Part V"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "Which Article of the Constitution of India guarantees the right to life and personal liberty?",
+    "options": [
+      "Article 14",
+      "Article 19",
+      "Article 21",
+      "Article 32"
+    ],
+    "correctOption": 2,
+    "isActive": true
+  },
+  {
+    "question": "Under which Article can a person directly approach the Supreme Court for enforcement of Fundamental Rights?",
+    "options": [
+      "Article 32",
+      "Article 226",
+      "Article 136",
+      "Article 21"
+    ],
+    "correctOption": 0,
+    "isActive": true
+  },
+  {
+    "question": "The writ jurisdiction of High Courts is provided under which Article?",
+    "options": [
+      "Article 32",
+      "Article 226",
+      "Article 227",
+      "Article 136"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "Directive Principles of State Policy are contained in which Part of the Constitution?",
+    "options": [
+      "Part III",
+      "Part IV",
+      "Part IVA",
+      "Part V"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "Fundamental Duties were added to the Constitution by which Amendment?",
+    "options": [
+      "42nd Amendment",
+      "44th Amendment",
+      "73rd Amendment",
+      "86th Amendment"
+    ],
+    "correctOption": 0,
+    "isActive": true
+  },
+  {
+    "question": "Equality before law and equal protection of laws is guaranteed under which Article?",
+    "options": [
+      "Article 14",
+      "Article 15",
+      "Article 16",
+      "Article 17"
+    ],
+    "correctOption": 0,
+    "isActive": true
+  },
+  {
+    "question": "Abolition of untouchability is provided under which Article?",
+    "options": [
+      "Article 15",
+      "Article 16",
+      "Article 17",
+      "Article 18"
+    ],
+    "correctOption": 2,
+    "isActive": true
+  },
+  {
+    "question": "The right to free and compulsory education for children aged 6 to 14 years is under which Article?",
+    "options": [
+      "Article 21A",
+      "Article 45",
+      "Article 51A",
+      "Article 24"
+    ],
+    "correctOption": 0,
+    "isActive": true
+  },
+  {
+    "question": "Special Leave Petitions to the Supreme Court are filed under which Article?",
+    "options": [
+      "Article 32",
+      "Article 136",
+      "Article 143",
+      "Article 226"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "The President may seek the advisory opinion of the Supreme Court under which Article?",
+    "options": [
+      "Article 143",
+      "Article 132",
+      "Article 137",
+      "Article 72"
+    ],
+    "correctOption": 0,
+    "isActive": true
+  },
+  {
+    "question": "Equal justice and free legal aid is a Directive Principle under which Article?",
+    "options": [
+      "Article 39A",
+      "Article 21",
+      "Article 22",
+      "Article 50"
+    ],
+    "correctOption": 0,
+    "isActive": true
+  },
+  {
+    "question": "The Bharatiya Nyaya Sanhita, 2023 replaced which law?",
+    "options": [
+      "Code of Criminal Procedure, 1973",
+      "Indian Penal Code, 1860",
+      "Indian Evidence Act, 1872",
+      "Code of Civil Procedure, 1908"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "The Bharatiya Nagarik Suraksha Sanhita, 2023 replaced which law?",
+    "options": [
+      "Indian Penal Code, 1860",
+      "Code of Criminal Procedure, 1973",
+      "Code of Civil Procedure, 1908",
+      "Indian Evidence Act, 1872"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "The Bharatiya Sakshya Adhiniyam, 2023 replaced which law?",
+    "options": [
+      "Indian Evidence Act, 1872",
+      "Code of Criminal Procedure, 1973",
+      "Indian Penal Code, 1860",
+      "Limitation Act, 1963"
+    ],
+    "correctOption": 0,
+    "isActive": true
+  },
+  {
+    "question": "The three new criminal laws (BNS, BNSS and BSA) came into force on which date?",
+    "options": [
+      "1 January 2024",
+      "1 April 2024",
+      "1 July 2024",
+      "15 August 2024"
+    ],
+    "correctOption": 2,
+    "isActive": true
+  },
+  {
+    "question": "Under the Indian Penal Code, punishment for murder is provided in which Section?",
+    "options": [
+      "Section 299",
+      "Section 300",
+      "Section 302",
+      "Section 304"
+    ],
+    "correctOption": 2,
+    "isActive": true
+  },
+  {
+    "question": "Under the Indian Penal Code, cheating and dishonestly inducing delivery of property is punishable under which Section?",
+    "options": [
+      "Section 406",
+      "Section 415",
+      "Section 420",
+      "Section 498A"
+    ],
+    "correctOption": 2,
+    "isActive": true
+  },
+  {
+    "question": "Under the Code of Criminal Procedure, 1973, anticipatory bail is provided in which Section?",
+    "options": [
+      "Section 437",
+      "Section 438",
+      "Section 439",
+      "Section 482"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "Inherent powers of the High Court under the Code of Criminal Procedure, 1973 are saved by which Section?",
+    "options": [
+      "Section 482",
+      "Section 438",
+      "Section 151",
+      "Section 397"
+    ],
+    "correctOption": 0,
+    "isActive": true
+  },
+  {
+    "question": "Inherent powers of the court under the Code of Civil Procedure, 1908 are saved by which Section?",
+    "options": [
+      "Section 151",
+      "Section 482",
+      "Section 9",
+      "Section 100"
+    ],
+    "correctOption": 0,
+    "isActive": true
+  },
+  {
+    "question": "Section 9 of the Code of Civil Procedure, 1908 deals with:",
+    "options": [
+      "Res judicata",
+      "Courts to try all civil suits unless barred",
+      "Res sub judice",
+      "Place of suing"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "The doctrine of res judicata is contained in which Section of the Code of Civil Procedure, 1908?",
+    "options": [
+      "Section 10",
+      "Section 11",
+      "Section 9",
+      "Section 151"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "The rule of res sub judice (stay of suit) is contained in which Section of the Code of Civil Procedure, 1908?",
+    "options": [
+      "Section 10",
+      "Section 11",
+      "Section 12",
+      "Section 13"
+    ],
+    "correctOption": 0,
+    "isActive": true
+  },
+  {
+    "question": "A second appeal to the High Court under the Code of Civil Procedure, 1908 lies under which Section?",
+    "options": [
+      "Section 96",
+      "Section 100",
+      "Section 104",
+      "Section 115"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "Condonation of delay on showing sufficient cause is provided in which Section of the Limitation Act, 1963?",
+    "options": [
+      "Section 3",
+      "Section 5",
+      "Section 14",
+      "Section 18"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "Under the Indian Contract Act, 1872, \"an agreement enforceable by law is a contract\" is defined in which Section?",
+    "options": [
+      "Section 2(e)",
+      "Section 2(h)",
+      "Section 10",
+      "Section 23"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "Section 10 of the Indian Contract Act, 1872 deals with:",
+    "options": [
+      "What agreements are contracts",
+      "Void agreements",
+      "Consideration",
+      "Free consent"
+    ],
+    "correctOption": 0,
+    "isActive": true
+  },
+  {
+    "question": "An agreement with a minor under Indian law is:",
+    "options": [
+      "Voidable at the option of the minor",
+      "Void ab initio",
+      "Valid",
+      "Valid if ratified on attaining majority"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "Dishonour of a cheque for insufficiency of funds is an offence under which Section of the Negotiable Instruments Act, 1881?",
+    "options": [
+      "Section 138",
+      "Section 139",
+      "Section 141",
+      "Section 143"
+    ],
+    "correctOption": 0,
+    "isActive": true
+  },
+  {
+    "question": "After a cheque is dishonoured, the payee must send a demand notice within how many days of receiving information from the bank?",
+    "options": [
+      "15 days",
+      "30 days",
+      "45 days",
+      "60 days"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "Divorce on grounds such as cruelty and desertion is provided in which Section of the Hindu Marriage Act, 1955?",
+    "options": [
+      "Section 9",
+      "Section 11",
+      "Section 13",
+      "Section 24"
+    ],
+    "correctOption": 2,
+    "isActive": true
+  },
+  {
+    "question": "Restitution of conjugal rights is provided in which Section of the Hindu Marriage Act, 1955?",
+    "options": [
+      "Section 9",
+      "Section 10",
+      "Section 13",
+      "Section 25"
+    ],
+    "correctOption": 0,
+    "isActive": true
+  },
+  {
+    "question": "Divorce by mutual consent is provided in which Section of the Hindu Marriage Act, 1955?",
+    "options": [
+      "Section 13A",
+      "Section 13B",
+      "Section 14",
+      "Section 9"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "The Protection of Women from Domestic Violence Act was enacted in which year?",
+    "options": [
+      "2000",
+      "2005",
+      "2012",
+      "2013"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "The Protection of Children from Sexual Offences (POCSO) Act was enacted in which year?",
+    "options": [
+      "2005",
+      "2012",
+      "2013",
+      "2019"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "Under the Right to Information Act, 2005, information should normally be provided within:",
+    "options": [
+      "15 days",
+      "30 days",
+      "45 days",
+      "60 days"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "The Consumer Protection Act currently in force in India is of which year?",
+    "options": [
+      "1986",
+      "2015",
+      "2019",
+      "2020"
+    ],
+    "correctOption": 2,
+    "isActive": true
+  },
+  {
+    "question": "Under the Consumer Protection Act, 2019 (as per the 2021 jurisdiction rules), the District Commission can hear complaints where the value of goods or services paid does not exceed:",
+    "options": [
+      "₹20 lakh",
+      "₹50 lakh",
+      "₹1 crore",
+      "₹2 crore"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  },
+  {
+    "question": "The Advocates Act, which governs the Bar Councils and enrolment of advocates in India, was enacted in which year?",
+    "options": [
+      "1950",
+      "1961",
+      "1973",
+      "1986"
+    ],
+    "correctOption": 1,
+    "isActive": true
+  }
+]
+

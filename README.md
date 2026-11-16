@@ -14748,8 +14748,8 @@ The 15-minute reconciliation cron (`GET /api/internal/cron/payments-reconcile`) 
 ### 7. Step-by-Step Postman Testing Flow
 
 1. **Admin Populates Question Bank:**
-   - Log in as Admin or Staff with `tests:manage` permission.
-   - Call `POST /api/admin/test-questions` $\ge 20$ times with diverse questions and 4 distinct options each.
+   - Seed the bank with `node scripts/seed-test-questions.js --dry-run`, then `--apply`.
+   - Alternatively, log in as Admin or Staff with `tests:manage` permission and call `POST /api/admin/test-questions` $\ge 20$ times with diverse questions and 4 distinct options each.
    - Verify `GET /api/admin/test-questions` shows `counts.active >= 20`.
 2. **Advocate Submits Profile for Approval:**
    - Log in as an advocate with a complete profile.
