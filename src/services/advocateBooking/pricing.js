@@ -56,8 +56,7 @@ export const calculatePricing = (advocate, mode, customDurationMinutes = null, s
   if (!advocate) return null;
 
   const gstPercent = parseInt(process.env.BOOKING_GST_PERCENT || '18', 10);
-  const platformFeeRupees = parseInt(process.env.BOOKING_PLATFORM_FEE || '25', 10);
-  const platformFeePaise = platformFeeRupees * 100;
+  const platformFeePercent = parseFloat(process.env.BOOKING_PLATFORM_FEE_PERCENT || '10');
   const slotMinutes = parseInt(process.env.ADVOCATE_BOOKING_SLOT_MINUTES || '15', 10);
 
   let durationMinutes = 0;
@@ -120,6 +119,8 @@ export const calculatePricing = (advocate, mode, customDurationMinutes = null, s
   }
 
   const gstPaise = Math.round((feePaise * gstPercent) / 100);
+  const platformFeePaise = Math.round((feePaise * platformFeePercent) / 100);
+  const platformFeeRupees = parseFloat((platformFeePaise / 100).toFixed(2));
   const totalPaise = feePaise + gstPaise + platformFeePaise;
 
   const maxPaymentRupees = parseInt(process.env.RAZORPAY_MAX_PAYMENT_AMOUNT_RUPEES || '500000', 10);
@@ -156,6 +157,7 @@ export const calculatePricing = (advocate, mode, customDurationMinutes = null, s
     gstPercent,
     gstPaise,
     platformFee: platformFeeRupees,
+    platformFeePercent,
     platformFeePaise,
     total: parseFloat((totalPaise / 100).toFixed(2)),
     totalPaise,

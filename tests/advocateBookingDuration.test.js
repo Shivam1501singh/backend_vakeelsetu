@@ -31,9 +31,9 @@ describe('Advocate Booking Duration Extension (+15 min steps)', () => {
     assert.equal(p15.fee, 510);
     assert.equal(p15.feePaise, 51000);
     assert.equal(p15.gstPaise, 9180); // 18% of 51000
-    assert.equal(p15.platformFeePaise, 2500); // flat ₹25
-    assert.equal(p15.totalPaise, 62680); // 51000 + 9180 + 2500
-    assert.equal(p15.total, 626.8);
+    assert.equal(p15.platformFeePaise, 5100); // 10% of 51000
+    assert.equal(p15.totalPaise, 65280); // 51000 + 9180 + 5100
+    assert.equal(p15.total, 652.8);
 
     // 30 min Voice Call
     const p30 = calculatePricing(mockAdvocate, 'VOICE_CALL', 30);
@@ -41,9 +41,9 @@ describe('Advocate Booking Duration Extension (+15 min steps)', () => {
     assert.equal(p30.fee, 1020); // 510 * 2
     assert.equal(p30.feePaise, 102000);
     assert.equal(p30.gstPaise, 18360); // 18% of 102000
-    assert.equal(p30.platformFeePaise, 2500);
-    assert.equal(p30.totalPaise, 122860);
-    assert.equal(p30.total, 1228.6);
+    assert.equal(p30.platformFeePaise, 10200); // 10% of 102000
+    assert.equal(p30.totalPaise, 130560);
+    assert.equal(p30.total, 1305.6);
 
     // 45 min Voice Call
     const p45 = calculatePricing(mockAdvocate, 'VOICE_CALL', 45);
@@ -51,9 +51,9 @@ describe('Advocate Booking Duration Extension (+15 min steps)', () => {
     assert.equal(p45.fee, 1530); // 510 * 3
     assert.equal(p45.feePaise, 153000);
     assert.equal(p45.gstPaise, 27540);
-    assert.equal(p45.platformFeePaise, 2500);
-    assert.equal(p45.totalPaise, 183040);
-    assert.equal(p45.total, 1830.4);
+    assert.equal(p45.platformFeePaise, 15300); // 10% of 153000
+    assert.equal(p45.totalPaise, 195840);
+    assert.equal(p45.total, 1958.4);
 
     // 60 min Video Call (@ ₹700 / 15 min)
     const p60Video = calculatePricing(mockAdvocate, 'VIDEO_CALL', 60);
@@ -61,20 +61,20 @@ describe('Advocate Booking Duration Extension (+15 min steps)', () => {
     assert.equal(p60Video.fee, 2800); // 700 * 4
     assert.equal(p60Video.feePaise, 280000);
     assert.equal(p60Video.gstPaise, 50400); // 18% of 280000
-    assert.equal(p60Video.platformFeePaise, 2500);
-    assert.equal(p60Video.totalPaise, 332900);
-    assert.equal(p60Video.total, 3329);
+    assert.equal(p60Video.platformFeePaise, 28000); // 10% of 280000
+    assert.equal(p60Video.totalPaise, 358400);
+    assert.equal(p60Video.total, 3584);
   });
 
-  // 2. Platform fee once per booking
-  it('should charge the platform fee (₹25 / 2500 paise) exactly once regardless of duration', () => {
+  // 2. Platform fee calculation
+  it('should charge the platform fee as 10% of advocate fee', () => {
     const p15 = calculatePricing(mockAdvocate, 'VOICE_CALL', 15);
     const p30 = calculatePricing(mockAdvocate, 'VOICE_CALL', 30);
     const p60 = calculatePricing(mockAdvocate, 'VOICE_CALL', 60);
 
-    assert.equal(p15.platformFeePaise, 2500);
-    assert.equal(p30.platformFeePaise, 2500);
-    assert.equal(p60.platformFeePaise, 2500);
+    assert.equal(p15.platformFeePaise, 5100);
+    assert.equal(p30.platformFeePaise, 10200);
+    assert.equal(p60.platformFeePaise, 20400);
   });
 
   // 3. In-Person fixed duration
@@ -363,7 +363,7 @@ describe('Advocate Booking Duration Extension (+15 min steps)', () => {
 
       assert.equal(legacyQuote.durationMinutes, 15);
       assert.equal(legacyQuote.breakdown.fee, 510);
-      assert.equal(legacyQuote.breakdown.total, 626.8);
+      assert.equal(legacyQuote.breakdown.total, 652.8);
       assert.equal(legacyQuote.breakdown.extendable, true);
       assert.equal(legacyQuote.breakdown.stepMinutes, 15);
     } finally {

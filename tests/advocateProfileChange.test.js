@@ -609,30 +609,32 @@ describe('Advocate Profile Change Approval Workflow (Stubbed Prisma & Cloudinary
       officeVisitDurationMinutes: 45
     };
 
-    // Voice 510: fee 510, GST 18% = 91.80 (9180 paise), Platform fee = ₹25 (2500 paise), Total = 626.80 (62680 paise)
+    // Voice 510: fee 510, GST 18% = 91.80 (9180 paise), Platform fee 10% = ₹51.00 (5100 paise), Total = 652.80 (65280 paise)
     const voice = calculatePricing(advocate, 'VOICE_CALL');
     assert.equal(voice.fee, 510);
     assert.equal(voice.feePaise, 51000);
     assert.equal(voice.gstPaise, 9180);
-    assert.equal(voice.platformFeePaise, 2500);
-    assert.equal(voice.totalPaise, 62680);
-    assert.equal(voice.total, 626.80);
+    assert.equal(voice.platformFeePaise, 5100);
+    assert.equal(voice.totalPaise, 65280);
+    assert.equal(voice.total, 652.80);
     assert.equal(voice.priceLabel, '₹510 / 15 min');
 
-    // Decimal rounding test: 33.33 -> feePaise 3333, GST 18% = round(3333 * 0.18) = 600, total = 3333 + 600 + 2500 = 6433
+    // Decimal rounding test: 33.33 -> feePaise 3333, GST 18% = round(3333 * 0.18) = 600, Platform fee 10% = round(333.3) = 333, total = 3333 + 600 + 333 = 4266
     const video = calculatePricing(advocate, 'VIDEO_CALL');
     assert.equal(video.fee, 33.33);
     assert.equal(video.feePaise, 3333);
     assert.equal(video.gstPaise, 600);
-    assert.equal(video.totalPaise, 6433);
+    assert.equal(video.platformFeePaise, 333);
+    assert.equal(video.totalPaise, 4266);
 
-    // Office visit: fee 1000, 45 min -> GST 180 (18000), total 1000 + 180 + 25 = 1205 (120500 paise)
+    // Office visit: fee 1000, 45 min -> GST 180 (18000), Platform fee 10% = 100 (10000), total 1000 + 180 + 100 = 1280 (128000 paise)
     const office = calculatePricing(advocate, 'IN_PERSON');
     assert.equal(office.fee, 1000);
     assert.equal(office.durationMinutes, 45);
     assert.equal(office.priceLabel, '₹1,000 / 45 min');
-    assert.equal(office.totalPaise, 120500);
-    assert.equal(office.total, 1205);
+    assert.equal(office.platformFeePaise, 10000);
+    assert.equal(office.totalPaise, 128000);
+    assert.equal(office.total, 1280);
 
     // Null modes are turned off
     const unoffered = calculatePricing({ voiceCallPricePer15Min: null, videoCallPricePer15Min: null, offlineVisitingFee: null }, 'VOICE_CALL');
