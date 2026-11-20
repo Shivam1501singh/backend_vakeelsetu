@@ -16,11 +16,6 @@ const PDF_ACT_MAPPINGS = [
     actSearchQuery: 'Companies Act, 2013'
   },
   {
-    pdfFileName: 'insolvency and bankruptcy code shechdules .pdf',
-    displayName: 'Insolvency and Bankruptcy Code Schedules',
-    actSearchQuery: 'Insolvency and Bankruptcy Code, 2016'
-  },
-  {
     pdfFileName: 'limited liability partnership act shechdules .pdf',
     displayName: 'Limited Liability Partnership Act Schedules',
     actSearchQuery: 'Limited Liability Partnership Act, 2008'

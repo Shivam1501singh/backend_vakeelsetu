@@ -257,6 +257,12 @@ export const sendAdvocateBookingConfirmationEmails = async (bookingId) => {
             payment: booking.payment
           });
 
+          // ⚡ Trigger push notification to user IMMEDIATELY (concurrently, don't block on SMTP)
+          sendBookingConfirmedPushNotification({
+            booking,
+            recipientType: 'USER'
+          }).catch((pushErr) => console.error(`[Email Service] User booking push error for ${bookingId}:`, pushErr.message));
+
           await sendBrandedMail({
             to: userEmail,
             subject,
@@ -265,12 +271,6 @@ export const sendAdvocateBookingConfirmationEmails = async (bookingId) => {
             attachments,
             emailType: 'BOOKING_CONFIRMED_USER'
           });
-
-          // Trigger push notification to user when booking confirmation email is sent
-          sendBookingConfirmedPushNotification({
-            booking,
-            recipientType: 'USER'
-          }).catch((pushErr) => console.error(`[Email Service] User booking push error for ${bookingId}:`, pushErr.message));
         } catch (err) {
           // On failure: reset timestamp back to null so cron can retry
           await prisma.advocateBooking.update({
@@ -299,6 +299,12 @@ export const sendAdvocateBookingConfirmationEmails = async (bookingId) => {
             booking
           });
 
+          // ⚡ Trigger push notification to advocate IMMEDIATELY (concurrently, don't block on SMTP)
+          sendBookingConfirmedPushNotification({
+            booking,
+            recipientType: 'ADVOCATE'
+          }).catch((pushErr) => console.error(`[Email Service] Advocate appointment push error for ${bookingId}:`, pushErr.message));
+
           await sendBrandedMail({
             to: advocateEmail,
             subject,
@@ -307,12 +313,6 @@ export const sendAdvocateBookingConfirmationEmails = async (bookingId) => {
             attachments,
             emailType: 'NEW_APPOINTMENT_ADVOCATE'
           });
-
-          // Trigger push notification to advocate when new appointment email is sent
-          sendBookingConfirmedPushNotification({
-            booking,
-            recipientType: 'ADVOCATE'
-          }).catch((pushErr) => console.error(`[Email Service] Advocate appointment push error for ${bookingId}:`, pushErr.message));
         } catch (err) {
           // On failure: reset timestamp back to null so cron can retry
           await prisma.advocateBooking.update({
@@ -389,6 +389,11 @@ export const sendConsultancyConfirmationEmail = async (consultancyRequestId) => 
         userName: consultancy.user?.fullName
       });
 
+      // ⚡ Trigger push notification to user IMMEDIATELY (concurrently, don't block on SMTP)
+      sendConsultancyPushNotification({
+        consultancy
+      }).catch((pushErr) => console.error(`[Email Service] Consultancy push error for ${consultancyRequestId}:`, pushErr.message));
+
       await sendBrandedMail({
         to: recipientEmail,
         subject,
@@ -397,11 +402,6 @@ export const sendConsultancyConfirmationEmail = async (consultancyRequestId) => 
         attachments,
         emailType: 'CONSULTANCY_BOOKED_USER'
       });
-
-      // Trigger push notification to user when consultancy confirmation email is sent
-      sendConsultancyPushNotification({
-        consultancy
-      }).catch((pushErr) => console.error(`[Email Service] Consultancy push error for ${consultancyRequestId}:`, pushErr.message));
 
       return { success: true };
     } catch (err) {

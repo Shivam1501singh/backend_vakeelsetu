@@ -163,12 +163,18 @@ export const sendPushNotification = async ({
         android: {
           priority: 'high',
           notification: {
-            sound: 'default',
             channelId: 'vakeelsetu_notifications',
+            priority: 'max',
+            sound: 'default',
+            defaultSound: true,
+            defaultVibrateTimings: true,
             clickAction: 'FLUTTER_NOTIFICATION_CLICK'
           }
         },
         apns: {
+          headers: {
+            'apns-priority': '10'
+          },
           payload: {
             aps: {
               sound: 'default',
@@ -210,8 +216,22 @@ export const sendPushNotification = async ({
           android: {
             priority: 'high',
             notification: {
+              channelId: 'vakeelsetu_notifications',
+              priority: 'max',
               sound: 'default',
-              channelId: 'vakeelsetu_notifications'
+              defaultSound: true,
+              defaultVibrateTimings: true
+            }
+          },
+          apns: {
+            headers: {
+              'apns-priority': '10'
+            },
+            payload: {
+              aps: {
+                sound: 'default',
+                badge: 1
+              }
             }
           }
         });
@@ -313,9 +333,11 @@ export const sendBookingConfirmedPushNotification = async ({ booking, recipientT
       title,
       body,
       data: {
+        screen: 'BOOKING_DETAILS',
         type: 'BOOKING_CONFIRMED',
-        bookingId: booking.id,
-        advocateId: booking.advocateId,
+        bookingId: String(booking.id || ''),
+        orderId: String(booking.bookingId || booking.id || ''),
+        advocateId: String(booking.advocateId || ''),
         advocateName
       },
       type: 'BOOKING_CONFIRMED_USER'
@@ -339,9 +361,11 @@ export const sendBookingConfirmedPushNotification = async ({ booking, recipientT
       title,
       body,
       data: {
+        screen: 'BOOKING_DETAILS',
         type: 'NEW_APPOINTMENT',
-        bookingId: booking.id,
-        userId: booking.userId || '',
+        bookingId: String(booking.id || ''),
+        orderId: String(booking.bookingId || booking.id || ''),
+        userId: String(booking.userId || ''),
         clientName
       },
       type: 'NEW_APPOINTMENT_ADVOCATE'
@@ -365,8 +389,10 @@ export const sendConsultancyPushNotification = async ({ consultancy }) => {
     title,
     body,
     data: {
+      screen: 'CONSULTANCY_DETAILS',
       type: 'CONSULTANCY_BOOKED',
-      consultancyId: consultancy.id
+      consultancyId: String(consultancy.id || ''),
+      orderId: String(consultancy.bookingId || consultancy.id || '')
     },
     type: 'CONSULTANCY_BOOKED_USER'
   });
