@@ -11,7 +11,7 @@ const PDF_ACT_MAPPINGS = [
     actSearchQuery: 'Central Goods and Services Tax Act, 2017'
   },
   {
-    pdfFileName: 'income tax act shechdules -compressed.pdf',
+    pdfFileName: 'income tax act shechdules .pdf',
     displayName: 'Income Tax Act Schedules',
     actSearchQuery: 'Income-tax Act'
   },
