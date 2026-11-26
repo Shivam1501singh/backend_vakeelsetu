@@ -106,7 +106,13 @@ app.use(
   '/uploads',
   express.static(path.resolve(process.cwd(), 'uploads'), {
     maxAge: '30d',
-    immutable: true
+    immutable: true,
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.avif')) {
+        res.setHeader('Content-Type', 'image/avif');
+      }
+      res.setHeader('Access-Control-Allow-Origin', '*');
+    }
   })
 );
 
