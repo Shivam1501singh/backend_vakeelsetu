@@ -3,6 +3,7 @@ import { getTeamMates } from './advocateTeam.service.js';
 import { computeEffectiveOnlineStatus } from '../utils/advocateStatus.js';
 import { isAdvocateBookable, getBookableModes, formatPricingSummary } from './advocateBooking/pricing.js';
 import { getPincodeLocation, PINCODE_COORDINATES } from './geocoding.service.js';
+import { getSmallVariantUrl } from './imageStorage.service.js';
 
 const TIER_PRIORITY = {
   SAME_PINCODE: 1,
@@ -415,6 +416,8 @@ export const listAdvocates = async ({
         ...cleanAdv
       } = adv;
       cleanAdv.officeAddress = adv.officeAddress || adv.completeAddress || null;
+      cleanAdv.smallPhotoUrl = getSmallVariantUrl(adv.profilePhotoUrl);
+      cleanAdv.thumbnailUrl = getSmallVariantUrl(adv.profilePhotoUrl);
       cleanAdv.likeCount = _count?.likes ?? 0;
       cleanAdv.isSaved = savedLawyerIds.has(adv.id);
       cleanAdv.isLiked = likedAdvocateIds.has(adv.id);
@@ -493,7 +496,9 @@ export const listAdvocates = async ({
       } = adv;
       cleanAdv.officeAddress = adv.officeAddress || adv.completeAddress || null;
       cleanAdv.distance = adv.distance !== Infinity ? parseFloat(adv.distance.toFixed(2)) : null;
-      cleanAdv.likeCount = _count?.likes ?? 0;
+      cleanAdv.smallPhotoUrl = getSmallVariantUrl(adv.profilePhotoUrl);
+    cleanAdv.thumbnailUrl = getSmallVariantUrl(adv.profilePhotoUrl);
+    cleanAdv.likeCount = _count?.likes ?? 0;
       cleanAdv.isSaved = savedLawyerIds.has(adv.id);
       cleanAdv.isLiked = likedAdvocateIds.has(adv.id);
       cleanAdv.isOnline = computeEffectiveOnlineStatus(adv.isOnline, adv.lastSeenAt);
@@ -563,6 +568,8 @@ export const listAdvocates = async ({
     } else {
       cleanAdv.distance = null;
     }
+    cleanAdv.smallPhotoUrl = getSmallVariantUrl(adv.profilePhotoUrl);
+    cleanAdv.thumbnailUrl = getSmallVariantUrl(adv.profilePhotoUrl);
     cleanAdv.likeCount = _count?.likes ?? 0;
     cleanAdv.isSaved = savedLawyerIds.has(adv.id);
     cleanAdv.isLiked = likedAdvocateIds.has(adv.id);
@@ -643,6 +650,8 @@ export const getAdvocateDetailsPublic = async (id, currentUserId) => {
     barCouncilId: advocate.barCouncilId,
     profileImage: advocate.profilePhotoUrl,
     profilePhotoUrl: advocate.profilePhotoUrl,
+    smallPhotoUrl: getSmallVariantUrl(advocate.profilePhotoUrl),
+    thumbnailUrl: getSmallVariantUrl(advocate.profilePhotoUrl),
     gender: advocate.gender,
     experienceYears: advocate.experienceYears,
     experience: advocate.experienceYears,

@@ -44,6 +44,18 @@ export const resolveImageUrl = (url, req = null) => {
 };
 
 /**
+ * Returns the small.avif variant URL given a medium.avif URL.
+ * Falls back to original URL if not an AVIF variant.
+ */
+export const getSmallVariantUrl = (url) => {
+  if (!url || typeof url !== 'string') return null;
+  if (url.endsWith('/medium.avif')) {
+    return url.replace(/\/medium\.avif$/, '/small.avif');
+  }
+  return url;
+};
+
+/**
  * Configuration presets for dimensions and AVIF qualities based on image category.
  */
 const CATEGORY_PRESETS = {

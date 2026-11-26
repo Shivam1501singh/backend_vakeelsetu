@@ -1,6 +1,6 @@
 import prisma from '../lib/prisma.js';
 import * as userRightValidator from '../validators/userRight.validator.js';
-import { processAndSaveImage, deleteImageFolder } from '../services/imageStorage.service.js';
+import { processAndSaveImage, deleteImageFolder, getSmallVariantUrl } from '../services/imageStorage.service.js';
 
 /**
  * Format User Right response object for clean public/API output
@@ -12,6 +12,8 @@ export const mapUserRightResponse = (right) => {
     title: right.title,
     description: right.description,
     photo: right.photo || null,
+    smallPhotoUrl: getSmallVariantUrl(right.photo),
+    thumbnailUrl: getSmallVariantUrl(right.photo),
     createdAt: right.createdAt,
     updatedAt: right.updatedAt
   };

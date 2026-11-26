@@ -2,7 +2,7 @@ import prisma from '../lib/prisma.js';
 import bcrypt from 'bcryptjs';
 import { signToken, sendTokenCookie } from '../utils/jwt.js';
 import * as blogValidator from '../validators/blog.validator.js';
-import { processAndSaveImage, deleteImageFolder } from '../services/imageStorage.service.js';
+import { processAndSaveImage, deleteImageFolder, getSmallVariantUrl } from '../services/imageStorage.service.js';
 
 /**
  * Helper to format/map blog response object for API, returning SEO fields & array formatting for keywords
@@ -20,6 +20,8 @@ export const mapBlogResponse = (blog) => {
   return {
     id: blog.id,
     image: blog.image || null,
+    smallImage: getSmallVariantUrl(blog.image),
+    thumbnailUrl: getSmallVariantUrl(blog.image),
     heading: blog.heading,
     title: blog.title,
     slug: blog.slug || null,
