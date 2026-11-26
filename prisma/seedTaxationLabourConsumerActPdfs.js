@@ -16,6 +16,11 @@ const PDF_ACT_MAPPINGS = [
     actSearchQuery: 'Income-tax Act'
   },
   {
+    pdfFileName: 'Income_Tax_Act_2025_as_amended_by_FA_Act_2026.pdf',
+    displayName: 'The Income-Tax Act, 2025 (As Amended by Finance Act, 2026)',
+    actSearchQuery: 'Income-tax Act'
+  },
+  {
     pdfFileName: 'industrial relation code sechdules .pdf',
     displayName: 'Industrial Relations Code Schedules',
     actSearchQuery: 'Industrial Relations Code, 2020'
