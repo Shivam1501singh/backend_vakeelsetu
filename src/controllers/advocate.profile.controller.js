@@ -1,6 +1,6 @@
 import prisma from '../lib/prisma.js';
 import { advocateProfileUpdateSchema } from '../validators/advocate.validator.js';
-import { processAndSaveImage, deleteImageFolder } from '../services/imageStorage.service.js';
+import { processAndSaveImage, deleteImageFolder, getSmallVariantUrl } from '../services/imageStorage.service.js';
 import { computeEffectiveOnlineStatus } from '../utils/advocateStatus.js';
 import { formatPricingSummary } from '../services/advocateBooking/pricing.js';
 import {
@@ -1074,8 +1074,8 @@ export const getVerificationStatus = async (req, res, next) => {
         gender: advocate.gender,
         barCouncilId: advocate.barCouncilId,
         barId: advocate.barCouncilId,
-        profilePhotoUrl: advocate.profilePhotoUrl,
-        profileImage: advocate.profilePhotoUrl,
+        smallPhotoUrl: getSmallVariantUrl(advocate.profilePhotoUrl),
+        mediumPhotoUrl: advocate.profilePhotoUrl || null,
         experienceYears: advocate.experienceYears,
         experience: advocate.experienceYears,
         casesHandled: advocate.casesHandled,

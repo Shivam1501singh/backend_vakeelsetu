@@ -3,6 +3,7 @@ import prisma from '../lib/prisma.js';
 import { generateSecureOtp } from './otp.service.js';
 import { sendOtpSms } from './sms.service.js';
 import { computeEffectiveOnlineStatus } from '../utils/advocateStatus.js';
+import { getSmallVariantUrl } from './imageStorage.service.js';
 
 /**
  * Search Advocates by Name or BAR ID
@@ -52,8 +53,8 @@ export const searchAdvocates = async ({ query, barId, currentAdvocateId, page = 
     fullName: advocate.fullName,
     barId: advocate.barCouncilId,
     barCouncilId: advocate.barCouncilId,
-    profileImage: advocate.profilePhotoUrl,
-    profilePhotoUrl: advocate.profilePhotoUrl,
+    smallPhotoUrl: getSmallVariantUrl(advocate.profilePhotoUrl),
+    mediumPhotoUrl: advocate.profilePhotoUrl || null,
     lawType: advocate.bestPracticeArea || (advocate.practiceAreas?.[0] || null),
     bestPracticeArea: advocate.bestPracticeArea,
     city: advocate.city,
@@ -371,8 +372,8 @@ export const getTeamMates = async (advocateId) => {
       fullName: target.fullName,
       barId: target.barCouncilId,
       barCouncilId: target.barCouncilId,
-      profileImage: target.profilePhotoUrl,
-      profilePhotoUrl: target.profilePhotoUrl,
+      smallPhotoUrl: getSmallVariantUrl(target.profilePhotoUrl),
+      mediumPhotoUrl: target.profilePhotoUrl || null,
       experience: target.experienceYears !== undefined && target.experienceYears !== null ? target.experienceYears : null,
       experienceYears: target.experienceYears !== undefined && target.experienceYears !== null ? target.experienceYears : null,
       lawType: target.bestPracticeArea || (target.practiceAreas?.[0] || null),

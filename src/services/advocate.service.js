@@ -412,12 +412,13 @@ export const listAdvocates = async ({
         officeLatitude: _olat,
         officeLongitude: _olng,
         completeAddress: _ca,
+        profilePhotoUrl: _ppu,
         _count,
         ...cleanAdv
       } = adv;
       cleanAdv.officeAddress = adv.officeAddress || adv.completeAddress || null;
       cleanAdv.smallPhotoUrl = getSmallVariantUrl(adv.profilePhotoUrl);
-      cleanAdv.thumbnailUrl = getSmallVariantUrl(adv.profilePhotoUrl);
+      cleanAdv.mediumPhotoUrl = adv.profilePhotoUrl || null;
       cleanAdv.likeCount = _count?.likes ?? 0;
       cleanAdv.isSaved = savedLawyerIds.has(adv.id);
       cleanAdv.isLiked = likedAdvocateIds.has(adv.id);
@@ -491,14 +492,15 @@ export const listAdvocates = async ({
         officeLatitude: _olat,
         officeLongitude: _olng,
         completeAddress: _ca,
+        profilePhotoUrl: _ppu,
         _count,
         ...cleanAdv
       } = adv;
       cleanAdv.officeAddress = adv.officeAddress || adv.completeAddress || null;
       cleanAdv.distance = adv.distance !== Infinity ? parseFloat(adv.distance.toFixed(2)) : null;
       cleanAdv.smallPhotoUrl = getSmallVariantUrl(adv.profilePhotoUrl);
-    cleanAdv.thumbnailUrl = getSmallVariantUrl(adv.profilePhotoUrl);
-    cleanAdv.likeCount = _count?.likes ?? 0;
+      cleanAdv.mediumPhotoUrl = adv.profilePhotoUrl || null;
+      cleanAdv.likeCount = _count?.likes ?? 0;
       cleanAdv.isSaved = savedLawyerIds.has(adv.id);
       cleanAdv.isLiked = likedAdvocateIds.has(adv.id);
       cleanAdv.isOnline = computeEffectiveOnlineStatus(adv.isOnline, adv.lastSeenAt);
@@ -548,6 +550,7 @@ export const listAdvocates = async ({
       officeLatitude: _olat,
       officeLongitude: _olng,
       completeAddress: _ca,
+      profilePhotoUrl: _ppu,
       _count,
       ...cleanAdv
     } = adv;
@@ -569,7 +572,7 @@ export const listAdvocates = async ({
       cleanAdv.distance = null;
     }
     cleanAdv.smallPhotoUrl = getSmallVariantUrl(adv.profilePhotoUrl);
-    cleanAdv.thumbnailUrl = getSmallVariantUrl(adv.profilePhotoUrl);
+    cleanAdv.mediumPhotoUrl = adv.profilePhotoUrl || null;
     cleanAdv.likeCount = _count?.likes ?? 0;
     cleanAdv.isSaved = savedLawyerIds.has(adv.id);
     cleanAdv.isLiked = likedAdvocateIds.has(adv.id);
@@ -648,10 +651,8 @@ export const getAdvocateDetailsPublic = async (id, currentUserId) => {
     fullName: advocate.fullName,
     barId: advocate.barCouncilId,
     barCouncilId: advocate.barCouncilId,
-    profileImage: advocate.profilePhotoUrl,
-    profilePhotoUrl: advocate.profilePhotoUrl,
     smallPhotoUrl: getSmallVariantUrl(advocate.profilePhotoUrl),
-    thumbnailUrl: getSmallVariantUrl(advocate.profilePhotoUrl),
+    mediumPhotoUrl: advocate.profilePhotoUrl || null,
     gender: advocate.gender,
     experienceYears: advocate.experienceYears,
     experience: advocate.experienceYears,
