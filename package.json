@@ -10,7 +10,8 @@
     "build": "prisma generate",
     "seed": "node prisma/seed.js",
     "cleanup:non-staff-roles": "node scripts/cleanup-non-staff-roles.js",
-    "backfill:section-order": "node scripts/backfill-act-section-order.js"
+    "backfill:section-order": "node scripts/backfill-act-section-order.js",
+    "migrate:images": "node scripts/migrateCloudinaryToLocal.js"
   },
   "prisma": {
     "seed": "node prisma/seed.js"
@@ -32,6 +33,7 @@
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "razorpay": "^2.9.8",
+    "sharp": "^0.35.5",
     "zod": "^3.23.8"
   },
   "devDependencies": {

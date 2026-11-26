@@ -1,7 +1,7 @@
 import prisma from '../lib/prisma.js';
 import { createOtp, verifyOtp } from './otp.service.js';
 import { sendOtpSms } from './sms.service.js';
-import { deleteFromCloudinary } from './cloudinary.service.js';
+import { deleteImageFolder } from './imageStorage.service.js';
 
 /**
  * Request OTP for Advocate account deletion
@@ -149,43 +149,43 @@ export const finalizeAdvocateDeletion = async (advocateId) => {
       where: { id: advocateId }
     });
 
-    // Safely cleanup Cloudinary images if they exist
+    // Safely cleanup images (local or Cloudinary) if they exist
     if (advocate.profilePhotoPublicId) {
       try {
-        await deleteFromCloudinary(advocate.profilePhotoPublicId);
+        await deleteImageFolder(advocate.profilePhotoPublicId);
       } catch (err) {
-        console.error(`Failed to delete profile photo ${advocate.profilePhotoPublicId} from Cloudinary:`, err.message);
+        console.error(`Failed to delete profile photo ${advocate.profilePhotoPublicId}:`, err.message);
       }
     }
     if (advocate.officePhotoPublicId) {
       try {
-        await deleteFromCloudinary(advocate.officePhotoPublicId);
+        await deleteImageFolder(advocate.officePhotoPublicId);
       } catch (err) {
-        console.error(`Failed to delete office photo ${advocate.officePhotoPublicId} from Cloudinary:`, err.message);
+        console.error(`Failed to delete office photo ${advocate.officePhotoPublicId}:`, err.message);
       }
     }
     if (advocate.pendingOfficeChange && advocate.pendingOfficeChange.officePhotoPublicId) {
       try {
-        await deleteFromCloudinary(advocate.pendingOfficeChange.officePhotoPublicId);
+        await deleteImageFolder(advocate.pendingOfficeChange.officePhotoPublicId);
       } catch (err) {
-        console.error(`Failed to delete pending office photo ${advocate.pendingOfficeChange.officePhotoPublicId} from Cloudinary:`, err.message);
+        console.error(`Failed to delete pending office photo ${advocate.pendingOfficeChange.officePhotoPublicId}:`, err.message);
       }
     }
     if (advocate.pendingProfileChange) {
       const draftProfilePhoto = advocate.pendingProfileChange.profilePhoto?.publicId;
       if (draftProfilePhoto) {
         try {
-          await deleteFromCloudinary(draftProfilePhoto);
+          await deleteImageFolder(draftProfilePhoto);
         } catch (err) {
-          console.error(`Failed to delete draft profile photo ${draftProfilePhoto} from Cloudinary:`, err.message);
+          console.error(`Failed to delete draft profile photo ${draftProfilePhoto}:`, err.message);
         }
       }
       const draftOfficePhoto = advocate.pendingProfileChange.officePhoto?.publicId;
       if (draftOfficePhoto) {
         try {
-          await deleteFromCloudinary(draftOfficePhoto);
+          await deleteImageFolder(draftOfficePhoto);
         } catch (err) {
-          console.error(`Failed to delete draft office photo ${draftOfficePhoto} from Cloudinary:`, err.message);
+          console.error(`Failed to delete draft office photo ${draftOfficePhoto}:`, err.message);
         }
       }
     }

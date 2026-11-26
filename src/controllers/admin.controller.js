@@ -24,7 +24,7 @@ import { APPROVAL_FIELDS, FIELD_LABELS } from './advocate.profile.controller.js'
 import * as blogValidator from '../validators/blog.validator.js';
 import { getCurrentUserProfile } from '../services/auth.service.js';
 import { checkUserPermission } from '../services/rbac.service.js';
-import { deleteFromCloudinary } from '../services/cloudinary.service.js';
+import { deleteImageFolder } from '../services/imageStorage.service.js';
 import { formatPricingSummary } from '../services/advocateBooking/pricing.js';
 
 /**
@@ -1810,10 +1810,10 @@ export const approveAdvocateProfileChange = async (req, res, next) => {
     });
 
     if (replacedProfilePhoto && oldLiveProfilePhotoPublicId && oldLiveProfilePhotoPublicId !== requested.profilePhoto?.publicId) {
-      await deleteFromCloudinary(oldLiveProfilePhotoPublicId).catch(() => {});
+      await deleteImageFolder(oldLiveProfilePhotoPublicId).catch(() => {});
     }
     if (replacedOfficePhoto && oldLiveOfficePhotoPublicId && oldLiveOfficePhotoPublicId !== requested.officePhoto?.publicId) {
-      await deleteFromCloudinary(oldLiveOfficePhotoPublicId).catch(() => {});
+      await deleteImageFolder(oldLiveOfficePhotoPublicId).catch(() => {});
     }
 
     return res.status(200).json({

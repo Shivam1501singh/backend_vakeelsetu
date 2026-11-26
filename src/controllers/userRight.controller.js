@@ -1,6 +1,6 @@
 import prisma from '../lib/prisma.js';
 import * as userRightValidator from '../validators/userRight.validator.js';
-import { uploadBufferToCloudinary, deleteFromCloudinary } from '../services/cloudinary.service.js';
+import { processAndSaveImage, deleteImageFolder } from '../services/imageStorage.service.js';
 
 /**
  * Format User Right response object for clean public/API output
@@ -60,7 +60,11 @@ export const createUserRight = async (req, res, next) => {
 
     if (req.file) {
       validateUploadedImage(req.file);
-      const uploadRes = await uploadBufferToCloudinary(req.file.buffer);
+      const uploadRes = await processAndSaveImage({
+        buffer: req.file.buffer,
+        category: 'CONTENT',
+        req
+      });
       photoUrl = uploadRes.url;
       photoPublicId = uploadRes.publicId;
     }
@@ -89,7 +93,7 @@ export const createUserRight = async (req, res, next) => {
       });
     } catch (dbError) {
       if (photoPublicId) {
-        await deleteFromCloudinary(photoPublicId);
+        await deleteImageFolder(photoPublicId).catch(() => {});
       }
       throw dbError;
     }
@@ -207,7 +211,11 @@ export const updateUserRight = async (req, res, next) => {
 
     if (req.file) {
       validateUploadedImage(req.file);
-      const uploadRes = await uploadBufferToCloudinary(req.file.buffer);
+      const uploadRes = await processAndSaveImage({
+        buffer: req.file.buffer,
+        category: 'CONTENT',
+        req
+      });
       updateData.photo = uploadRes.url;
       updateData.photoPublicId = uploadRes.publicId;
       newPublicId = uploadRes.publicId;
@@ -220,7 +228,7 @@ export const updateUserRight = async (req, res, next) => {
       });
 
       if (newPublicId && oldPublicId) {
-        await deleteFromCloudinary(oldPublicId);
+        await deleteImageFolder(oldPublicId).catch(() => {});
       }
 
       return res.status(200).json({
@@ -230,7 +238,7 @@ export const updateUserRight = async (req, res, next) => {
       });
     } catch (dbError) {
       if (newPublicId) {
-        await deleteFromCloudinary(newPublicId);
+        await deleteImageFolder(newPublicId).catch(() => {});
       }
       throw dbError;
     }
@@ -276,7 +284,7 @@ export const deleteUserRight = async (req, res, next) => {
     });
 
     if (photoPublicId) {
-      await deleteFromCloudinary(photoPublicId);
+      await deleteImageFolder(photoPublicId).catch(() => {});
     }
 
     return res.status(200).json({

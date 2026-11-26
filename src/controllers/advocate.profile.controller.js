@@ -1,6 +1,6 @@
 import prisma from '../lib/prisma.js';
 import { advocateProfileUpdateSchema } from '../validators/advocate.validator.js';
-import { uploadBufferToCloudinary, deleteFromCloudinary } from '../services/cloudinary.service.js';
+import { processAndSaveImage, deleteImageFolder } from '../services/imageStorage.service.js';
 import { computeEffectiveOnlineStatus } from '../utils/advocateStatus.js';
 import { formatPricingSummary } from '../services/advocateBooking/pricing.js';
 import {
@@ -557,12 +557,12 @@ export const discardProfileChanges = async (req, res, next) => {
       }
     });
 
-    // Clean up draft photos from Cloudinary
+    // Clean up draft photos from local storage
     if (draftProfilePublicId) {
-      await deleteFromCloudinary(draftProfilePublicId).catch(() => {});
+      await deleteImageFolder(draftProfilePublicId).catch(() => {});
     }
     if (draftOfficePublicId) {
-      await deleteFromCloudinary(draftOfficePublicId).catch(() => {});
+      await deleteImageFolder(draftOfficePublicId).catch(() => {});
     }
 
     return res.status(200).json({
@@ -687,7 +687,11 @@ export const updateProfile = async (req, res, next) => {
 
       // Upload profile photo directly if provided
       if (profilePhotoFile) {
-        const { url, publicId } = await uploadBufferToCloudinary(profilePhotoFile.buffer);
+        const { url, publicId } = await processAndSaveImage({
+          buffer: profilePhotoFile.buffer,
+          category: 'AVATAR',
+          req
+        });
         updateData.profilePhotoUrl = url;
         updateData.profilePhotoPublicId = publicId;
         if (advocate.profilePhotoPublicId) {
@@ -697,7 +701,11 @@ export const updateProfile = async (req, res, next) => {
 
       // Upload office photo directly if provided
       if (officePhotoFile) {
-        const { url, publicId } = await uploadBufferToCloudinary(officePhotoFile.buffer);
+        const { url, publicId } = await processAndSaveImage({
+          buffer: officePhotoFile.buffer,
+          category: 'OFFICE',
+          req
+        });
         updateData.officePhotoUrl = url;
         updateData.officePhotoPublicId = publicId;
         if (advocate.officePhotoPublicId) {
@@ -712,7 +720,7 @@ export const updateProfile = async (req, res, next) => {
 
       // Cleanup replaced live photos
       for (const pId of oldLivePhotosToDelete) {
-        await deleteFromCloudinary(pId).catch(() => {});
+        await deleteImageFolder(pId).catch(() => {});
       }
 
       const {
@@ -761,7 +769,11 @@ export const updateProfile = async (req, res, next) => {
     // Process photo uploads into draft
     if (profilePhotoFile) {
       touchedApprovalFields = true;
-      const { url, publicId } = await uploadBufferToCloudinary(profilePhotoFile.buffer);
+      const { url, publicId } = await processAndSaveImage({
+        buffer: profilePhotoFile.buffer,
+        category: 'AVATAR',
+        req
+      });
       if (draft.profilePhoto?.publicId) {
         draftPhotosToDelete.push(draft.profilePhoto.publicId);
       }
@@ -770,7 +782,11 @@ export const updateProfile = async (req, res, next) => {
 
     if (officePhotoFile) {
       touchedApprovalFields = true;
-      const { url, publicId } = await uploadBufferToCloudinary(officePhotoFile.buffer);
+      const { url, publicId } = await processAndSaveImage({
+        buffer: officePhotoFile.buffer,
+        category: 'OFFICE',
+        req
+      });
       if (draft.officePhoto?.publicId) {
         draftPhotosToDelete.push(draft.officePhoto.publicId);
       }
@@ -831,7 +847,7 @@ export const updateProfile = async (req, res, next) => {
 
     // Delete superseded draft photos
     for (const pId of draftPhotosToDelete) {
-      await deleteFromCloudinary(pId).catch(() => {});
+      await deleteImageFolder(pId).catch(() => {});
     }
 
     const {
@@ -912,7 +928,11 @@ export const uploadProfilePhoto = async (req, res, next) => {
         });
       }
 
-      const { url, publicId } = await uploadBufferToCloudinary(req.file.buffer);
+      const { url, publicId } = await processAndSaveImage({
+        buffer: req.file.buffer,
+        category: 'AVATAR',
+        req
+      });
       const draft = { ...(advocate.pendingProfileChange || {}) };
       const oldDraftPublicId = draft.profilePhoto?.publicId;
 
@@ -929,7 +949,7 @@ export const uploadProfilePhoto = async (req, res, next) => {
       });
 
       if (oldDraftPublicId) {
-        await deleteFromCloudinary(oldDraftPublicId).catch(() => {});
+        await deleteImageFolder(oldDraftPublicId).catch(() => {});
       }
 
       const {
@@ -963,7 +983,11 @@ export const uploadProfilePhoto = async (req, res, next) => {
 
     // Non-approved advocate: direct live update
     const oldPublicId = advocate.profilePhotoPublicId;
-    const { url, publicId } = await uploadBufferToCloudinary(req.file.buffer);
+    const { url, publicId } = await processAndSaveImage({
+      buffer: req.file.buffer,
+      category: 'AVATAR',
+      req
+    });
 
     try {
       const updatedAdvocate = await prisma.advocate.update({
@@ -975,7 +999,7 @@ export const uploadProfilePhoto = async (req, res, next) => {
       });
 
       if (oldPublicId) {
-        await deleteFromCloudinary(oldPublicId).catch(() => {});
+        await deleteImageFolder(oldPublicId).catch(() => {});
       }
 
       const {
@@ -1006,7 +1030,7 @@ export const uploadProfilePhoto = async (req, res, next) => {
         }
       });
     } catch (dbError) {
-      await deleteFromCloudinary(publicId).catch(() => {});
+      await deleteImageFolder(publicId).catch(() => {});
       throw dbError;
     }
   } catch (error) {

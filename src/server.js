@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import path from 'path';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import passport from './config/passport.js';
@@ -99,6 +100,15 @@ app.use(passport.initialize());
 
 // General Rate Limiting
 app.use(generalLimiter);
+
+// Static uploads serving (AVIF images, Bare Act PDFs)
+app.use(
+  '/uploads',
+  express.static(path.resolve(process.cwd(), 'uploads'), {
+    maxAge: '30d',
+    immutable: true
+  })
+);
 
 // API Status health check
 app.get('/api/health', (req, res) => {

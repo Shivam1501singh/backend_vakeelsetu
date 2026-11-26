@@ -1,509 +1,179 @@
-# Implementation Plan: Advocate Qualification Test & Admin Question Bank
+# Implementation Plan: VPS Local Image Storage with AVIF Dual-Resolution Processing & Cloudinary Migration
 
-## Database Host (Production Neon DB)
-- **Host:** `ep-weathered-hat-b47xszyr-pooler.c-6.us-east-2.aws.neon.tech`
-- **Database:** `neondb`
-- **Safety Policy:**
-  - **No test records on the shared Neon DB** (production). All unit tests will use stubbed Prisma client, fake clock, and stubbed transporter.
-  - **No real emails sent** during testing.
-  - **Migration policy:** Generate SQL diff -> review -> wait for explicit user "OK" before running `prisma migrate deploy`.
+## 1. Executive Summary & Objective
+
+Migrate all media storage away from **Cloudinary** to **Hostinger VPS Local NVMe Disk Storage**.
+- **Root Storage Location:** `/uploads/images/<image_id>/`
+- **Output Format:** Modern **`.avif`** (AV1 Image Format) for superior compression and reduced bandwidth.
+- **Dual-Resolution Generation:** For every uploaded image, generate and store **two** distinct `.avif` files:
+  1. `small.avif` (Low-bandwidth listing/card/thumbnail view)
+  2. `medium.avif` (Detailed profile, article, or verification view)
+- **Zero Downtime & Zero Data Loss:** A one-time migration script will pull all existing Cloudinary assets, convert them to `.avif` dual variants, store them locally, and update database records.
 
 ---
 
-## 1. Domain Architecture & Integration
+## 2. Image Processing & Compression Specifications
 
-### A. Lifecycle Overview
-```
-                     Advocate Profile Submission (submitForApproval)
-                                         |
-                       +-----------------+-----------------+
-                       |                                   |
-              testPassedAt set?                  testPassedAt is null
-                       |                                   |
-               test: { required: false }           Active SENT link exists?
-                                                     |              |
-                                                    Yes             No
-                                                     |              |
-                                             test: { link... }   SCHEDULED invite exists?
-                                                                   |           |
-                                                                  Yes          No
-                                                                   |           |
-                                                         test: { sched... }  Create INITIAL invite
-                                                                               |
-                                                                       Send email (8s timeout)
-                                                                       Success -> SENT (72h expiry)
-                                                                       Failure -> SCHEDULED (Cron retries)
-```
+| Category | Input Formats | Max Upload | Variant | Target Dimensions | Target File Size | Storage Path | Use Case |
+|---|---|:---:|---|---|:---:|---|---|
+| **Advocate Profile Photo & User Avatar** | `JPEG, JPG, PNG, WEBP` | 5 MB | `small.avif` | ~150x150 px | **4 – 5 KB** | `uploads/images/<id>/small.avif` | Search lists, cards, navbars, booking slots |
+| | | | `medium.avif` | ~400x400 px | **10 – 15 KB** | `uploads/images/<id>/medium.avif` | Full advocate profile page, modals |
+| **Advocate Office Photo** | `JPEG, JPG, PNG, WEBP` | 5 MB | `small.avif` | ~200x150 px | **5 – 8 KB** | `uploads/images/<id>/small.avif` | Admin verification tables, quick preview |
+| | | | `medium.avif` | ~600x400 px | **20 – 30 KB** | `uploads/images/<id>/medium.avif` | Admin review modal, public office view |
+| **Admin Blogs & Legal Rights Banners** | `JPEG, JPG, PNG, WEBP` | 5 MB | `small.avif` | ~450x250 px | **12 – 15 KB** | `uploads/images/<id>/small.avif` | Blog feed cards, legal rights grid |
+| | | | `medium.avif` | ~900x500 px | **25 – 30 KB** | `uploads/images/<id>/medium.avif` | Full article banner, header visual |
 
-### B. Test Execution Lifecycle
-```
-Advocate clicks email link (?token=...)
-   |
-   v
-POST /api/advocate-test/login { token, barCouncilId, phone }
-   |-- Verify token hash (SHA-256)
-   |-- Normalize: trim Bar Council ID (case-insensitive), phone (last 10 digits)
-   |-- Mismatch -> 401 INVALID_CREDENTIALS (rate limited: 5 fails / 15m / token+IP)
-   |-- Check State:
-         * ALREADY_PASSED -> 200 { status: "ALREADY_PASSED" }
-         * Expired -> 410 LINK_EXPIRED { canRequestReschedule: true }
-         * Used & Completed -> 200 { status: "COMPLETED", result, canRequestReschedule: !passed }
-         * In Progress -> 200 { status: "IN_PROGRESS", testSession }
-         * Ready -> 200 { status: "READY", testSession, rules }
-   |
-   v
-POST /api/advocate-test/start (testSession JWT)
-   |-- Checks/picks 20 random active, non-deleted questions (< 20 -> 503 TEST_UNAVAILABLE)
-   |-- Shuffles question order & options per attempt
-   |-- Creates snapshot: [{ questionId, question, options:[shuffled], correctIndex }]
-   |-- Returns attemptId, deadlineAt (now + 20m), questions without correct answers!
-   |
-   v
-PUT /api/advocate-test/answers (testSession JWT)
-   |-- Autosave progress; rejects if past deadlineAt + 60s grace
-   |
-   v
-POST /api/advocate-test/submit (testSession JWT)
-   |-- Server-side scoring (unanswered = wrong)
-   |-- >= 15 correct -> passed = true, sets advocate.testPassedAt = now, marks invite USED
-   |-- < 15 correct -> passed = false, marks invite USED, canRequestReschedule = true
-   |-- Idempotent: re-submitting returns same score
-   |
-   v
-POST /api/advocate-test/request-reschedule (testSession OR { token, barCouncilId, phone })
-   |-- Allowed only if: not passed AND (latest link expired OR latest attempt failed)
-   |-- Creates RESCHEDULE invite with sendAt = now + 60m (old invite -> EXPIRED)
-   |-- Cron sends email at sendAt; page informs advocate: "rescheduled within 2 hours"
+---
+
+## 3. Directory Hierarchy
+
+```text
+vakeelsetu_backend/
+├── uploads/
+│   ├── acts/                         # Existing Bare Act PDFs
+│   └── images/                       # New root image directory
+│       ├── img_adv_1732620000_a1b2/  # Unique image directory (by nanoid/timestamp)
+│       │   ├── small.avif            # ~4-5 KB thumbnail
+│       │   └── medium.avif           # ~10-15 KB full view
+│       └── img_blog_1732620100_c3d4/
+│           ├── small.avif            # ~15 KB card thumbnail
+│           └── medium.avif           # ~30 KB article banner
 ```
 
 ---
 
-## 2. Database Schema & Migration SQL
+## 4. Serving Static Images (Express & Nginx)
 
-### Prisma Schema Additions (`prisma/schema.prisma`)
+### A. Backend Express Static Route (`src/server.js`)
+Serve `/uploads` with caching and CORS headers:
+```javascript
+import path from 'path';
+import express from 'express';
 
-```prisma
-model Advocate {
-  // ... existing fields ...
-  testPassedAt             DateTime?
-
-  // Relations
-  testInvites              AdvocateTestInvite[]
-  testAttempts             AdvocateTestAttempt[]
-}
-
-model AdvocateTestQuestion {
-  id            String    @id @default(uuid())
-  question      String    @db.Text
-  options       Json      // ["A text", "B text", "C text", "D text"] exactly 4
-  correctOption Int       // 0..3
-  isActive      Boolean   @default(true)
-  deletedAt     DateTime? // soft delete (preserves historical attempt integrity)
-  createdBy     String?
-  updatedBy     String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-
-  @@index([isActive, deletedAt])
-}
-
-model AdvocateTestInvite {
-  id         String               @id @default(uuid())
-  advocateId String
-  tokenHash  String               @unique
-  reason     String               // INITIAL | RESCHEDULE
-  status     String               // SCHEDULED | SENT | USED | EXPIRED | CANCELLED
-  sendAt     DateTime             // when email should be dispatched
-  sentAt     DateTime?
-  expiresAt  DateTime?            // sentAt + 72h (computed when dispatched)
-  createdAt  DateTime             @default(now())
-
-  advocate   Advocate             @relation(fields: [advocateId], references: [id], onDelete: Cascade)
-  attempt    AdvocateTestAttempt?
-
-  @@index([advocateId, createdAt])
-  @@index([status, sendAt])
-}
-
-model AdvocateTestAttempt {
-  id             String             @id @default(uuid())
-  advocateId     String
-  inviteId       String             @unique // exactly one attempt per invite link
-  questions      Json               // snapshot: [{ questionId, question, options: [...shuffled], correctIndex }]
-  answers        Json?              // [{ index, selected }]
-  startedAt      DateTime
-  deadlineAt     DateTime           // startedAt + 20 min
-  submittedAt    DateTime?
-  autoSubmitted  Boolean            @default(false)
-  totalQuestions Int
-  correctCount   Int?
-  wrongCount     Int?
-  passed         Boolean?
-
-  advocate       Advocate           @relation(fields: [advocateId], references: [id], onDelete: Cascade)
-  invite         AdvocateTestInvite @relation(fields: [inviteId], references: [id], onDelete: Cascade)
-
-  @@index([advocateId, startedAt])
-}
-```
-
-### Generated Migration SQL (`prisma/migrations/20261116160000_add_advocate_qualification_test/migration.sql`)
-
-```sql
--- AlterTable
-ALTER TABLE "Advocate" ADD COLUMN "testPassedAt" TIMESTAMP(3);
-
--- CreateTable
-CREATE TABLE "AdvocateTestQuestion" (
-    "id" TEXT NOT NULL,
-    "question" TEXT NOT NULL,
-    "options" JSONB NOT NULL,
-    "correctOption" INTEGER NOT NULL,
-    "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "deletedAt" TIMESTAMP(3),
-    "createdBy" TEXT,
-    "updatedBy" TEXT,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "AdvocateTestQuestion_pkey" PRIMARY KEY ("id")
+// Expose /uploads statically
+app.use(
+  '/uploads',
+  express.static(path.resolve(process.cwd(), 'uploads'), {
+    maxAge: '30d',
+    immutable: true
+  })
 );
-
--- CreateTable
-CREATE TABLE "AdvocateTestInvite" (
-    "id" TEXT NOT NULL,
-    "advocateId" TEXT NOT NULL,
-    "tokenHash" TEXT NOT NULL,
-    "reason" TEXT NOT NULL,
-    "status" TEXT NOT NULL,
-    "sendAt" TIMESTAMP(3) NOT NULL,
-    "sentAt" TIMESTAMP(3),
-    "expiresAt" TIMESTAMP(3),
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "AdvocateTestInvite_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "AdvocateTestAttempt" (
-    "id" TEXT NOT NULL,
-    "advocateId" TEXT NOT NULL,
-    "inviteId" TEXT NOT NULL,
-    "questions" JSONB NOT NULL,
-    "answers" JSONB,
-    "startedAt" TIMESTAMP(3) NOT NULL,
-    "deadlineAt" TIMESTAMP(3) NOT NULL,
-    "submittedAt" TIMESTAMP(3),
-    "autoSubmitted" BOOLEAN NOT NULL DEFAULT false,
-    "totalQuestions" INTEGER NOT NULL,
-    "correctCount" INTEGER,
-    "wrongCount" INTEGER,
-    "passed" BOOLEAN,
-
-    CONSTRAINT "AdvocateTestAttempt_pkey" PRIMARY KEY ("id")
-);
-
--- CreateIndex
-CREATE INDEX "AdvocateTestQuestion_isActive_deletedAt_idx" ON "AdvocateTestQuestion"("isActive", "deletedAt");
-
--- CreateIndex
-CREATE UNIQUE INDEX "AdvocateTestInvite_tokenHash_key" ON "AdvocateTestInvite"("tokenHash");
-
--- CreateIndex
-CREATE INDEX "AdvocateTestInvite_advocateId_createdAt_idx" ON "AdvocateTestInvite"("advocateId", "createdAt");
-
--- CreateIndex
-CREATE INDEX "AdvocateTestInvite_status_sendAt_idx" ON "AdvocateTestInvite"("status", "sendAt");
-
--- CreateIndex
-CREATE UNIQUE INDEX "AdvocateTestAttempt_inviteId_key" ON "AdvocateTestAttempt"("inviteId");
-
--- CreateIndex
-CREATE INDEX "AdvocateTestAttempt_advocateId_startedAt_idx" ON "AdvocateTestAttempt"("advocateId", "startedAt");
-
--- AddForeignKey
-ALTER TABLE "AdvocateTestInvite" ADD CONSTRAINT "AdvocateTestInvite_advocateId_fkey" FOREIGN KEY ("advocateId") REFERENCES "Advocate"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "AdvocateTestAttempt" ADD CONSTRAINT "AdvocateTestAttempt_advocateId_fkey" FOREIGN KEY ("advocateId") REFERENCES "Advocate"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "AdvocateTestAttempt" ADD CONSTRAINT "AdvocateTestAttempt_inviteId_fkey" FOREIGN KEY ("inviteId") REFERENCES "AdvocateTestInvite"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ```
 
----
-
-## 3. Account Deletion Impact Analysis
-- **Current Behavior:** In `finalizeAdvocateDeletion` (`src/services/advocateDeletion.service.js`), permanent account deletion runs `await tx.advocate.delete({ where: { id: advocateId } })`.
-- **Foreign Key Behavior (`onDelete: Cascade`):**
-  When an advocate account is permanently deleted after the 30-day grace period, associated `AdvocateTestInvite` and `AdvocateTestAttempt` records are cleanly cascaded.
-- **Snapshot Integrity:** While an advocate exists, even if questions in `AdvocateTestQuestion` are soft-deleted or edited by admin, the `questions` snapshot in `AdvocateTestAttempt` permanently preserves the exact questions and shuffled options as they were presented during the attempt.
-
----
-
-## 4. Environment Variables (`.env.example`)
-```env
-# Advocate Qualification Test
-FRONTEND_ADVOCATE_TEST_PATH="/advocate-test"
-ADVOCATE_TEST_QUESTION_COUNT=20
-ADVOCATE_TEST_PASS_MARK=15
-ADVOCATE_TEST_DURATION_MINUTES=20
-ADVOCATE_TEST_LINK_VALID_HOURS=72
-ADVOCATE_TEST_RESCHEDULE_DELAY_MINUTES=60
-```
-- Missing/invalid config fallback: If any numerical value is not a valid positive integer, the service logs a single warning at startup/invocation and falls back to the default (20 questions, 15 pass mark, 20 minutes, 72 hours validity, 60 minutes reschedule delay).
-- Test JWT reuses `process.env.JWT_SECRET` with dedicated payload `{ type: "advocate_test", inviteId, advocateId }`.
-
----
-
-## 5. File Inventory
-
-### Allowed New Files (3 domain files + 1 migration directory)
-1. `src/routes/advocateTest.routes.js`: Public test API routes (`/api/advocate-test/login`, `/start`, `/answers`, `/submit`, `/request-reschedule`).
-2. `src/controllers/advocateTest.controller.js`: Request controllers for the public test API.
-3. `src/services/advocateTest.service.js`: Core domain service for token validation, question selection & randomization, scoring, and reschedule logic.
-4. `prisma/migrations/20261116160000_add_advocate_qualification_test/migration.sql`: Migration file.
-
-### Existing Files Modified (Strictly according to rules)
-1. `prisma/schema.prisma`: Add `testPassedAt` to `Advocate`, add `AdvocateTestQuestion`, `AdvocateTestInvite`, `AdvocateTestAttempt`.
-2. `prisma/seedRbac.js`: Add `tests:manage` permission to `DEFAULT_PERMISSIONS`.
-3. `src/server.js`: Mount `/api/advocate-test` route.
-4. `src/controllers/advocate.profile.controller.js`: In `submitForApproval`, integrate test link check/issuance and include `test` in response.
-5. `src/controllers/paymentCron.controller.js`: In `reconcilePaymentsCron`, append test steps (send due invites, expire stale links, auto-submit timed-out attempts).
-6. `src/routes/admin.routes.js`: Add question bank routes (`/test-questions`, CRUD) and advocate attempt history route (`/advocates/:advocateId/test-attempts`).
-7. `src/controllers/admin.controller.js`: Implement question bank CRUD with `minimumRequired` count & soft-delete warnings; append `test` metadata in `formatAdvocateReviewData`, `listPendingAdvocates`, and `listRejectedAdvocates`.
-8. `src/validators/admin.validator.js`: Zod schema for question creation and updates.
-9. `src/services/email.service.js`: Add `sendAdvocateTestLinkEmail`.
-10. `src/templates/advocateAccountEmail.template.js`: Add `advocateTestLinkTemplate`.
-11. `.env.example`: Document new test env vars.
-12. `README.md`: Add comprehensive Section 39: Advocate Qualification Test — Postman Guide.
-
----
-
-## 6. API Endpoints & Request/Response Samples
-
-### 1. `POST /api/advocate/profile/submit-for-approval` (Existing modified)
-**Response (Test Required):**
-```json
-{
-  "success": true,
-  "message": "Your profile has been submitted for admin approval",
-  "test": {
-    "required": true,
-    "emailSentTo": "ad***@gmail.com",
-    "expiresAt": "2026-11-19T10:00:00.000Z",
-    "message": "Your profile has been submitted for approval. Before that, you need to complete a test. The link has been sent to your email."
-  }
-}
-```
-**Response (Already Passed):**
-```json
-{
-  "success": true,
-  "message": "Your profile has been submitted for admin approval",
-  "test": {
-    "required": false,
-    "passed": true
-  }
-}
-```
-
-### 2. `POST /api/advocate-test/login`
-**Request:**
-```json
-{
-  "token": "4f9d2c...b6",
-  "barCouncilId": "DL/1234/2020",
-  "phone": "9876543210"
-}
-```
-**Response (Ready to Start):**
-```json
-{
-  "success": true,
-  "status": "READY",
-  "testSession": "eyJhbGciOi...",
-  "rules": {
-    "questions": 20,
-    "minutes": 20,
-    "passMark": 15
-  }
-}
-```
-**Response (Invalid Credentials - 401):**
-```json
-{
-  "success": false,
-  "code": "INVALID_CREDENTIALS",
-  "message": "The details don't match this test link."
-}
-```
-**Response (Link Expired - 410):**
-```json
-{
-  "success": false,
-  "code": "LINK_EXPIRED",
-  "message": "This test link has expired. Please request a reschedule.",
-  "canRequestReschedule": true
-}
-```
-
-### 3. `POST /api/advocate-test/start`
-**Headers:** `Authorization: Bearer <testSession>`
-**Response:**
-```json
-{
-  "success": true,
-  "attemptId": "c3e98b0a-...",
-  "serverNow": "2026-11-16T15:30:00.000Z",
-  "deadlineAt": "2026-11-16T15:50:00.000Z",
-  "questions": [
-    {
-      "index": 0,
-      "question": "Under which section of CrPC is anticipatory bail granted?",
-      "options": [
-        { "key": "A", "text": "Section 437" },
-        { "key": "B", "text": "Section 438" },
-        { "key": "C", "text": "Section 439" },
-        { "key": "D", "text": "Section 482" }
-      ]
-    }
-  ],
-  "savedAnswers": []
-}
-```
-
-### 4. `PUT /api/advocate-test/answers`
-**Headers:** `Authorization: Bearer <testSession>`
-**Request:**
-```json
-{
-  "answers": [
-    { "index": 0, "selected": "B" },
-    { "index": 1, "selected": null }
-  ]
-}
-```
-**Response:**
-```json
-{
-  "success": true,
-  "savedAt": "2026-11-16T15:35:10.000Z"
-}
-```
-
-### 5. `POST /api/advocate-test/submit`
-**Headers:** `Authorization: Bearer <testSession>`
-**Request:**
-```json
-{
-  "answers": [
-    { "index": 0, "selected": "B" }
-  ]
-}
-```
-**Response (Passed):**
-```json
-{
-  "success": true,
-  "correct": 16,
-  "wrong": 4,
-  "total": 20,
-  "passed": true,
-  "message": "You have passed the test."
-}
-```
-**Response (Failed):**
-```json
-{
-  "success": true,
-  "correct": 13,
-  "wrong": 7,
-  "total": 20,
-  "passed": false,
-  "message": "Test completed.",
-  "canRequestReschedule": true
-}
-```
-
-### 6. `POST /api/advocate-test/request-reschedule`
-**Headers:** `Authorization: Bearer <testSession>` OR Body: `{ "token": "...", "barCouncilId": "...", "phone": "..." }`
-**Response:**
-```json
-{
-  "success": true,
-  "scheduled": true,
-  "message": "Your test will be rescheduled within 2 hours."
-}
-```
-
-### 7. Admin Question Bank & Advocate Test Info
-**`GET /api/admin/test-questions`**
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "id": "q1",
-      "question": "Under which section...",
-      "options": ["A", "B", "C", "D"],
-      "correctOption": 1,
-      "isActive": true
-    }
-  ],
-  "counts": { "active": 25, "inactive": 2 },
-  "minimumRequired": 20,
-  "pagination": { "page": 1, "limit": 20, "total": 27, "totalPages": 2 }
-}
-```
-**Admin Advocate Detail `test` block:**
-```json
-"test": {
-  "status": "FAILED",
-  "attemptsCount": 1,
-  "latest": {
-    "correct": 13,
-    "wrong": 7,
-    "total": 20,
-    "passed": false,
-    "submittedAt": "2026-11-16T15:45:00.000Z",
-    "autoSubmitted": false
-  },
-  "best": {
-    "correct": 13,
-    "wrong": 7,
-    "total": 20
-  },
-  "passedAt": null,
-  "linkExpiresAt": "2026-11-19T10:00:00.000Z"
+### B. Production Hostinger VPS (Nginx Reverse Proxy)
+In production, Nginx bypasses Node.js and serves `/uploads/` directly off the NVMe SSD for sub-millisecond response times:
+```nginx
+location /uploads/ {
+    alias /var/www/vakeelsetu_backend/uploads/;
+    expires 30d;
+    add_header Cache-Control "public, no-transform";
+    try_files $uri =404;
 }
 ```
 
 ---
 
-## 7. Risks & Mitigations
+## 5. Architecture & Component Changes
 
-1. **Production Neon DB Contamination:**
-   - *Risk:* Accidental test data inserted on live DB.
-   - *Mitigation:* Unit tests will mock `@prisma/client` and will not establish live network connections to Neon.
-2. **Timing / Deadline Bypass:**
-   - *Risk:* Client submitting late answers via manipulated clocks.
-   - *Mitigation:* Server enforces `deadlineAt + 60s` grace using server timestamps. Any submission or autosave after grace is locked to previously saved answers and flagged as `autoSubmitted = true`.
-3. **Information Disclosure (Test Leak):**
-   - *Risk:* Inspecting network payloads to read correct answers.
-   - *Mitigation:* Correct answers are excluded from public responses. Options and questions are shuffled per attempt so option index "A" does not correspond to question bank index 0.
-4. **Token Security:**
-   - *Risk:* Leaking plain test tokens in logs or database compromises.
-   - *Mitigation:* Tokens are generated via `crypto.randomBytes(32).toString('base64url')` and stored only as SHA-256 hashes (`tokenHash`). Plain token exists only in the outbound email.
-5. **Brute Force on Login:**
-   - *Risk:* Attackers guessing Bar Council IDs or phone numbers with token.
-   - *Mitigation:* Strict rate limiter: 5 failed attempts per 15 minutes per token + IP, returning HTTP 429. Generic error message 401 `INVALID_CREDENTIALS` reveals no details about whether token, barCouncilId, or phone was mismatched.
+### A. New Image Storage Service: `src/services/imageStorage.service.js`
+A modular replacement for `src/services/cloudinary.service.js` powered by `sharp`:
+1. **`processAndSaveImage({ buffer, category, imageId })`**:
+   - `category`: `'AVATAR' | 'OFFICE' | 'CONTENT'`
+   - Generates unique `imageId` (e.g. `img_${category.toLowerCase()}_${Date.now()}_${random}`).
+   - Creates directory `uploads/images/<imageId>/`.
+   - Uses `sharp(buffer)` to generate:
+     - `small.avif`: Resizes with `fit: 'cover'`, compresses targeting specified KB range.
+     - `medium.avif`: Resizes with `fit: 'inside'` or `'cover'`, compresses targeting specified KB range.
+   - Returns structured URLs and local identifiers:
+     ```javascript
+     {
+       imageId: "img_avatar_1732620000_xyz",
+       url: "/uploads/images/img_avatar_1732620000_xyz/medium.avif",
+       smallUrl: "/uploads/images/img_avatar_1732620000_xyz/small.avif",
+       mediumUrl: "/uploads/images/img_avatar_1732620000_xyz/medium.avif"
+     }
+     ```
+2. **`deleteImageFolder(imageId)`**:
+   - Deletes `uploads/images/<imageId>/` safely from disk when an asset is replaced or user account is deleted.
+   - Ignores if directory does not exist.
+
+### B. Backward Compatibility for Frontend
+To ensure mobile apps and web frontends do not break:
+- `profilePhotoUrl` / `officePhotoUrl` / `imageUrl` will continue to return a full, valid image URL pointing to `medium.avif` (e.g., `https://api.vakeelsetu.com/uploads/images/<id>/medium.avif`).
+- New optional fields `smallPhotoUrl` or `thumbnailUrl` can be provided in API responses for high-performance listing views.
+- `publicId` fields (`profilePhotoPublicId`, `officePhotoPublicId`, `imagePublicId`) in the database will now store the local `imageId`.
 
 ---
 
-## 8. Answers to OPEN QUESTIONS
+## 6. Controllers & Services to be Updated
 
-1. **Should the admin have a "Resend test link" button for an advocate?**
-   - **Answer:** **No (Default: no, not in this task).** The existing flow automatically handles initial send on profile submission, cron retries on transient delivery failure, and advocate-initiated reschedule requests for expired or failed tests.
-2. **Should the advocate's own dashboard show the test status (passed / link sent)?**
-   - **Answer:** **No (Default: no).** Status is communicated cleanly via the submission modal popup and the dedicated test link page. The advocate dashboard remains focused on profile review status.
+1. **`src/services/auth.service.js`**:
+   - Advocate registration: replace Cloudinary call with `imageStorageService.processAndSaveImage(file.buffer, 'AVATAR')`.
+   - Office photo upload: replace Cloudinary call with `imageStorageService.processAndSaveImage(file.buffer, 'OFFICE')`.
+2. **`src/controllers/advocate.auth.controller.js`**:
+   - `uploadProfilePhoto`: use new service.
+   - `completeProfile`: handle office photo with new service.
+3. **`src/controllers/advocate.profile.controller.js`**:
+   - Profile photo updates and draft changes: use new service and delete old local folder on replacement.
+4. **`src/controllers/blog.controller.js`**:
+   - `createBlog` & `updateBlog`: use new service (`'CONTENT'`), delete old folder on update/deletion.
+5. **`src/controllers/userRight.controller.js`**:
+   - `createUserRight` & `updateUserRight`: use new service (`'CONTENT'`), delete old folder on update/deletion.
+6. **`src/services/advocateDeletion.service.js`**:
+   - Account deletion job: replace `deleteFromCloudinary` with `deleteImageFolder`.
+
+---
+
+## 7. Migration Script: `scripts/migrateCloudinaryToLocal.js`
+
+A safe, idempotent Node.js script:
+1. Connects to database via Prisma.
+2. Scans for existing records with Cloudinary URLs in:
+   - `Advocate.profilePhotoUrl` & `Advocate.officePhotoUrl`
+   - `AdvocateRegistrationSession.profilePhotoUrl` & `officePhotoUrl`
+   - `User.photo`
+   - `Blog.imageUrl`
+   - `UserRight.imageUrl`
+3. For each asset:
+   - Fetches image buffer over HTTPS from Cloudinary.
+   - Passes buffer to `imageStorage.service.js`.
+   - Generates `small.avif` and `medium.avif` locally.
+   - Updates record in Prisma with the new local path and new local `imageId`.
+4. Produces a detailed report:
+   - Total scanned
+   - Total successfully migrated
+   - Failed items (if any) with reasons.
+
+---
+
+## 8. Step-by-Step Implementation Sequence
+
+1. **Phase 1: Dependencies & Base Setup**
+   - Install `sharp` dependency in `package.json`.
+   - Ensure `uploads/images/` directory is created and `.gitkeep` added.
+   - Add `/uploads` static route in `src/server.js`.
+
+2. **Phase 2: Core Image Service Implementation**
+   - Create `src/services/imageStorage.service.js` with AVIF dual-variant generation and folder deletion logic.
+   - Add unit test verification for dimension, compression, and file size limits (~4-5KB for small, ~10-15KB for medium).
+
+3. **Phase 3: Controller & Service Refactoring**
+   - Update Advocate registration & office photo routes.
+   - Update Advocate profile photo edit & draft routes.
+   - Update Blog and User Right controllers.
+   - Update Account Deletion cleanup routine.
+
+4. **Phase 4: Migration Script Creation & Verification**
+   - Create `scripts/migrateCloudinaryToLocal.js`.
+   - Test script on isolated records.
+
+5. **Phase 5: Validation & Deployment Guide**
+   - Test image upload via API endpoints.
+   - Document Nginx configuration snippet for Hostinger VPS deployment.
+
+---
+
+## 9. Safety & Rollback Plan
+
+- **Non-destructive:** Cloudinary files are NOT deleted during the migration script run until verified.
+- **Rollback:** If any issue occurs, the database backup and Cloudinary assets remain intact; changing the static URL base or reverting the controller calls restores Cloudinary instantly.

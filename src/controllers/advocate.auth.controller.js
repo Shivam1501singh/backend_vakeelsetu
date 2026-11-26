@@ -1,7 +1,7 @@
 import * as authService from '../services/auth.service.js';
 import * as advocateValidator from '../validators/advocate.validator.js';
 import { signToken, sendTokenCookie, clearTokenCookie } from '../utils/jwt.js';
-import { uploadBufferToCloudinary } from '../services/cloudinary.service.js';
+import { processAndSaveImage } from '../services/imageStorage.service.js';
 import bcrypt from 'bcryptjs';
 import prisma from '../lib/prisma.js';
 import { validateUploadedPhoto } from './advocate.profile.controller.js';
@@ -85,12 +85,18 @@ export const uploadProfilePhoto = async (req, res, next) => {
       });
     }
 
-    const { url, publicId } = await uploadBufferToCloudinary(req.file.buffer);
+    const { url, publicId, smallUrl, mediumUrl } = await processAndSaveImage({
+      buffer: req.file.buffer,
+      category: 'AVATAR',
+      req
+    });
 
     return res.status(200).json({
       success: true,
       profilePhotoUrl: url,
-      profilePhotoPublicId: publicId
+      profilePhotoPublicId: publicId,
+      smallPhotoUrl: smallUrl,
+      mediumPhotoUrl: mediumUrl
     });
   } catch (error) {
     next(error);

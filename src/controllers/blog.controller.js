@@ -2,7 +2,7 @@ import prisma from '../lib/prisma.js';
 import bcrypt from 'bcryptjs';
 import { signToken, sendTokenCookie } from '../utils/jwt.js';
 import * as blogValidator from '../validators/blog.validator.js';
-import { uploadBufferToCloudinary, deleteFromCloudinary } from '../services/cloudinary.service.js';
+import { processAndSaveImage, deleteImageFolder } from '../services/imageStorage.service.js';
 
 /**
  * Helper to format/map blog response object for API, returning SEO fields & array formatting for keywords
@@ -162,7 +162,11 @@ export const createBlog = async (req, res, next) => {
       });
     }
 
-    const { url, publicId } = await uploadBufferToCloudinary(req.file.buffer);
+    const { url, publicId } = await processAndSaveImage({
+      buffer: req.file.buffer,
+      category: 'CONTENT',
+      req
+    });
 
     try {
       const slug = await generateSlug(validated.title);
@@ -202,7 +206,7 @@ export const createBlog = async (req, res, next) => {
         blog: mapBlogResponse(blog)
       });
     } catch (dbError) {
-      await deleteFromCloudinary(publicId);
+      await deleteImageFolder(publicId).catch(() => {});
       throw dbError;
     }
   } catch (error) {
@@ -356,7 +360,11 @@ export const updateBlog = async (req, res, next) => {
         });
       }
 
-      const uploadRes = await uploadBufferToCloudinary(req.file.buffer);
+      const uploadRes = await processAndSaveImage({
+        buffer: req.file.buffer,
+        category: 'CONTENT',
+        req
+      });
       updateData.image = uploadRes.url;
       updateData.imagePublicId = uploadRes.publicId;
       newPublicId = uploadRes.publicId;
@@ -372,7 +380,7 @@ export const updateBlog = async (req, res, next) => {
       });
 
       if (newPublicId && oldPublicId) {
-        await deleteFromCloudinary(oldPublicId);
+        await deleteImageFolder(oldPublicId).catch(() => {});
       }
 
       return res.status(200).json({
@@ -382,7 +390,7 @@ export const updateBlog = async (req, res, next) => {
       });
     } catch (dbError) {
       if (newPublicId) {
-        await deleteFromCloudinary(newPublicId);
+        await deleteImageFolder(newPublicId).catch(() => {});
       }
       throw dbError;
     }
@@ -433,7 +441,7 @@ export const deleteBlog = async (req, res, next) => {
     });
 
     if (imagePublicId) {
-      await deleteFromCloudinary(imagePublicId);
+      await deleteImageFolder(imagePublicId).catch(() => {});
     }
 
     return res.status(200).json({

@@ -8,7 +8,7 @@ import bcrypt from 'bcryptjs';
 import { encrypt, decrypt } from '../utils/crypto.js';
 import { initiateAadhaarDigiLocker, fetchAadhaarDetails } from './idspay.service.js';
 import * as aadhaarOtp from './aadhaarOtp/index.js';
-import { uploadBufferToCloudinary, deleteFromCloudinary } from './cloudinary.service.js';
+import { processAndSaveImage, deleteImageFolder } from './imageStorage.service.js';
 import { formatPricingSummary } from './advocateBooking/pricing.js';
 
 // Cooldown map for Aadhaar OTP generation (60 seconds per registration session)
@@ -304,7 +304,7 @@ export const saveAdvocateRegistrationOfficeDetails = async ({
   let oldPublicIdToDelete = null;
 
   if (file) {
-    const uploaded = await uploadBufferToCloudinary(file.buffer);
+    const uploaded = await processAndSaveImage({ buffer: file.buffer, category: 'OFFICE' });
     photoUrl = uploaded.url;
     if (session.officePhotoPublicId) {
       oldPublicIdToDelete = session.officePhotoPublicId;
@@ -333,7 +333,7 @@ export const saveAdvocateRegistrationOfficeDetails = async ({
     });
 
     if (oldPublicIdToDelete) {
-      await deleteFromCloudinary(oldPublicIdToDelete).catch(() => {});
+      await deleteImageFolder(oldPublicIdToDelete).catch(() => {});
     }
 
     return {
@@ -347,7 +347,7 @@ export const saveAdvocateRegistrationOfficeDetails = async ({
     };
   } catch (dbError) {
     if (file && photoPublicId) {
-      await deleteFromCloudinary(photoPublicId).catch(() => {});
+      await deleteImageFolder(photoPublicId).catch(() => {});
     }
     throw dbError;
   }
