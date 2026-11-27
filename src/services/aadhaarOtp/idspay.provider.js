@@ -8,17 +8,17 @@ import dotenv from 'dotenv';
 
 const getRequiredEnv = () => {
   let baseUrl = process.env.IDSPAY_BASE_URL;
-  let apiId = process.env.IDSPAY_API_ID;
+  let apiId = process.env.IDSPAY_API_ID || process.env.IDSPAY_CLIENT_ID;
   let apiKey = process.env.IDSPAY_API_KEY;
-  let tokenId = process.env.IDSPAY_TOKEN_ID;
+  let tokenId = process.env.IDSPAY_TOKEN_ID || process.env.IDSPAY_CLIENT_SECRET;
 
   // If any required var is missing in memory, reload from .env in case it was updated while server was running
   if (process.env.NODE_ENV !== 'test' && (!baseUrl || !apiId || !apiKey || !tokenId)) {
     dotenv.config({ override: true });
     baseUrl = process.env.IDSPAY_BASE_URL;
-    apiId = process.env.IDSPAY_API_ID;
+    apiId = process.env.IDSPAY_API_ID || process.env.IDSPAY_CLIENT_ID;
     apiKey = process.env.IDSPAY_API_KEY;
-    tokenId = process.env.IDSPAY_TOKEN_ID;
+    tokenId = process.env.IDSPAY_TOKEN_ID || process.env.IDSPAY_CLIENT_SECRET;
   }
 
   const path = process.env.IDSPAY_AADHAAR_OTP_PATH || '/srv2/digital-kyc/aadhar/auto-verification';
@@ -26,9 +26,9 @@ const getRequiredEnv = () => {
 
   const required = [
     { name: 'IDSPAY_BASE_URL', val: baseUrl },
-    { name: 'IDSPAY_API_ID', val: apiId },
+    { name: 'IDSPAY_CLIENT_ID / IDSPAY_API_ID', val: apiId },
     { name: 'IDSPAY_API_KEY', val: apiKey },
-    { name: 'IDSPAY_TOKEN_ID', val: tokenId }
+    { name: 'IDSPAY_CLIENT_SECRET / IDSPAY_TOKEN_ID', val: tokenId }
   ];
 
   for (const item of required) {
