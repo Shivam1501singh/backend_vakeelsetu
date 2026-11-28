@@ -4,7 +4,8 @@ import { getRazorpayClient } from '../config/razorpay.js';
 import {
   sendAdvocateBookingConfirmationEmails,
   sendConsultancyConfirmationEmail,
-  sendTestResponseSheetEmail
+  sendTestResponseSheetEmail,
+  sendHelpRequestAcknowledgementEmail
 } from '../services/email.service.js';
 import { processTestCronJobs } from '../services/advocateTest.service.js';
 
@@ -160,6 +161,33 @@ export const reconcilePaymentsCron = async (req, res) => {
       }
     }
 
+    // Retry unsent help request acknowledgement emails in the last 48h
+    let helpRequestEmailsRetriedCount = 0;
+    try {
+      const pendingHelpRequests = await prisma.helpRequest.findMany({
+        where: {
+          createdAt: { gte: fortyEightHoursAgo },
+          acknowledgementEmailSentAt: null
+        },
+        select: { id: true },
+        take: 25,
+        orderBy: { createdAt: 'asc' }
+      });
+
+      for (const hr of pendingHelpRequests) {
+        try {
+          const res = await sendHelpRequestAcknowledgementEmail(hr.id);
+          if (res && res.success) {
+            helpRequestEmailsRetriedCount++;
+          }
+        } catch (hrErr) {
+          errors.push({ helpRequestId: hr.id, error: hrErr.message });
+        }
+      }
+    } catch (hrFindErr) {
+      errors.push({ task: 'help_request_retry_cron', error: hrFindErr.message });
+    }
+
     // Process Advocate Qualification Test background jobs (send due invites, expire links, auto-submit)
     let testCronResults = { invitesSent: 0, linksExpired: 0, attemptsAutoSubmitted: 0, errors: [] };
     try {
@@ -178,6 +206,7 @@ export const reconcilePaymentsCron = async (req, res) => {
       emailsRetriedCount,
       consultancyEmailsRetriedCount,
       testResponseSheetsRetried: testResponseSheetsRetriedCount,
+      helpRequestEmailsRetried: helpRequestEmailsRetriedCount,
       testInvitesSent: testCronResults.invitesSent,
       testLinksExpired: testCronResults.linksExpired,
       testAttemptsAutoSubmitted: testCronResults.attemptsAutoSubmitted,

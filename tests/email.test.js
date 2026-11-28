@@ -27,6 +27,11 @@ import {
   advocateTestResponseSheetTemplate
 } from '../src/templates/advocateAccountEmail.template.js';
 import {
+  helpRequestEmailTemplate,
+  maskPhone,
+  truncateConcern
+} from '../src/templates/helpRequestEmail.template.js';
+import {
   sendEmailOtp,
   sendBrandedMail,
   sendAdvocateBookingConfirmationEmails,
@@ -34,9 +39,14 @@ import {
   sendTestResponseSheetEmail,
   parseAdvocateTestSheetBcc,
   resetBccWarningState,
+  sendHelpRequestAcknowledgementEmail,
+  parseHelpRequestBcc,
+  resetHelpRequestBccWarningState,
   setTransporter,
   maskEmail
 } from '../src/services/email.service.js';
+import { createRequest } from '../src/controllers/help.controller.js';
+import { reconcilePaymentsCron } from '../src/controllers/paymentCron.controller.js';
 import prisma from '../src/lib/prisma.js';
 
 describe('1. Email Layout & Helpers', () => {
@@ -951,3 +961,392 @@ describe('5. Test Response Sheet Email & BCC', () => {
     prisma.advocateTestAttempt.findUnique = origFindUnique;
   });
 });
+
+describe('6. Help Request Acknowledgement Email & Flow', () => {
+  beforeEach(() => {
+    resetHelpRequestBccWarningState();
+    delete process.env.HELP_REQUEST_BCC;
+  });
+
+  it('6.1 Template: "Your concern" label, escaping, truncation, phone masking, empty rows hidden, no links', () => {
+    const longConcern = 'A'.repeat(1200);
+    const mockRequest = {
+      referenceId: 'VSH-5SVQFS',
+      name: '<script>alert("hacked")</script>',
+      email: 'kishori@example.com',
+      phoneNumber: '8812345668',
+      concern: `<img src=x onerror=alert(1)> ${longConcern}`,
+      createdAt: new Date('2026-11-28T11:54:00.000Z') // 5:24 PM IST
+    };
+
+    const { subject, html, text } = helpRequestEmailTemplate({ helpRequest: mockRequest });
+
+    // Subject & Preheader
+    assert.equal(subject, "We've received your request – VSH-5SVQFS");
+    assert.ok(html.includes("We&#39;ve received your request – VSH-5SVQFS") || html.includes("We've received your request – VSH-5SVQFS"));
+    assert.ok(html.includes('Your reference ID is VSH-5SVQFS. Our team will get back to you soon.'));
+
+    // Pill & Heading
+    assert.ok(html.includes('Request received'));
+    assert.ok(html.includes("We&#39;ve received your help request") || html.includes("We've received your help request"));
+
+    // Label is "Your concern" (NOT "Your message")
+    assert.ok(html.includes('Your concern'));
+    assert.ok(!html.includes('Your message'));
+
+    // XSS Escaping
+    assert.ok(html.includes('&lt;script&gt;alert(&quot;hacked&quot;)&lt;/script&gt;'));
+    assert.ok(!html.includes('<script>'));
+    assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt;'));
+    assert.ok(!html.includes('<img src=x'));
+
+    // Truncation at 1000 chars + ellipsis
+    const truncatedText = truncateConcern(`<img src=x onerror=alert(1)> ${longConcern}`);
+    assert.equal(truncatedText.length, 1001); // 1000 chars + '…'
+    assert.ok(truncatedText.endsWith('…'));
+    assert.ok(html.includes('…'));
+
+    // Phone masking: +91 88XXXXXX68
+    assert.equal(maskPhone('8812345668'), '+91 88XXXXXX68');
+    assert.ok(html.includes('+91 88XXXXXX68'));
+
+    // Empty rows hidden: no Subject row because category/subject was omitted
+    assert.ok(!html.includes('Subject'));
+
+    // Status chip present
+    assert.ok(html.includes('Received'));
+
+    // No user-generated action buttons or links
+    assert.ok(!html.includes('href="http')); // No link inside concern or dynamic content
+
+    // Monospace reference ID & Submitted on IST
+    assert.ok(html.includes('VSH-5SVQFS'));
+    assert.ok(html.includes('28 Nov 2026'));
+    assert.ok(html.includes('5:24 PM IST'));
+
+    // Plain text version
+    assert.ok(text.includes('Reference ID: VSH-5SVQFS'));
+    assert.ok(text.includes('Your concern:'));
+    assert.ok(text.includes('+91 88XXXXXX68'));
+  });
+
+  it('6.2 Template: Salutation handles absent name with "Hello," fallback', () => {
+    const mockRequest = {
+      referenceId: 'VSH-123456',
+      name: '',
+      email: 'guest@example.com',
+      phoneNumber: '9876543210',
+      concern: 'General inquiry about legal services.'
+    };
+
+    const { html, text } = helpRequestEmailTemplate({ helpRequest: mockRequest });
+    assert.ok(html.includes('Hello,<br/>Thank you for reaching out'));
+    assert.ok(!html.includes('Dear ,'));
+    assert.ok(text.includes('Hello,'));
+  });
+
+  it('6.3 BCC Parsing: extracts valid, ignores invalid with warning, empty returns []', () => {
+    // Empty
+    assert.deepEqual(parseHelpRequestBcc(''), []);
+    assert.deepEqual(parseHelpRequestBcc(undefined), []);
+
+    // Valid only
+    const validRaw = 'audit@vakeelsetu.com, support-lead@vakeelsetu.com';
+    assert.deepEqual(parseHelpRequestBcc(validRaw), ['audit@vakeelsetu.com', 'support-lead@vakeelsetu.com']);
+
+    // Mixed with invalid
+    let warned = false;
+    const origWarn = console.warn;
+    console.warn = (msg) => {
+      if (msg.includes('HELP_REQUEST_BCC')) warned = true;
+    };
+
+    resetHelpRequestBccWarningState();
+    const mixed = parseHelpRequestBcc('valid@vakeelsetu.com, invalid-email, second@vakeelsetu.com');
+    assert.deepEqual(mixed, ['valid@vakeelsetu.com', 'second@vakeelsetu.com']);
+    assert.equal(warned, true);
+
+    // Second call does NOT repeat warning
+    let warnedSecondTime = false;
+    console.warn = (msg) => {
+      if (msg.includes('HELP_REQUEST_BCC')) warnedSecondTime = true;
+    };
+    parseHelpRequestBcc('valid@vakeelsetu.com, invalid-again');
+    assert.equal(warnedSecondTime, false);
+
+    console.warn = origWarn;
+  });
+
+  it('6.4 Once-Only Claim: atomic claim prevents duplicate sends on double call', async () => {
+    let sentCount = 0;
+    setTransporter({
+      sendMail: async (options) => {
+        sentCount++;
+        return { messageId: `help-msg-${sentCount}` };
+      }
+    });
+
+    const mockRequest = {
+      id: 'hr-claim-1',
+      referenceId: 'VSH-CLAIM1',
+      name: 'Kishori',
+      email: 'kishori@example.com',
+      phoneNumber: '9876543210',
+      concern: 'Need advice on tenancy law.'
+    };
+
+    let claimed = false;
+    const origFindUnique = prisma.helpRequest.findUnique;
+    const origCount = prisma.helpRequest.count;
+    const origUpdateMany = prisma.helpRequest.updateMany;
+
+    prisma.helpRequest.findUnique = async () => mockRequest;
+    prisma.helpRequest.count = async () => 0; // abuse limit check
+    prisma.helpRequest.updateMany = async ({ where }) => {
+      if (!claimed && where.acknowledgementEmailSentAt === null) {
+        claimed = true;
+        return { count: 1 };
+      }
+      return { count: 0 }; // second call gets 0
+    };
+
+    // First call succeeds
+    const firstRes = await sendHelpRequestAcknowledgementEmail('hr-claim-1');
+    assert.equal(firstRes.success, true);
+    assert.equal(sentCount, 1);
+
+    // Second call is skipped cleanly
+    const secondRes = await sendHelpRequestAcknowledgementEmail('hr-claim-1');
+    assert.equal(secondRes.success, true);
+    assert.equal(secondRes.message, 'Already sent or claimed');
+    assert.equal(sentCount, 1); // Not sent again
+
+    prisma.helpRequest.findUnique = origFindUnique;
+    prisma.helpRequest.count = origCount;
+    prisma.helpRequest.updateMany = origUpdateMany;
+  });
+
+  it('6.5 Failure Rollback: resets timestamp to null on transporter error', async () => {
+    setTransporter({
+      sendMail: async () => {
+        throw new Error('SMTP Timeout Error');
+      }
+    });
+
+    const mockRequest = {
+      id: 'hr-fail-reset',
+      referenceId: 'VSH-FAIL1',
+      name: 'User',
+      email: 'user@example.com',
+      phoneNumber: '9876543210',
+      concern: 'Test concern text that must NEVER appear in logs'
+    };
+
+    let resetToNull = false;
+    const origFindUnique = prisma.helpRequest.findUnique;
+    const origCount = prisma.helpRequest.count;
+    const origUpdateMany = prisma.helpRequest.updateMany;
+    const origUpdate = prisma.helpRequest.update;
+
+    prisma.helpRequest.findUnique = async () => mockRequest;
+    prisma.helpRequest.count = async () => 0;
+    prisma.helpRequest.updateMany = async () => ({ count: 1 });
+    prisma.helpRequest.update = async ({ data }) => {
+      if (data.acknowledgementEmailSentAt === null) {
+        resetToNull = true;
+      }
+      return {};
+    };
+
+    const res = await sendHelpRequestAcknowledgementEmail('hr-fail-reset');
+    assert.equal(res.success, false);
+    assert.equal(resetToNull, true);
+
+    prisma.helpRequest.findUnique = origFindUnique;
+    prisma.helpRequest.count = origCount;
+    prisma.helpRequest.updateMany = origUpdateMany;
+    prisma.helpRequest.update = origUpdate;
+  });
+
+  it('6.6 Abuse Limit: skips email if recipient got 3 acknowledgement emails in last 60m', async () => {
+    let sendMailCalled = false;
+    setTransporter({
+      sendMail: async () => {
+        sendMailCalled = true;
+        return { messageId: 'msg-1' };
+      }
+    });
+
+    const mockRequest = {
+      id: 'hr-abuse-test',
+      referenceId: 'VSH-ABUSE1',
+      name: 'Spam User',
+      email: 'spammer@example.com',
+      phoneNumber: '9876543210',
+      concern: 'Spamming repeatedly'
+    };
+
+    const origFindUnique = prisma.helpRequest.findUnique;
+    const origCount = prisma.helpRequest.count;
+
+    prisma.helpRequest.findUnique = async () => mockRequest;
+    prisma.helpRequest.count = async () => 3; // 3 already sent in last 60 minutes!
+
+    const res = await sendHelpRequestAcknowledgementEmail('hr-abuse-test');
+    assert.equal(res.success, false);
+    assert.equal(res.message, 'Abuse limit reached');
+    assert.equal(sendMailCalled, false);
+
+    prisma.helpRequest.findUnique = origFindUnique;
+    prisma.helpRequest.count = origCount;
+  });
+
+  it('6.7 Trigger Resilience: createRequest controller returns 201 even when email service fails', async () => {
+    // Stub transporter to fail
+    setTransporter({
+      sendMail: async () => {
+        throw new Error('Network failure');
+      }
+    });
+
+    const origCreate = prisma.helpRequest.create;
+    const origFindUnique = prisma.helpRequest.findUnique;
+    const origCount = prisma.helpRequest.count;
+    const origUpdateMany = prisma.helpRequest.updateMany;
+    const origUpdate = prisma.helpRequest.update;
+
+    const mockSaved = {
+      id: 'hr-created-1',
+      referenceId: 'VSH-NEW123',
+      name: 'Rohan',
+      email: 'rohan@example.com',
+      phoneNumber: '9876543210',
+      concern: 'Need help with consumer court complaint.'
+    };
+
+    prisma.helpRequest.findUnique = async () => null; // for collision check and lookup
+    prisma.helpRequest.create = async () => mockSaved;
+    prisma.helpRequest.count = async () => 0;
+    prisma.helpRequest.updateMany = async () => ({ count: 1 });
+    prisma.helpRequest.update = async () => ({});
+
+    let statusCode = null;
+    let jsonResponse = null;
+
+    const req = {
+      body: {
+        name: 'Rohan',
+        email: 'rohan@example.com',
+        phoneNumber: '9876543210',
+        concern: 'Need help with consumer court complaint.'
+      }
+    };
+    const res = {
+      status: (code) => {
+        statusCode = code;
+        return {
+          json: (data) => {
+            jsonResponse = data;
+          }
+        };
+      }
+    };
+    const next = (err) => {
+      assert.fail(`next() should not be called on email failure: ${err?.message}`);
+    };
+
+    await createRequest(req, res, next);
+
+    assert.equal(statusCode, 201);
+    assert.equal(jsonResponse.success, true);
+    assert.equal(jsonResponse.message, 'Your help request has been submitted successfully.');
+    assert.ok(jsonResponse.referenceId);
+
+    prisma.helpRequest.create = origCreate;
+    prisma.helpRequest.findUnique = origFindUnique;
+    prisma.helpRequest.count = origCount;
+    prisma.helpRequest.updateMany = origUpdateMany;
+    prisma.helpRequest.update = origUpdate;
+  });
+
+  it('6.8 Cron Retry: reconcilePaymentsCron retries unsent help requests created in last 48h', async () => {
+    process.env.CRON_SECRET = 'test-cron-secret';
+
+    let retriedHelpRequestId = null;
+    setTransporter({
+      sendMail: async () => ({ messageId: 'cron-help-retry' })
+    });
+
+    const origFindMany = prisma.helpRequest.findMany;
+    const origFindUnique = prisma.helpRequest.findUnique;
+    const origCount = prisma.helpRequest.count;
+    const origUpdateMany = prisma.helpRequest.updateMany;
+
+    // Payment mocks
+    const origPaymentFindMany = prisma.payment.findMany;
+    const origAdvBookingFindMany = prisma.advocateBooking.findMany;
+    const origConsultancyFindMany = prisma.consultancyRequest.findMany;
+    const origTestAttemptFindMany = prisma.advocateTestAttempt.findMany;
+
+    prisma.payment.findMany = async () => [];
+    prisma.advocateBooking.findMany = async () => [];
+    prisma.consultancyRequest.findMany = async () => [];
+    prisma.advocateTestAttempt.findMany = async () => [];
+
+    prisma.helpRequest.findMany = async ({ where }) => {
+      if (where.acknowledgementEmailSentAt === null) {
+        return [{ id: 'hr-retry-48h' }];
+      }
+      return [];
+    };
+    prisma.helpRequest.findUnique = async ({ where }) => ({
+      id: where.id,
+      referenceId: 'VSH-RETRY48',
+      name: 'Retry User',
+      email: 'retry@example.com',
+      phoneNumber: '9876543210',
+      concern: 'Retry concern'
+    });
+    prisma.helpRequest.count = async () => 0; // abuse limit check passes
+    prisma.helpRequest.updateMany = async () => {
+      retriedHelpRequestId = 'hr-retry-48h';
+      return { count: 1 };
+    };
+
+    let statusCode = null;
+    let jsonResponse = null;
+
+    const req = {
+      headers: {
+        authorization: 'Bearer test-cron-secret'
+      }
+    };
+    const res = {
+      status: (code) => {
+        statusCode = code;
+        return {
+          json: (data) => {
+            jsonResponse = data;
+          }
+        };
+      }
+    };
+
+    await reconcilePaymentsCron(req, res);
+
+    assert.equal(statusCode, 200);
+    assert.equal(jsonResponse.success, true);
+    assert.equal(jsonResponse.helpRequestEmailsRetried, 1);
+    assert.equal(retriedHelpRequestId, 'hr-retry-48h');
+
+    prisma.helpRequest.findMany = origFindMany;
+    prisma.helpRequest.findUnique = origFindUnique;
+    prisma.helpRequest.count = origCount;
+    prisma.helpRequest.updateMany = origUpdateMany;
+    prisma.payment.findMany = origPaymentFindMany;
+    prisma.advocateBooking.findMany = origAdvBookingFindMany;
+    prisma.consultancyRequest.findMany = origConsultancyFindMany;
+    prisma.advocateTestAttempt.findMany = origTestAttemptFindMany;
+  });
+});
+

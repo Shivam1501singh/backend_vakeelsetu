@@ -377,6 +377,8 @@ model HelpRequest {
   respondedByType String?
   respondedByName String?
 
+  acknowledgementEmailSentAt DateTime?
+
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
   respondedAt  DateTime?

@@ -12,6 +12,7 @@ import {
   advocateTestLinkTemplate,
   advocateTestResponseSheetTemplate
 } from '../templates/advocateAccountEmail.template.js';
+import { helpRequestEmailTemplate } from '../templates/helpRequestEmail.template.js';
 import { getTestConfig } from './advocateTest.service.js';
 import {
   sendPushNotification,
@@ -729,6 +730,155 @@ export const sendTestResponseSheetEmail = async (attemptId) => {
     return { success: false, message: error.message };
   }
 };
+
+let helpRequestBccWarningLogged = false;
+
+export const resetHelpRequestBccWarningState = () => {
+  helpRequestBccWarningLogged = false;
+};
+
+/**
+ * Parses and validates comma-separated BCC emails from HELP_REQUEST_BCC env var.
+ * Emits a single warning log if invalid emails are detected.
+ *
+ * @param {string} [raw=process.env.HELP_REQUEST_BCC]
+ * @returns {string[]}
+ */
+export const parseHelpRequestBcc = (raw = process.env.HELP_REQUEST_BCC) => {
+  if (!raw || typeof raw !== 'string' || !raw.trim()) {
+    return [];
+  }
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const valid = [];
+  const invalid = [];
+
+  raw.split(',').forEach((entry) => {
+    const trimmed = entry.trim();
+    if (!trimmed) return;
+    if (emailRegex.test(trimmed)) {
+      valid.push(trimmed);
+    } else {
+      invalid.push(trimmed);
+    }
+  });
+
+  if (invalid.length > 0 && !helpRequestBccWarningLogged) {
+    helpRequestBccWarningLogged = true;
+    console.warn(`[Email Service] Invalid BCC email(s) ignored in HELP_REQUEST_BCC: ${invalid.join(', ')}`);
+  }
+
+  return valid;
+};
+
+/**
+ * Sends Help Request Acknowledgement email to the person who submitted the help request.
+ * Exactly-once delivery via atomic row claim on HelpRequest.
+ * Abuse limit: Skips if recipient received >= 3 emails in last 60 minutes.
+ * Never throws, catches errors and returns { success, message }.
+ *
+ * @param {string} helpRequestId UUID of HelpRequest
+ * @returns {Promise<{ success: boolean, message?: string }>}
+ */
+export const sendHelpRequestAcknowledgementEmail = async (helpRequestId) => {
+  if (!helpRequestId) {
+    return { success: false, message: 'helpRequestId is required' };
+  }
+
+  let recipientEmail = '';
+  let referenceId = '';
+  let bccCount = 0;
+
+  try {
+    const helpRequest = await prisma.helpRequest.findUnique({
+      where: { id: helpRequestId }
+    });
+
+    if (!helpRequest) {
+      console.warn(`[Email Service] HelpRequest ${helpRequestId} not found.`);
+      return { success: false, message: 'Help request not found' };
+    }
+
+    referenceId = helpRequest.referenceId;
+    recipientEmail = (helpRequest.email || '').trim();
+
+    if (!recipientEmail) {
+      console.info(`[Email Service] Skipping help request acknowledgement email for request ${helpRequestId} (${referenceId}): no email on record.`);
+      return { success: true, message: 'No email on record' };
+    }
+
+    // Abuse limit check: max 3 acknowledgement emails to the same recipient in last 60 minutes
+    const sixtyMinutesAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const recentSentCount = await prisma.helpRequest.count({
+      where: {
+        email: recipientEmail,
+        acknowledgementEmailSentAt: { gte: sixtyMinutesAgo }
+      }
+    });
+
+    if (recentSentCount >= 3) {
+      console.warn(
+        `[Email Service] HELP_REQUEST_ACKNOWLEDGEMENT skipped for ${maskEmail(recipientEmail)} | referenceId: ${referenceId}: abuse limit reached (3 emails in last 60m)`
+      );
+      return { success: false, message: 'Abuse limit reached' };
+    }
+
+    // Atomic claim: exactly-once delivery
+    const claim = await prisma.helpRequest.updateMany({
+      where: { id: helpRequestId, acknowledgementEmailSentAt: null },
+      data: { acknowledgementEmailSentAt: new Date() }
+    });
+
+    if (claim.count === 0) {
+      return { success: true, message: 'Already sent or claimed' };
+    }
+
+    const bccList = parseHelpRequestBcc();
+    bccCount = bccList.length;
+
+    const { subject, html, text, attachments } = helpRequestEmailTemplate({
+      helpRequest
+    });
+
+    const withTimeout = (promise, ms = 8000) => {
+      let timer;
+      const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Help request acknowledgement email timed out after ${ms}ms`)), ms);
+      });
+      return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+    };
+
+    await withTimeout(
+      sendBrandedMail({
+        to: recipientEmail,
+        bcc: bccList.length > 0 ? bccList : undefined,
+        subject,
+        html,
+        text,
+        attachments,
+        emailType: 'HELP_REQUEST_ACKNOWLEDGEMENT'
+      }),
+      8000
+    );
+
+    console.log(
+      `[Email Service] HELP_REQUEST_ACKNOWLEDGEMENT sent to ${maskEmail(recipientEmail)} | referenceId: ${referenceId} | bccCount: ${bccCount}`
+    );
+    return { success: true };
+  } catch (error) {
+    // On failure/timeout: reset acknowledgementEmailSentAt to null so cron can retry
+    await prisma.helpRequest.update({
+      where: { id: helpRequestId },
+      data: { acknowledgementEmailSentAt: null }
+    }).catch(() => {});
+
+    console.error(
+      `[Email Service] HELP_REQUEST_ACKNOWLEDGEMENT failed for ${maskEmail(recipientEmail)} | referenceId: ${referenceId} | bccCount: ${bccCount}:`,
+      error.message
+    );
+    return { success: false, message: error.message };
+  }
+};
+
 
 
 

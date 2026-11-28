@@ -1,16 +1,26 @@
 import * as helpService from '../services/help.service.js';
 import * as helpValidator from '../validators/help.validator.js';
+import { sendHelpRequestAcknowledgementEmail } from '../services/email.service.js';
 
 export const createRequest = async (req, res, next) => {
   try {
     const validated = helpValidator.helpRequestSchema.parse(req.body);
     
+    const email = (validated.email || req.user?.email || '').toLowerCase().trim();
+
     const helpRequest = await helpService.createHelpRequest({
       name: validated.name,
-      email: validated.email,
+      email,
       phoneNumber: validated.phoneNumber,
       concern: validated.concern
     });
+
+    // Send acknowledgement email (with internal 8s timeout, non-blocking to response)
+    try {
+      await sendHelpRequestAcknowledgementEmail(helpRequest.id);
+    } catch (emailErr) {
+      console.error('[Help Controller] Non-fatal error sending acknowledgement email:', emailErr.message);
+    }
 
     return res.status(201).json({
       success: true,

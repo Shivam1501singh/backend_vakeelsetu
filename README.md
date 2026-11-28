@@ -1156,6 +1156,30 @@ Help Request reference IDs can be customized via environment variables without r
   }
   ```
 
+##### Acknowledgement Email
+- **When & Recipient:** Sent immediately after a help request is successfully created to the email entered in the request form. If submitted by a logged-in user without an explicit email, falls back to their account email; skipped if no email is on record. Not sent on validation errors or status updates.
+- **Email Content:**
+  - **Subject:** `We've received your request – {referenceId}`
+  - **Preheader:** `Your reference ID is {referenceId}. Our team will get back to you soon.`
+  - **Status Pill:** `✓ Request received`
+  - **Heading & Greeting:** `We've received your help request` + `Dear {name},` (or `Hello,`)
+  - **Dark Box:** Large monospace Reference ID + Submitted timestamp in IST (`DD Mon YYYY · H:MM AM/PM IST`).
+  - **Details Table:** Name, Email, Masked Phone (`+91 88XXXXXX68`), and `Received` status chip.
+  - **"Your concern" Box:** User-submitted concern text, HTML-escaped, line breaks preserved, truncated to 1000 characters with `…` if longer.
+  - **Tracking Line:** `Please keep your reference ID {referenceId} for any follow-up. You can simply log in to VakeelSetu and track your request.`
+  - **Plain-Text Version:** Formatted text fallback for text-only email clients.
+- **BCC Configuration:** Optional `HELP_REQUEST_BCC` environment variable (comma-separated list of email addresses). Invalid addresses are ignored with a single startup/call warning.
+- **Abuse Limit:** If the recipient email has already received **3 help acknowledgement emails in the last 60 minutes**, email sending is skipped (warning logged) while the help request is saved normally.
+- **Exactly-Once Delivery & Retry:**
+  - Sent with an atomic database claim on `HelpRequest.acknowledgementEmailSentAt`.
+  - Non-blocking 8-second timeout: failure/timeout resets the timestamp to `null` so the reconcile cron can retry.
+  - Background reconcile cron (`GET /api/internal/cron/payments-reconcile`) automatically retries unsent help request acknowledgements created in the last 48 hours.
+- **Manual Local Testing:**
+  1. Set up SMTP or test credentials in `.env`.
+  2. Send `POST /api/help` with `{ "name": "Test User", "email": "your-email@example.com", "phoneNumber": "9876543210", "concern": "Testing acknowledgement email" }`.
+  3. Verify `201 Created` with a `referenceId` and check recipient inbox (or run `node scripts/preview-emails.js` to inspect `tmp/email-previews/help-request-received.html`).
+
+
 #### B. Public Lookup Request Status
 - **Method:** `POST`
 - **Endpoint:** `/api/help/lookup`

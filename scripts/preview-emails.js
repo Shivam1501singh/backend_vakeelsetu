@@ -11,6 +11,7 @@ import {
   profileUnderReviewTemplate,
   advocateTestResponseSheetTemplate
 } from '../src/templates/advocateAccountEmail.template.js';
+import { helpRequestEmailTemplate } from '../src/templates/helpRequestEmail.template.js';
 
 const outputDir = path.resolve(process.cwd(), 'tmp/email-previews');
 fs.mkdirSync(outputDir, { recursive: true });
@@ -240,6 +241,29 @@ const testSheetFail = advocateTestResponseSheetTemplate({
   durationMinutes: 20
 });
 
+// 7. Dummy Help Request Data (Long concern to demonstrate 1000 char truncation)
+const dummyLongConcern = 'I need urgent legal assistance regarding property dispute and succession certificate in Noida. ' +
+  'The ancestral property involves multiple legal heirs and conflicting registered partition deeds executed between 1998 and 2005. ' +
+  'We recently received a formal notice from the local revenue authority requesting verification of title deeds, mutation records, municipal tax receipts, and registered wills. ' +
+  'There is also an ongoing civil suit in the district court where an ex-parte interim injunction was granted last month without notice to our family members. ' +
+  'We need a verified advocate specializing in Uttar Pradesh land revenue laws, civil procedure code, and high court writ jurisdiction to guide our family on filing a detailed written statement and applying to set aside the ex-parte order. ' +
+  'Furthermore, the opposite parties have threatened to obstruct peaceful possession and begin unauthorized boundary construction on plot number 42A. ' +
+  'Please provide a callback with consultation fee estimates, list of required documents, and earliest appointment slots available for in-person consultation at Sector 62 chamber or High Court. ' +
+  'Additionally, we wish to verify whether criminal complaint under IPC sections 420, 467 and 468 can be instituted for fraudulent power of attorney execution, and how the new BNS provisions affect previously instituted complaints and pending verification proceedings. ' +
+  'Looking forward to your prompt response and legal advice.';
+
+const helpRequestReceived = helpRequestEmailTemplate({
+  helpRequest: {
+    id: 'hr-uuid-1234',
+    referenceId: 'VSH-5SVQFS',
+    name: 'KISHORI',
+    email: 'adv.kishorichoudhary@gmail.com',
+    phoneNumber: '+91 8812345668',
+    concern: dummyLongConcern,
+    createdAt: new Date('2026-11-28T11:54:00.000Z') // 5:24 PM IST
+  }
+});
+
 // Write all preview files
 const previews = [
   { filename: 'otp-registration.html', content: otpRegistration.html },
@@ -250,7 +274,8 @@ const previews = [
   { filename: 'consultancy-user.html', content: consultancyUser.html },
   { filename: 'profile-under-review.html', content: profileUnderReview.html },
   { filename: 'test-sheet-pass.html', content: testSheetPass.html },
-  { filename: 'test-sheet-fail.html', content: testSheetFail.html }
+  { filename: 'test-sheet-fail.html', content: testSheetFail.html },
+  { filename: 'help-request-received.html', content: helpRequestReceived.html }
 ];
 
 console.log('Generating branded email preview HTML files...\n');
