@@ -16,7 +16,7 @@ router.post(
   requireAuth,
   requirePermission('acts:create', 'acts:update'),
   generalLimiter,
-  bearerActController.contentCreatorWriteHandler
+  bearerActController.staffWriteHandler
 );
 
 /**

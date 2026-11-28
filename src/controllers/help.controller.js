@@ -106,7 +106,7 @@ export const submitAdminResponse = async (req, res, next) => {
       } else {
         responder = {
           id: req.user.id,
-          type: 'CONTENT_CREATOR',
+          type: 'STAFF',
           name: req.user.fullName || 'Staff'
         };
       }

@@ -10,7 +10,8 @@ generator client {
 enum AccountType {
   USER
   ADVOCATE
-  CONTENT_CREATOR
+  CONTENT_CREATOR // legacy, remove in phase B
+  STAFF
   ADMIN
 }
 
@@ -469,7 +470,7 @@ model AdvocateTeamMate {
 
 
 
-model ContentCreator {
+model Staff {
   id           String       @id @default(uuid())
   fullName     String       @default("Content Creator")
   email        String       @unique
@@ -485,69 +486,71 @@ model ContentCreator {
   userRights   UserRight[]
   guides       Guide[]
   updates      Update[]
+
+  @@map("ContentCreator")
 }
 
 model UserRight {
-  id            String          @id @default(uuid())
+  id            String   @id @default(uuid())
   title         String
-  description   String          @db.Text
+  description   String   @db.Text
   photo         String?
   photoPublicId String?
   createdBy     String?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  creator       ContentCreator? @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  creator       Staff?   @relation(fields: [createdBy], references: [id], onDelete: SetNull)
 
   @@index([createdBy])
   @@index([createdAt])
 }
 
 model Guide {
-  id          String          @id @default(uuid())
+  id          String   @id @default(uuid())
   title       String
-  description String          @db.Text
+  description String   @db.Text
   createdBy   String?
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  creator     ContentCreator? @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  creator     Staff?   @relation(fields: [createdBy], references: [id], onDelete: SetNull)
 
   @@index([createdBy])
   @@index([createdAt])
 }
 
 model Update {
-  id             String          @id @default(uuid())
+  id             String   @id @default(uuid())
   title          String
-  oldDescription String          @db.Text
-  newDescription String          @db.Text
+  oldDescription String   @db.Text
+  newDescription String   @db.Text
   createdBy      String?
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  creator        ContentCreator? @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  creator        Staff?   @relation(fields: [createdBy], references: [id], onDelete: SetNull)
 
   @@index([createdBy])
   @@index([createdAt])
 }
 
 model IPCSection {
-  id              String         @id @default(uuid())
-  sectionNo       String         @unique
-  sectionOrder    Float          @default(0)
+  id              String   @id @default(uuid())
+  sectionNo       String   @unique
+  sectionOrder    Float    @default(0)
   heading         String
-  paragraph       String         @db.Text
-  explanation     String?        @db.Text
-  content         String?        @db.Text
+  paragraph       String   @db.Text
+  explanation     String?  @db.Text
+  content         String?  @db.Text
   metaTitle       String?
-  keywords        String[]       @default([])
+  keywords        String[] @default([])
   metaDescription String?
   createdBy       String
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  creator         ContentCreator @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+  creator         Staff    @relation(fields: [createdBy], references: [id], onDelete: Cascade)
 
   @@index([sectionOrder])
   @@index([sectionNo])
@@ -556,21 +559,21 @@ model IPCSection {
 }
 
 model BNSSection {
-  id              String         @id @default(uuid())
-  sectionNo       String         @unique
-  sectionOrder    Float          @default(0)
+  id              String   @id @default(uuid())
+  sectionNo       String   @unique
+  sectionOrder    Float    @default(0)
   heading         String
-  paragraph       String         @db.Text
-  explanation     String?        @db.Text
-  content         String?        @db.Text
+  paragraph       String   @db.Text
+  explanation     String?  @db.Text
+  content         String?  @db.Text
   metaTitle       String?
-  keywords        String[]       @default([])
+  keywords        String[] @default([])
   metaDescription String?
   createdBy       String
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  creator         ContentCreator @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+  creator         Staff    @relation(fields: [createdBy], references: [id], onDelete: Cascade)
 
   @@index([sectionOrder])
   @@index([sectionNo])
@@ -581,25 +584,25 @@ model BNSSection {
 
 
 model Blog {
-  id            String         @id @default(uuid())
+  id            String   @id @default(uuid())
   image         String?
   imagePublicId String?
   heading       String
   title         String
   date          DateTime
   writtenBy     String
-  content       String         @db.Text
-  published     Boolean        @default(true)
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  content       String   @db.Text
+  published     Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   metaTitle       String?
   metaDescription String?
   metaKeywords    String?
-  slug            String?        @unique
+  slug            String?  @unique
 
   authorId      String
-  author        ContentCreator  @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  author        Staff    @relation(fields: [authorId], references: [id], onDelete: Cascade)
 
   @@index([authorId])
   @@index([createdAt])

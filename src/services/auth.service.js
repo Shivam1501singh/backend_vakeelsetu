@@ -858,8 +858,9 @@ export const getCurrentUserProfile = async (id, accountType) => {
     profile = await prisma.advocate.findUnique({
       where: { id }
     });
-  } else if (normalizedType === 'content_creator') {
-    profile = await prisma.contentCreator.findUnique({
+  } else if (normalizedType === 'content_creator' || normalizedType === 'staff') {
+    // TODO: remove legacy "content_creator" after frontend transition
+    profile = await prisma.staff.findUnique({
       where: { id }
     });
   }
@@ -883,13 +884,18 @@ export const getCurrentUserProfile = async (id, accountType) => {
       roles: ['USER'],
       permissions: []
     };
-  } else if (normalizedType === 'content_creator') {
+  } else if (normalizedType === 'content_creator' || normalizedType === 'staff') {
+    // TODO: remove legacy "content_creator" after frontend transition
     let assignedRoles = [];
     let assignedPermissions = [];
 
     try {
       const userRoles = await prisma.userRole.findMany({
-        where: { userId: profile.id, role: { isActive: true } },
+        where: {
+          userId: profile.id,
+          role: { isActive: true },
+          userType: { in: ['STAFF', 'CONTENT_CREATOR'] }
+        },
         include: {
           role: {
             include: {
@@ -922,7 +928,7 @@ export const getCurrentUserProfile = async (id, accountType) => {
       id: profile.id,
       fullName: profile.fullName,
       email: profile.email,
-      type: 'content_creator',
+      type: 'staff',
       role: 'CONTENT_CREATOR',
       roles: creatorRoles,
       permissions: assignedPermissions

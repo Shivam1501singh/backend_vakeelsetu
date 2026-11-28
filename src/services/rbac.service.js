@@ -464,9 +464,9 @@ export const resolveUserAccount = async (userId, userType = 'USER') => {
   if (normalizedType === 'USER') {
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (user) return { account: user, userType: 'USER' };
-  } else if (normalizedType === 'CONTENT_CREATOR') {
-    const creator = await prisma.contentCreator.findUnique({ where: { id: userId } });
-    if (creator) return { account: creator, userType: 'CONTENT_CREATOR' };
+  } else if (normalizedType === 'STAFF' || normalizedType === 'CONTENT_CREATOR') {
+    const staff = await prisma.staff.findUnique({ where: { id: userId } });
+    if (staff) return { account: staff, userType: 'STAFF' };
   } else if (normalizedType === 'ADVOCATE') {
     const adv = await prisma.advocate.findUnique({ where: { id: userId } });
     if (adv) return { account: adv, userType: 'ADVOCATE' };
@@ -479,8 +479,8 @@ export const resolveUserAccount = async (userId, userType = 'USER') => {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (user) return { account: user, userType: 'USER' };
 
-  const creator = await prisma.contentCreator.findUnique({ where: { id: userId } });
-  if (creator) return { account: creator, userType: 'CONTENT_CREATOR' };
+  const staff = await prisma.staff.findUnique({ where: { id: userId } });
+  if (staff) return { account: staff, userType: 'STAFF' };
 
   const adv = await prisma.advocate.findUnique({ where: { id: userId } });
   if (adv) return { account: adv, userType: 'ADVOCATE' };
@@ -496,7 +496,7 @@ export const resolveUserAccount = async (userId, userType = 'USER') => {
  * Strictly restricted to Admin Panel (staff / ContentCreator) accounts.
  */
 export const assignRoleToUser = async ({ userId, roleId, roleName, userType = 'USER' }) => {
-  const staffAccount = await prisma.contentCreator.findUnique({ where: { id: userId } });
+  const staffAccount = await prisma.staff.findUnique({ where: { id: userId } });
 
   if (!staffAccount) {
     const [isUser, isAdvocate] = await Promise.all([
@@ -542,12 +542,12 @@ export const assignRoleToUser = async ({ userId, roleId, roleName, userType = 'U
       }
     },
     update: {
-      userType: 'CONTENT_CREATOR'
+      userType: 'STAFF'
     },
     create: {
       userId,
       roleId: role.id,
-      userType: 'CONTENT_CREATOR'
+      userType: 'STAFF'
     },
     include: {
       role: {
@@ -623,11 +623,22 @@ export const removeRoleFromUser = async ({ userId, roleId, roleName }) => {
  * Get all roles and permissions assigned to a user
  */
 export const getUserRolesAndPermissions = async (userId, userType = null) => {
+  const where = {
+    userId,
+    role: { isActive: true }
+  };
+
+  if (userType) {
+    const normalized = userType.toUpperCase();
+    if (normalized === 'STAFF' || normalized === 'CONTENT_CREATOR') {
+      where.userType = { in: ['STAFF', 'CONTENT_CREATOR'] };
+    } else {
+      where.userType = normalized;
+    }
+  }
+
   const userRoles = await prisma.userRole.findMany({
-    where: {
-      userId,
-      role: { isActive: true }
-    },
+    where,
     include: {
       role: {
         include: {
@@ -668,7 +679,7 @@ export const getUserRolesAndPermissions = async (userId, userType = null) => {
  * Evaluates whether a user has the required permission(s).
  */
 export const checkUserPermission = async (userId, requiredPermissions = [], userType = null) => {
-  if (userType && userType.toLowerCase() !== 'content_creator') {
+  if (userType && userType.toLowerCase() !== 'content_creator' && userType.toLowerCase() !== 'staff') {
     return false;
   }
 
@@ -682,9 +693,9 @@ export const checkUserPermission = async (userId, requiredPermissions = [], user
 
   const { permissionCodes, roleNames } = await getUserRolesAndPermissions(userId, userType);
 
-  // Fallback: If user has default CONTENT_CREATOR type and no explicit UserRole yet,
+  // Fallback: If user has default CONTENT_CREATOR / STAFF type and no explicit UserRole yet,
   // load the active CONTENT_CREATOR role from DB
-  if (userType && userType.toLowerCase() === 'content_creator' && roleNames.length === 0) {
+  if (userType && (userType.toLowerCase() === 'content_creator' || userType.toLowerCase() === 'staff') && roleNames.length === 0) {
     const defaultCreatorRole = await prisma.role.findUnique({
       where: { name: 'CONTENT_CREATOR' },
       include: {

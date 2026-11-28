@@ -31,9 +31,9 @@ async function main() {
   // 2. Identify all unique user IDs
   const userIds = Array.from(new Set(allUserRoles.map((ur) => ur.userId)));
 
-  // 3. Batch lookup across ContentCreator, User, and Advocate
+  // 3. Batch lookup across Staff, User, and Advocate
   const [staffAccounts, clientAccounts, advocateAccounts] = await Promise.all([
-    prisma.contentCreator.findMany({
+    prisma.staff.findMany({
       where: { id: { in: userIds } },
       select: { id: true, email: true }
     }),

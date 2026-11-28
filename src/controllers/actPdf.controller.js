@@ -36,9 +36,9 @@ export const uploadActPdfsHandler = async (req, res, next) => {
   try {
     const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
     const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
-    const isContentCreator = rawRole === 'CONTENT_CREATOR' || (req.user?.type && req.user.type.toLowerCase() === 'content_creator');
+    const isStaffOrCreator = rawRole === 'CONTENT_CREATOR' || rawRole === 'STAFF' || (req.user?.type && (req.user.type.toLowerCase() === 'content_creator' || req.user.type.toLowerCase() === 'staff'));
 
-    if (!req.user || (!isAdmin && !isContentCreator)) {
+    if (!req.user || (!isAdmin && !isStaffOrCreator)) {
       // Clean up uploaded files on authorization failure
       for (const file of uploadedFiles) {
         if (file.path && fs.existsSync(file.path)) fs.unlinkSync(file.path);
@@ -301,9 +301,9 @@ export const attachPredefinedPdfHandler = async (req, res, next) => {
   try {
     const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
     const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
-    const isContentCreator = rawRole === 'CONTENT_CREATOR' || (req.user?.type && req.user.type.toLowerCase() === 'content_creator');
+    const isStaffOrCreator = rawRole === 'CONTENT_CREATOR' || rawRole === 'STAFF' || (req.user?.type && (req.user.type.toLowerCase() === 'content_creator' || req.user.type.toLowerCase() === 'staff'));
 
-    if (!req.user || (!isAdmin && !isContentCreator)) {
+    if (!req.user || (!isAdmin && !isStaffOrCreator)) {
       return res.status(403).json({
         success: false,
         message: 'Access forbidden. Admin panel access required.'
@@ -344,9 +344,9 @@ export const syncPredefinedPdfsHandler = async (req, res, next) => {
   try {
     const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
     const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
-    const isContentCreator = rawRole === 'CONTENT_CREATOR' || (req.user?.type && req.user.type.toLowerCase() === 'content_creator');
+    const isStaffOrCreator = rawRole === 'CONTENT_CREATOR' || rawRole === 'STAFF' || (req.user?.type && (req.user.type.toLowerCase() === 'content_creator' || req.user.type.toLowerCase() === 'staff'));
 
-    if (!req.user || (!isAdmin && !isContentCreator)) {
+    if (!req.user || (!isAdmin && !isStaffOrCreator)) {
       return res.status(403).json({
         success: false,
         message: 'Access forbidden. Admin panel access required.'
@@ -379,9 +379,9 @@ export const deleteActPdfHandler = async (req, res, next) => {
   try {
     const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
     const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
-    const isContentCreator = rawRole === 'CONTENT_CREATOR' || (req.user?.type && req.user.type.toLowerCase() === 'content_creator');
+    const isStaffOrCreator = rawRole === 'CONTENT_CREATOR' || rawRole === 'STAFF' || (req.user?.type && (req.user.type.toLowerCase() === 'content_creator' || req.user.type.toLowerCase() === 'staff'));
 
-    if (!req.user || (!isAdmin && !isContentCreator)) {
+    if (!req.user || (!isAdmin && !isStaffOrCreator)) {
       return res.status(403).json({
         success: false,
         message: 'Access forbidden. Admin panel access required.'

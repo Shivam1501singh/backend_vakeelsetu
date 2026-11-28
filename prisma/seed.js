@@ -744,29 +744,29 @@ async function main() {
     console.log('Admin already exists.');
   }
 
-  // Idempotent Seeding of Content Creator
+  // Idempotent Seeding of Staff (Content Creator)
   const creatorEmail = 'trainee6@techvunex.in';
-  let creator = await prisma.contentCreator.findUnique({
+  let creator = await prisma.staff.findUnique({
     where: { email: creatorEmail }
   });
 
   if (!creator) {
-    console.log('Seeding Content Creator...');
+    console.log('Seeding Staff Account...');
     const creatorPasswordHash = await bcrypt.hash('1234', 10);
-    creator = await prisma.contentCreator.create({
+    creator = await prisma.staff.create({
       data: {
         email: creatorEmail,
         passwordHash: creatorPasswordHash,
-        fullName: 'Techvunex Legal Content Team',
+        fullName: 'Staff',
         image: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150&auto=format&fit=crop&q=60',
         bio: 'Legal content creator focused on simplifying Indian legal information and making legal knowledge easier to understand.'
       }
     });
-    console.log('Content Creator seeded successfully.');
+    console.log('Staff account seeded successfully.');
   } else {
-    console.log('Content Creator already exists. Ensuring profile details are populated...');
+    console.log('Staff account already exists. Ensuring profile details are populated...');
     if (creator.fullName === 'Content Creator' || !creator.image || !creator.bio) {
-      creator = await prisma.contentCreator.update({
+      creator = await prisma.staff.update({
         where: { email: creatorEmail },
         data: {
           fullName: 'Techvunex Legal Content Team',
@@ -774,7 +774,7 @@ async function main() {
           bio: creator.bio || 'Legal content creator focused on simplifying Indian legal information and making legal knowledge easier to understand.'
         }
       });
-      console.log('Content Creator profile details updated.');
+      console.log('Staff profile details updated.');
     }
   }
 

@@ -34,6 +34,7 @@ export const mapBlogResponse = (blog) => {
       ? blog.metaKeywords.split(',').map(kw => kw.trim()).filter(Boolean)
       : null,
     contentCreator: creatorData,
+    staff: creatorData,
     createdAt: blog.createdAt,
     updatedAt: blog.updatedAt
   };
@@ -86,7 +87,7 @@ export const loginContentCreator = async (req, res, next) => {
     const validated = blogValidator.loginSchema.parse(req.body);
     const normalizedEmail = validated.email.toLowerCase().trim();
 
-    const creator = await prisma.contentCreator.findUnique({
+    const creator = await prisma.staff.findUnique({
       where: { email: normalizedEmail }
     });
 
@@ -105,23 +106,27 @@ export const loginContentCreator = async (req, res, next) => {
       });
     }
 
-    const token = signToken({ id: creator.id, type: 'content_creator' });
+    const token = signToken({ id: creator.id, type: 'staff' });
     sendTokenCookie(res, token);
+
+    const staffData = {
+      id: creator.id,
+      email: creator.email,
+      fullName: creator.fullName
+    };
 
     return res.status(200).json({
       success: true,
       message: 'Login successful',
       token,
-      contentCreator: {
-        id: creator.id,
-        email: creator.email,
-        fullName: creator.fullName
-      }
+      staff: staffData,
+      contentCreator: staffData
     });
   } catch (error) {
     next(error);
   }
 };
+export const loginStaff = loginContentCreator;
 
 /**
  * Create Blog (Admin Panel)
@@ -132,7 +137,9 @@ export const createBlog = async (req, res, next) => {
     const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
     const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
 
-    if (!req.user || (!isAdmin && req.user.type !== 'content_creator' && rawRole !== 'CONTENT_CREATOR')) {
+    const isStaffOrCreator = rawRole === 'CONTENT_CREATOR' || rawRole === 'STAFF' || (req.user?.type && (req.user.type.toLowerCase() === 'content_creator' || req.user.type.toLowerCase() === 'staff'));
+
+    if (!req.user || (!isAdmin && !isStaffOrCreator)) {
       return res.status(403).json({
         success: false,
         message: 'Access forbidden. Admin panel access required.'
@@ -175,8 +182,8 @@ export const createBlog = async (req, res, next) => {
 
       // Determine valid authorId for Blog foreign key
       let authorId = req.user.id;
-      if (req.user.type !== 'content_creator') {
-        const defaultCreator = await prisma.contentCreator.findFirst({ select: { id: true } });
+      if (req.user.type !== 'content_creator' && req.user.type !== 'staff') {
+        const defaultCreator = await prisma.staff.findFirst({ select: { id: true } });
         if (defaultCreator) {
           authorId = defaultCreator.id;
         }
@@ -302,7 +309,9 @@ export const updateBlog = async (req, res, next) => {
     const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
     const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
 
-    if (!req.user || (!isAdmin && req.user.type !== 'content_creator' && rawRole !== 'CONTENT_CREATOR')) {
+    const isStaffOrCreator = rawRole === 'CONTENT_CREATOR' || rawRole === 'STAFF' || (req.user?.type && (req.user.type.toLowerCase() === 'content_creator' || req.user.type.toLowerCase() === 'staff'));
+
+    if (!req.user || (!isAdmin && !isStaffOrCreator)) {
       return res.status(403).json({
         success: false,
         message: 'Access forbidden. Admin panel access required.'
@@ -410,7 +419,9 @@ export const deleteBlog = async (req, res, next) => {
     const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
     const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
 
-    if (!req.user || (!isAdmin && req.user.type !== 'content_creator' && rawRole !== 'CONTENT_CREATOR')) {
+    const isStaffOrCreator = rawRole === 'CONTENT_CREATOR' || rawRole === 'STAFF' || (req.user?.type && (req.user.type.toLowerCase() === 'content_creator' || req.user.type.toLowerCase() === 'staff'));
+
+    if (!req.user || (!isAdmin && !isStaffOrCreator)) {
       return res.status(403).json({
         success: false,
         message: 'Access forbidden. Admin panel access required.'

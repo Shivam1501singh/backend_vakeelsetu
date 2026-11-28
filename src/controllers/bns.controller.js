@@ -30,9 +30,9 @@ export const createBNSSection = async (req, res, next) => {
   try {
     const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
     const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
-    const isContentCreator = rawRole === 'CONTENT_CREATOR' || (req.user?.type && req.user.type.toLowerCase() === 'content_creator');
+    const isStaffOrCreator = rawRole === 'CONTENT_CREATOR' || rawRole === 'STAFF' || (req.user?.type && (req.user.type.toLowerCase() === 'content_creator' || req.user.type.toLowerCase() === 'staff'));
 
-    if (!req.user || (!isAdmin && !isContentCreator)) {
+    if (!req.user || (!isAdmin && !isStaffOrCreator)) {
       return res.status(403).json({
         success: false,
         message: 'Access forbidden. Admin panel access required.'
@@ -54,8 +54,8 @@ export const createBNSSection = async (req, res, next) => {
     }
 
     let createdBy = req.user.id;
-    if (req.user.type !== 'content_creator') {
-      const defaultCreator = await prisma.contentCreator.findFirst({ select: { id: true } });
+    if (req.user.type !== 'content_creator' && req.user.type !== 'staff') {
+      const defaultCreator = await prisma.staff.findFirst({ select: { id: true } });
       if (defaultCreator) {
         createdBy = defaultCreator.id;
       }
@@ -100,9 +100,9 @@ export const editBNSSection = async (req, res, next) => {
   try {
     const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
     const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
-    const isContentCreator = rawRole === 'CONTENT_CREATOR' || (req.user?.type && req.user.type.toLowerCase() === 'content_creator');
+    const isStaffOrCreator = rawRole === 'CONTENT_CREATOR' || rawRole === 'STAFF' || (req.user?.type && (req.user.type.toLowerCase() === 'content_creator' || req.user.type.toLowerCase() === 'staff'));
 
-    if (!req.user || (!isAdmin && !isContentCreator)) {
+    if (!req.user || (!isAdmin && !isStaffOrCreator)) {
       return res.status(403).json({
         success: false,
         message: 'Access forbidden. Admin panel access required.'

@@ -9,7 +9,13 @@ const router = express.Router();
 // Admin Authentication (Public)
 router.post('/login', generalLimiter, adminController.loginAdmin);
 
-// Content Creator Staff Management
+// Staff Management (New preferred endpoints)
+router.post('/staff', requireAuth, requirePermission('content_creators:create'), generalLimiter, adminController.createStaffAccount);
+router.get('/staff', requireAuth, requirePermission('content_creators:view'), generalLimiter, adminController.listStaffAccounts);
+router.get('/staff/:id', requireAuth, requirePermission('content_creators:view'), generalLimiter, adminController.getStaffAccountDetails);
+router.put('/staff/:id/roles', requireAuth, requirePermission('roles:manage'), generalLimiter, adminController.updateStaffRoles);
+
+// Content Creator Staff Management (Deprecated legacy aliases)
 router.post('/content-creators', requireAuth, requirePermission('content_creators:create'), generalLimiter, adminController.createContentCreator);
 router.get('/content-creators', requireAuth, requirePermission('content_creators:view'), generalLimiter, adminController.listContentCreators);
 router.get('/content-creators/:id', requireAuth, requirePermission('content_creators:view'), generalLimiter, adminController.getContentCreatorDetails);

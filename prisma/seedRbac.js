@@ -288,8 +288,8 @@ export async function seedRbac(prismaClient = null) {
   }
   console.log('  [*] SUPPORT_EXECUTIVE role permissions verified.');
 
-  // 5. Link seeded ContentCreator account with CONTENT_CREATOR role if exists
-  const defaultCreator = await prisma.contentCreator.findFirst({
+  // 5. Link seeded Staff account with CONTENT_CREATOR role if exists
+  const defaultCreator = await prisma.staff.findFirst({
     where: { email: 'trainee6@techvunex.in' }
   });
 
@@ -302,12 +302,12 @@ export async function seedRbac(prismaClient = null) {
         }
       },
       update: {
-        userType: 'CONTENT_CREATOR'
+        userType: 'STAFF'
       },
       create: {
         userId: defaultCreator.id,
         roleId: contentCreatorRole.id,
-        userType: 'CONTENT_CREATOR'
+        userType: 'STAFF'
       }
     });
     console.log('  [*] Assigned CONTENT_CREATOR role to seeded trainee6@techvunex.in.');

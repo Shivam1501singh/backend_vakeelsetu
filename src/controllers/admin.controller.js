@@ -65,19 +65,19 @@ export const loginAdmin = async (req, res, next) => {
       }
     }
 
-    // 2. Else find prisma.contentCreator by lowercased email; if found, isActive, and bcrypt.compare passes ->
-    //    signToken({ id: creator.id, type: 'content_creator' })
-    const creator = await prisma.contentCreator.findUnique({
+    // 2. Else find prisma.staff by lowercased email; if found, isActive, and bcrypt.compare passes ->
+    //    signToken({ id: creator.id, type: 'staff' })
+    const creator = await prisma.staff.findUnique({
       where: { email: normalizedInputEmail }
     });
 
     if (creator && creator.isActive) {
       const isMatch = await bcrypt.compare(password, creator.passwordHash);
       if (isMatch) {
-        const token = signToken({ id: creator.id, type: 'content_creator' });
+        const token = signToken({ id: creator.id, type: 'staff' });
         sendTokenCookie(res, token);
 
-        const profile = await getCurrentUserProfile(creator.id, 'content_creator');
+        const profile = await getCurrentUserProfile(creator.id, 'staff');
 
         return res.status(200).json({
           success: true,
@@ -87,7 +87,7 @@ export const loginAdmin = async (req, res, next) => {
             id: creator.id,
             fullName: creator.fullName,
             email: creator.email,
-            accountType: 'CONTENT_CREATOR',
+            accountType: 'staff',
             roles: profile?.roles || ['CONTENT_CREATOR'],
             permissions: profile?.permissions || []
           }
@@ -109,8 +109,14 @@ export const loginAdmin = async (req, res, next) => {
  * Create Staff Account (Content Creator) with inline Roles
  * POST /api/admin/content-creators
  */
-export const createContentCreator = async (req, res, next) => {
+export const createStaffAccount = async (req, res, next) => {
   try {
+    const isLegacy = req.baseUrl?.includes('content-creators') || req.originalUrl?.includes('/content-creators');
+    if (isLegacy) {
+      res.set('Deprecation', 'true');
+      res.set('Link', '</api/admin/staff>; rel="successor-version"');
+    }
+
     const validated = createStaffAccountSchema.parse(req.body);
     const { fullName, email, password, roleIds, roleNames } = validated;
 
@@ -126,7 +132,7 @@ export const createContentCreator = async (req, res, next) => {
     }
 
     // Check duplicate staff email
-    const existing = await prisma.contentCreator.findUnique({
+    const existing = await prisma.staff.findUnique({
       where: { email: normalizedEmail }
     });
 
@@ -227,7 +233,7 @@ export const createContentCreator = async (req, res, next) => {
     const passwordHash = await bcrypt.hash(password, 10);
 
     const creator = await prisma.$transaction(async (tx) => {
-      const newCreator = await tx.contentCreator.create({
+      const newCreator = await tx.staff.create({
         data: {
           fullName: fullName.trim(),
           email: normalizedEmail,
@@ -239,7 +245,7 @@ export const createContentCreator = async (req, res, next) => {
         data: resolvedRoles.map((r) => ({
           userId: newCreator.id,
           roleId: r.id,
-          userType: 'CONTENT_CREATOR'
+          userType: 'STAFF'
         })),
         skipDuplicates: true
       });
@@ -247,39 +253,56 @@ export const createContentCreator = async (req, res, next) => {
       return newCreator;
     });
 
+    const payload = {
+      id: creator.id,
+      name: creator.fullName,
+      fullName: creator.fullName,
+      email: creator.email,
+      isActive: creator.isActive,
+      accountType: isLegacy ? 'CONTENT_CREATOR' : 'staff',
+      role: resolvedRoles[0]?.name || 'CONTENT_CREATOR',
+      roles: resolvedRoles.map((r) => r.name),
+      roleDetails: resolvedRoles.map((r) => ({
+        id: r.id,
+        name: r.name,
+        displayName: r.displayName
+      })),
+      permissions,
+      createdAt: creator.createdAt
+    };
+
+    if (isLegacy) {
+      return res.status(201).json({
+        success: true,
+        message: 'Staff account created successfully',
+        creator: payload
+      });
+    }
+
     return res.status(201).json({
       success: true,
       message: 'Staff account created successfully',
-      creator: {
-        id: creator.id,
-        name: creator.fullName,
-        fullName: creator.fullName,
-        email: creator.email,
-        isActive: creator.isActive,
-        accountType: 'CONTENT_CREATOR',
-        role: resolvedRoles[0]?.name || 'CONTENT_CREATOR',
-        roles: resolvedRoles.map((r) => r.name),
-        roleDetails: resolvedRoles.map((r) => ({
-          id: r.id,
-          name: r.name,
-          displayName: r.displayName
-        })),
-        permissions,
-        createdAt: creator.createdAt
-      }
+      staffMember: payload
     });
   } catch (error) {
     next(error);
   }
 };
+export const createContentCreator = createStaffAccount;
 
 /**
- * List Content Creator Staff with Roles (ADMIN / content_creators:view)
- * GET /api/admin/content-creators
+ * List Staff with Roles (ADMIN / content_creators:view)
+ * GET /api/admin/staff (or deprecated GET /api/admin/content-creators)
  */
-export const listContentCreators = async (req, res, next) => {
+export const listStaffAccounts = async (req, res, next) => {
   try {
-    const creators = await prisma.contentCreator.findMany({
+    const isLegacy = req.baseUrl?.includes('content-creators') || req.originalUrl?.includes('/content-creators');
+    if (isLegacy) {
+      res.set('Deprecation', 'true');
+      res.set('Link', '</api/admin/staff>; rel="successor-version"');
+    }
+
+    const creators = await prisma.staff.findMany({
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
@@ -292,7 +315,10 @@ export const listContentCreators = async (req, res, next) => {
 
     const creatorIds = creators.map((c) => c.id);
     const userRoles = await prisma.userRole.findMany({
-      where: { userId: { in: creatorIds } },
+      where: {
+        userId: { in: creatorIds },
+        userType: { in: ['STAFF', 'CONTENT_CREATOR'] }
+      },
       include: {
         role: {
           select: {
@@ -332,24 +358,38 @@ export const listContentCreators = async (req, res, next) => {
       };
     });
 
+    if (isLegacy) {
+      return res.status(200).json({
+        success: true,
+        creators: formattedCreators
+      });
+    }
+
     return res.status(200).json({
       success: true,
-      creators: formattedCreators
+      staff: formattedCreators
     });
   } catch (error) {
     next(error);
   }
 };
+export const listContentCreators = listStaffAccounts;
 
 /**
  * Get Staff Details & Permissions (content_creators:view)
- * GET /api/admin/content-creators/:id
+ * GET /api/admin/staff/:id (or deprecated GET /api/admin/content-creators/:id)
  */
-export const getContentCreatorDetails = async (req, res, next) => {
+export const getStaffAccountDetails = async (req, res, next) => {
   try {
+    const isLegacy = req.baseUrl?.includes('content-creators') || req.originalUrl?.includes('/content-creators');
+    if (isLegacy) {
+      res.set('Deprecation', 'true');
+      res.set('Link', '</api/admin/staff>; rel="successor-version"');
+    }
+
     const { id } = req.params;
 
-    const creator = await prisma.contentCreator.findUnique({
+    const creator = await prisma.staff.findUnique({
       where: { id },
       select: {
         id: true,
@@ -369,7 +409,10 @@ export const getContentCreatorDetails = async (req, res, next) => {
     }
 
     const userRoles = await prisma.userRole.findMany({
-      where: { userId: creator.id },
+      where: {
+        userId: creator.id,
+        userType: { in: ['STAFF', 'CONTENT_CREATOR'] }
+      },
       include: {
         role: {
           include: {
@@ -429,39 +472,55 @@ export const getContentCreatorDetails = async (req, res, next) => {
     }
 
     const roleNames = activeRoles.map((r) => r.name);
+    const payload = {
+      id: creator.id,
+      name: creator.fullName,
+      fullName: creator.fullName,
+      email: creator.email,
+      isActive: creator.isActive,
+      accountType: isLegacy ? 'CONTENT_CREATOR' : 'staff',
+      role: roleNames[0] || effectiveDefaultRole || 'CONTENT_CREATOR',
+      roles: roleNames.length > 0 ? roleNames : ['CONTENT_CREATOR'],
+      roleDetails: roles,
+      ...(effectiveDefaultRole ? { effectiveDefaultRole } : {}),
+      permissions,
+      createdAt: creator.createdAt,
+      updatedAt: creator.updatedAt
+    };
+
+    if (isLegacy) {
+      return res.status(200).json({
+        success: true,
+        creator: payload
+      });
+    }
+
     return res.status(200).json({
       success: true,
-      creator: {
-        id: creator.id,
-        name: creator.fullName,
-        fullName: creator.fullName,
-        email: creator.email,
-        isActive: creator.isActive,
-        accountType: 'CONTENT_CREATOR',
-        role: roleNames[0] || effectiveDefaultRole || 'CONTENT_CREATOR',
-        roles: roleNames.length > 0 ? roleNames : ['CONTENT_CREATOR'],
-        roleDetails: roles,
-        ...(effectiveDefaultRole ? { effectiveDefaultRole } : {}),
-        permissions,
-        createdAt: creator.createdAt,
-        updatedAt: creator.updatedAt
-      }
+      staffMember: payload
     });
   } catch (error) {
     next(error);
   }
 };
+export const getContentCreatorDetails = getStaffAccountDetails;
 
 /**
  * Update Staff Roles (roles:manage)
- * PUT /api/admin/content-creators/:id/roles
+ * PUT /api/admin/staff/:id/roles (or deprecated PUT /api/admin/content-creators/:id/roles)
  */
 export const updateStaffRoles = async (req, res, next) => {
   try {
+    const isLegacy = req.baseUrl?.includes('content-creators') || req.originalUrl?.includes('/content-creators');
+    if (isLegacy) {
+      res.set('Deprecation', 'true');
+      res.set('Link', '</api/admin/staff>; rel="successor-version"');
+    }
+
     const { id } = req.params;
     const validated = updateStaffRolesSchema.parse(req.body);
 
-    const creator = await prisma.contentCreator.findUnique({
+    const creator = await prisma.staff.findUnique({
       where: { id },
       select: {
         id: true,
@@ -539,13 +598,16 @@ export const updateStaffRoles = async (req, res, next) => {
 
     await prisma.$transaction([
       prisma.userRole.deleteMany({
-        where: { userId: creator.id }
+        where: {
+          userId: creator.id,
+          userType: { in: ['STAFF', 'CONTENT_CREATOR'] }
+        }
       }),
       prisma.userRole.createMany({
         data: resolvedRoles.map((r) => ({
           userId: creator.id,
           roleId: r.id,
-          userType: 'CONTENT_CREATOR'
+          userType: 'STAFF'
         })),
         skipDuplicates: true
       })
@@ -561,33 +623,44 @@ export const updateStaffRoles = async (req, res, next) => {
     }
     const permissions = Array.from(permSet);
 
+    const payload = {
+      id: creator.id,
+      name: creator.fullName,
+      fullName: creator.fullName,
+      email: creator.email,
+      isActive: creator.isActive,
+      accountType: isLegacy ? 'CONTENT_CREATOR' : 'staff',
+      role: resolvedRoles[0]?.name || 'CONTENT_CREATOR',
+      roles: resolvedRoles.map((r) => r.name),
+      roleDetails: resolvedRoles.map((r) => ({
+        id: r.id,
+        name: r.name,
+        displayName: r.displayName,
+        isActive: r.isActive
+      })),
+      permissions,
+      createdAt: creator.createdAt,
+      updatedAt: creator.updatedAt
+    };
+
+    if (isLegacy) {
+      return res.status(200).json({
+        success: true,
+        message: 'Staff roles updated successfully',
+        creator: payload
+      });
+    }
+
     return res.status(200).json({
       success: true,
       message: 'Staff roles updated successfully',
-      creator: {
-        id: creator.id,
-        name: creator.fullName,
-        fullName: creator.fullName,
-        email: creator.email,
-        isActive: creator.isActive,
-        accountType: 'CONTENT_CREATOR',
-        role: resolvedRoles[0]?.name || 'CONTENT_CREATOR',
-        roles: resolvedRoles.map((r) => r.name),
-        roleDetails: resolvedRoles.map((r) => ({
-          id: r.id,
-          name: r.name,
-          displayName: r.displayName,
-          isActive: r.isActive
-        })),
-        permissions,
-        createdAt: creator.createdAt,
-        updatedAt: creator.updatedAt
-      }
+      staffMember: payload
     });
   } catch (error) {
     next(error);
   }
 };
+export const updateContentCreatorRoles = updateStaffRoles;
 
 /**
  * List All Advocates for Admin Management

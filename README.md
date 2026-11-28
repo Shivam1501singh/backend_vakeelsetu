@@ -14846,5 +14846,53 @@ An email containing the comprehensive **Test Response Sheet** is dispatched imme
 5. **Verify 48-Hour Reconcile Retry:**
    Manually set `responseSheetEmailSentAt = null` on a finalized attempt in the database. Trigger `GET /api/internal/cron/payments-reconcile` and verify `testResponseSheetsRetried: 1` in the JSON response.
 
+---
+
+## Staff Account Type Migration & Endpoints
+
+### 1. Conceptual Distinction: Account Type vs RBAC Role
+- **Account Type (`Staff`):** Represents the administrative / staff user entity (`model Staff @@map("ContentCreator")`) and login identity.
+- **RBAC Role (`CONTENT_CREATOR`):** The functional permission bundle stored in the `Role` table (`Role.name = 'CONTENT_CREATOR'`). Existing staff roles and fine-grained permissions (`content_creators:view`, `blogs:create`, `acts:create`, etc.) remain **strictly unchanged**.
+
+### 2. Staff Management API Endpoints
+
+| Method | Preferred Endpoint | Deprecated Alias | RBAC Permission | Response Key (New vs Legacy) |
+|---|---|---|---|---|
+| `POST` | `/api/admin/staff` | `/api/admin/content-creators` | `content_creators:create` | `{ staffMember: {...} }` vs `{ creator: {...} }` |
+| `GET` | `/api/admin/staff` | `/api/admin/content-creators` | `content_creators:view` | `{ staff: [...] }` vs `{ creators: [...] }` |
+| `GET` | `/api/admin/staff/:id` | `/api/admin/content-creators/:id` | `content_creators:view` | `{ staffMember: {...} }` vs `{ creator: {...} }` |
+| `PUT` | `/api/admin/staff/:id/roles` | `/api/admin/content-creators/:id/roles` | `roles:manage` | `{ staffMember: {...} }` vs `{ creator: {...} }` |
+
+*Note:* Deprecated endpoints set HTTP response headers:
+- `Deprecation: true`
+- `Link: </api/admin/staff>; rel="successor-version"`
+
+### 3. Production Deployment Order
+
+Follow this strict 4-step sequence during deployment:
+
+1. **(a) Take Database Backup:**
+   ```bash
+   node scripts/generate_sql_backup.js
+   # or via pg_dump if configured:
+   # pg_dump -d "$DATABASE_URL" -F c -b -v -f pre_staff_migration_backup.dump
+   ```
+2. **(b) Apply Database Migration:**
+   ```bash
+   npx prisma migrate deploy
+   ```
+   Applies `20261128123000_add_staff_to_account_type_enum` (`ALTER TYPE "AccountType" ADD VALUE IF NOT EXISTS 'STAFF';`).
+3. **(c) Deploy Application Code:**
+   Deploy the updated backend application code to your hosting platform (Render, AWS, VPS, etc.).
+4. **(d) Run Data Backfill Script:**
+   ```bash
+   # Step 1: Verify dry-run output without mutating data
+   node scripts/backfill-staff-type.js --dry-run
+
+   # Step 2: Apply the backfill to convert existing records
+   node scripts/backfill-staff-type.js --apply
+   ```
+
+
 
 

@@ -58,7 +58,7 @@ export const rolePermissionsSchema = z.object({
 export const assignUserRoleSchema = z.object({
   roleId: z.string().uuid({ message: 'Invalid role ID format.' }).optional(),
   roleName: z.string().trim().optional(),
-  userType: z.enum(['USER', 'CONTENT_CREATOR', 'ADVOCATE', 'ADMIN']).optional().default('USER')
+  userType: z.enum(['USER', 'STAFF', 'CONTENT_CREATOR', 'ADVOCATE', 'ADMIN']).optional().default('USER')
 }).refine(data => data.roleId || data.roleName, {
   message: 'Either roleId or roleName must be provided.'
 });

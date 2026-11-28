@@ -95,6 +95,11 @@ export const requireRole = (...roles) => {
         return next();
       }
 
+      // Transition compatibility: allow both STAFF and legacy CONTENT_CREATOR
+      if ((rawRole === 'STAFF' || rawRole === 'CONTENT_CREATOR') && (allowedRoles.includes('STAFF') || allowedRoles.includes('CONTENT_CREATOR'))) {
+        return next();
+      }
+
       const err = new Error('Access forbidden. Insufficient permissions.');
       err.statusCode = 403;
       return next(err);

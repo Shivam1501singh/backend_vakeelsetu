@@ -22,7 +22,7 @@ export const normalizeOperation = (operation) => {
 /**
  * Top level write payload validation
  */
-export const contentCreatorWriteSchema = z.object({
+export const staffWriteSchema = z.object({
   type: z.string({ required_error: 'type is required' })
     .transform((val) => normalizeEntityType(val))
     .refine((val) => ['BEARER_ACT', 'ACT', 'SECTION', 'PDF'].includes(val), {
@@ -35,6 +35,7 @@ export const contentCreatorWriteSchema = z.object({
     }),
   data: z.record(z.any(), { required_error: 'data object is required' })
 });
+export const contentCreatorWriteSchema = staffWriteSchema;
 
 export const uploadActPdfSchema = z.object({
   displayName: z.string({ required_error: 'displayName is required' })

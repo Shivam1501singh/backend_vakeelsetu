@@ -22,20 +22,20 @@ export const sanitizeSection = (s) => {
  * Single Admin Write Endpoint
  * POST /api/admin/bearer-acts
  */
-export const contentCreatorWriteHandler = async (req, res, next) => {
+export const staffWriteHandler = async (req, res, next) => {
   try {
     const rawRole = (req.user?.role || req.user?.type || '').toUpperCase();
     const isAdmin = rawRole === 'ADMIN' || (req.user?.type && req.user.type.toLowerCase() === 'admin');
-    const isContentCreator = rawRole === 'CONTENT_CREATOR' || (req.user?.type && req.user.type.toLowerCase() === 'content_creator');
+    const isStaffOrCreator = rawRole === 'CONTENT_CREATOR' || rawRole === 'STAFF' || (req.user?.type && (req.user.type.toLowerCase() === 'content_creator' || req.user.type.toLowerCase() === 'staff'));
 
-    if (!req.user || (!isAdmin && !isContentCreator)) {
+    if (!req.user || (!isAdmin && !isStaffOrCreator)) {
       return res.status(403).json({
         success: false,
         message: 'Access forbidden. Admin panel access required.'
       });
     }
 
-    const { type, operation, data } = validator.contentCreatorWriteSchema.parse(req.body);
+    const { type, operation, data } = (validator.staffWriteSchema || validator.contentCreatorWriteSchema).parse(req.body);
 
     // ==========================================
     // 1. BEARER_ACT OPERATIONS
@@ -360,6 +360,8 @@ export const contentCreatorWriteHandler = async (req, res, next) => {
     next(error);
   }
 };
+export const contentCreatorWriteHandler = staffWriteHandler;
+
 
 /**
  * Public: Get All Bearer Act Categories
@@ -396,6 +398,7 @@ export const getBearerActs = async (req, res, next) => {
   }
 };
 
+
 /**
  * Public: Get Single Bearer Act Category (with related Acts)
  * GET /api/bearer-acts/:id
@@ -428,6 +431,7 @@ export const getSingleBearerAct = async (req, res, next) => {
     next(error);
   }
 };
+
 
 /**
  * Public: Get Acts under a Bearer Act
@@ -480,6 +484,7 @@ export const getActsByBearerAct = async (req, res, next) => {
   }
 };
 
+
 /**
  * Public: Get Single Act (with related Sections)
  * GET /api/acts/:id
@@ -515,6 +520,7 @@ export const getSingleAct = async (req, res, next) => {
     next(error);
   }
 };
+
 
 /**
  * Public: Get Sections under an Act
@@ -567,6 +573,7 @@ export const getSectionsByAct = async (req, res, next) => {
   }
 };
 
+
 /**
  * Public: Get Single Section
  * GET /api/sections/:id
@@ -594,6 +601,7 @@ export const getSingleSection = async (req, res, next) => {
     next(error);
   }
 };
+
 
 /**
  * Public: Global Search across Bearer Acts, Acts, and Sections
@@ -772,6 +780,7 @@ export const searchGlobalBearerActs = async (req, res, next) => {
   }
 };
 
+
 /**
  * Public: Act-Specific Search within Sections of a Selected Act
  * GET /api/acts/:actId/search?q=<query>&page=1&limit=20
@@ -838,4 +847,5 @@ export const searchActSections = async (req, res, next) => {
     next(error);
   }
 };
+
 
