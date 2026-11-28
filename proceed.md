@@ -1,179 +1,151 @@
-# Implementation Plan: VPS Local Image Storage with AVIF Dual-Resolution Processing & Cloudinary Migration
+# Plan: Advocate Test Response Sheet Email Implementation
 
-## 1. Executive Summary & Objective
-
-Migrate all media storage away from **Cloudinary** to **Hostinger VPS Local NVMe Disk Storage**.
-- **Root Storage Location:** `/uploads/images/<image_id>/`
-- **Output Format:** Modern **`.avif`** (AV1 Image Format) for superior compression and reduced bandwidth.
-- **Dual-Resolution Generation:** For every uploaded image, generate and store **two** distinct `.avif` files:
-  1. `small.avif` (Low-bandwidth listing/card/thumbnail view)
-  2. `medium.avif` (Detailed profile, article, or verification view)
-- **Zero Downtime & Zero Data Loss:** A one-time migration script will pull all existing Cloudinary assets, convert them to `.avif` dual variants, store them locally, and update database records.
+## Database Host Verification
+**DB Host:** `ep-weathered-hat-b47xszyr-pooler.c-6.us-east-2.aws.neon.tech` (shared Neon DB / production - no test records will be written here; tests use stubbed prisma / in-memory mocks).
 
 ---
 
-## 2. Image Processing & Compression Specifications
+## Migration SQL
 
-| Category | Input Formats | Max Upload | Variant | Target Dimensions | Target File Size | Storage Path | Use Case |
-|---|---|:---:|---|---|:---:|---|---|
-| **Advocate Profile Photo & User Avatar** | `JPEG, JPG, PNG, WEBP` | 5 MB | `small.avif` | ~150x150 px | **4 – 5 KB** | `uploads/images/<id>/small.avif` | Search lists, cards, navbars, booking slots |
-| | | | `medium.avif` | ~400x400 px | **10 – 15 KB** | `uploads/images/<id>/medium.avif` | Full advocate profile page, modals |
-| **Advocate Office Photo** | `JPEG, JPG, PNG, WEBP` | 5 MB | `small.avif` | ~200x150 px | **5 – 8 KB** | `uploads/images/<id>/small.avif` | Admin verification tables, quick preview |
-| | | | `medium.avif` | ~600x400 px | **20 – 30 KB** | `uploads/images/<id>/medium.avif` | Admin review modal, public office view |
-| **Admin Blogs & Legal Rights Banners** | `JPEG, JPG, PNG, WEBP` | 5 MB | `small.avif` | ~450x250 px | **12 – 15 KB** | `uploads/images/<id>/small.avif` | Blog feed cards, legal rights grid |
-| | | | `medium.avif` | ~900x500 px | **25 – 30 KB** | `uploads/images/<id>/medium.avif` | Full article banner, header visual |
+**Migration Directory:** `prisma/migrations/20261128113000_add_test_attempt_response_sheet_email_sent_at/migration.sql`
 
----
-
-## 3. Directory Hierarchy
-
-```text
-vakeelsetu_backend/
-├── uploads/
-│   ├── acts/                         # Existing Bare Act PDFs
-│   └── images/                       # New root image directory
-│       ├── img_adv_1732620000_a1b2/  # Unique image directory (by nanoid/timestamp)
-│       │   ├── small.avif            # ~4-5 KB thumbnail
-│       │   └── medium.avif           # ~10-15 KB full view
-│       └── img_blog_1732620100_c3d4/
-│           ├── small.avif            # ~15 KB card thumbnail
-│           └── medium.avif           # ~30 KB article banner
+```sql
+-- AlterTable
+ALTER TABLE "AdvocateTestAttempt" ADD COLUMN "responseSheetEmailSentAt" TIMESTAMP(3);
 ```
 
----
-
-## 4. Serving Static Images (Express & Nginx)
-
-### A. Backend Express Static Route (`src/server.js`)
-Serve `/uploads` with caching and CORS headers:
-```javascript
-import path from 'path';
-import express from 'express';
-
-// Expose /uploads statically
-app.use(
-  '/uploads',
-  express.static(path.resolve(process.cwd(), 'uploads'), {
-    maxAge: '30d',
-    immutable: true
-  })
-);
-```
-
-### B. Production Hostinger VPS (Nginx Reverse Proxy)
-In production, Nginx bypasses Node.js and serves `/uploads/` directly off the NVMe SSD for sub-millisecond response times:
-```nginx
-location /uploads/ {
-    alias /var/www/vakeelsetu_backend/uploads/;
-    expires 30d;
-    add_header Cache-Control "public, no-transform";
-    try_files $uri =404;
-}
-```
+> **Note on Migration Deployment:**
+> Following repository policy (README Section 31), `npx prisma migrate dev` is NOT used. Migration SQL will be added to `prisma/migrations/` and `schema.prisma` will be updated. We will wait for your explicit "OK" before running `npx prisma migrate deploy`.
 
 ---
 
-## 5. Architecture & Component Changes
+## System Design & Real Code Adaptations
 
-### A. New Image Storage Service: `src/services/imageStorage.service.js`
-A modular replacement for `src/services/cloudinary.service.js` powered by `sharp`:
-1. **`processAndSaveImage({ buffer, category, imageId })`**:
-   - `category`: `'AVATAR' | 'OFFICE' | 'CONTENT'`
-   - Generates unique `imageId` (e.g. `img_${category.toLowerCase()}_${Date.now()}_${random}`).
-   - Creates directory `uploads/images/<imageId>/`.
-   - Uses `sharp(buffer)` to generate:
-     - `small.avif`: Resizes with `fit: 'cover'`, compresses targeting specified KB range.
-     - `medium.avif`: Resizes with `fit: 'inside'` or `'cover'`, compresses targeting specified KB range.
-   - Returns structured URLs and local identifiers:
+### 1. Template: `advocateTestResponseSheetTemplate` in `src/templates/advocateAccountEmail.template.js`
+- **Inputs:** `attempt`, `advocate`, `attemptNumber`, `config`
+- **Header & Pill:**
+  - Pass: Green pill `&#10003;&nbsp; Test passed` (`#e6f6ee` bg, `#13804f` text)
+  - Fail: Red pill `&#10007;&nbsp; Test not passed` (`#fde8e8` bg, `#b42318` text)
+- **Heading & Greeting:**
+  - "Your test response sheet"
+  - `Dear <strong>Adv. {name}</strong>,<br/>Thank you for taking the VakeelSetu advocate qualification test. Here is a summary of your attempt and your answers.`
+- **Score Box:**
+  - Dark container (`#020317`), 3 columns: Correct (count), Wrong (count), Total (count), labels in `#f59f0b`.
+- **Details Table:**
+  - Name: `Adv. {name}`
+  - Bar Council ID: `{barCouncilId}` (monospace font)
+  - Test date & time: `formatSubmittedDateIst(attempt.startedAt), formatSubmittedTimeIst(attempt.startedAt)`
+  - Attempt: `Attempt {attemptNumber}`
+  - Time taken: `Math.min(submittedAt - startedAt, durationSeconds)`, formatted as `${m} min ${s} sec`
+  - Submitted: `attempt.autoSubmitted ? 'Automatically (time over)' : 'By you'`
+  - Result: Chip `Passed` (green) or `Not passed` (red)
+- **Question Breakdown (Snapshot-based):**
+  - Uses `attempt.questions` stored snapshot (never current question bank).
+  - Answers from `attempt.answers` map `{ index -> selectedKey }`.
+  - Section 1: `Wrong / not answered ({wrongCount})`
+    - Lists each wrong or unanswered question in attempt order:
+      - Title: `Q{n}. {escapeHtml(q.question)}`
+      - Badge: `&#10007; Wrong` (red) or `Not answered` (gray `#5b6472`, `#eef0f3` bg)
+      - Your answer: Selected option text in red (`#b42318`), or `<em style="color:#8a94a3;">Not answered</em>`
+      - Correct answer: Option text corresponding to `q.correctIndex` in green (`#13804f`)
+  - Section 2: `Correct ({correctCount})`
+    - Lists each correct question:
+      - Title: `Q{n}. {escapeHtml(q.question)}`
+      - Badge: `&#10003; Correct` (green)
+      - Your answer: Selected option text in green (`#13804f`)
+- **Closing Notice:**
+  - Pass: "Our team will now review your profile. We will email you once it is approved."
+  - Fail: "You can request a new test from the test page using **Request reschedule**."
+- **Master Email Shell:**
+  - Wrapped via `renderEmailLayout` with `tagline: 'Advocate Partner'`, including logo CID and dynamic `BRAND_*` footer and support block.
+- **Plain-text alternative:** Full text version of details and scores.
+- **Subject:**
+  - Pass: `Your VakeelSetu test result – Passed ({correct}/{total})`
+  - Fail: `Your VakeelSetu test result – Not passed ({correct}/{total})`
+
+### 2. Email Service & BCC Support: `src/services/email.service.js`
+- **`sendBrandedMail` extension:**
+  - Add optional `bcc` parameter.
+  - Forward `bcc` to nodemailer `mailOptions` when provided.
+- **`sendTestResponseSheetEmail(attemptId)`:**
+  1. Fetch attempt + advocate by `attemptId`. Verify attempt is finalized (`submittedAt != null`).
+  2. Skip if no advocate email on record (info log).
+  3. **Atomic Claim:**
      ```javascript
-     {
-       imageId: "img_avatar_1732620000_xyz",
-       url: "/uploads/images/img_avatar_1732620000_xyz/medium.avif",
-       smallUrl: "/uploads/images/img_avatar_1732620000_xyz/small.avif",
-       mediumUrl: "/uploads/images/img_avatar_1732620000_xyz/medium.avif"
-     }
+     const claim = await prisma.advocateTestAttempt.updateMany({
+       where: { id: attemptId, responseSheetEmailSentAt: null },
+       data: { responseSheetEmailSentAt: new Date() }
+     });
+     if (claim.count === 0) return { success: true, message: 'Already sent or claimed' };
      ```
-2. **`deleteImageFolder(imageId)`**:
-   - Deletes `uploads/images/<imageId>/` safely from disk when an asset is replaced or user account is deleted.
-   - Ignores if directory does not exist.
+  4. Compute `attemptNumber`:
+     Count finalized attempts for this advocate with `startedAt <= attempt.startedAt`.
+  5. Parse `ADVOCATE_TEST_SHEET_BCC`:
+     - Split on comma, trim whitespace.
+     - Validate each against email regex.
+     - If invalid emails found, log **one** warning: `[Email Service] Invalid BCC email(s) ignored in ADVOCATE_TEST_SHEET_BCC: ...`
+     - Valid emails form the `bcc` list.
+  6. Call `sendBrandedMail` with 8-second timeout (`Promise.race`).
+  7. **Logging:**
+     Log type `ADVOCATE_TEST_RESPONSE_SHEET`, masked recipient `maskEmail(to)`, `attemptId`, BCC count `bccCount: validBcc.length`, success/fail. Never log answers or email body.
+  8. **Failure handling:**
+     On failure or timeout, reset `responseSheetEmailSentAt: null` in database so cron can retry. Catch all errors, log, and never throw.
 
-### B. Backward Compatibility for Frontend
-To ensure mobile apps and web frontends do not break:
-- `profilePhotoUrl` / `officePhotoUrl` / `imageUrl` will continue to return a full, valid image URL pointing to `medium.avif` (e.g., `https://api.vakeelsetu.com/uploads/images/<id>/medium.avif`).
-- New optional fields `smallPhotoUrl` or `thumbnailUrl` can be provided in API responses for high-performance listing views.
-- `publicId` fields (`profilePhotoPublicId`, `officePhotoPublicId`, `imagePublicId`) in the database will now store the local `imageId`.
+### 3. Triggers: `src/services/advocateTest.service.js` & `src/controllers/paymentCron.controller.js`
+- **Manual Submit (`submitAdvocateTest`):**
+  - Finalizes score in transaction.
+  - After commit, `await sendTestResponseSheetEmail(attempt.id)`.
+  - Return result with `responseSheetEmailed: Boolean(emailRes.success)`. Email failure never throws or fails the submit API.
+  - Idempotent return (double submit): returns existing score with `responseSheetEmailed: Boolean(attempt.responseSheetEmailSentAt)`.
+- **Late Answer Autosave (`saveAdvocateTestAnswers`):**
+  - When auto-finalized due to expired deadline, call `sendTestResponseSheetEmail(attempt.id)`.
+- **Cron Auto-submit (`processTestCronJobs` step 3):**
+  - When auto-finalizing abandoned attempts, call `sendTestResponseSheetEmail(att.id)`.
+- **Cron Retry (`paymentCron.controller.js`):**
+  - Finds finalized attempts from last 48 hours where `responseSheetEmailSentAt: null`:
+    ```javascript
+    const pendingTestSheetAttempts = await prisma.advocateTestAttempt.findMany({
+      where: {
+        submittedAt: { gte: fortyEightHoursAgo },
+        responseSheetEmailSentAt: null
+      },
+      select: { id: true },
+      take: 25,
+      orderBy: { submittedAt: 'asc' }
+    });
+    ```
+  - Loops and calls `sendTestResponseSheetEmail(att.id)`.
 
----
+### 4. Email Previews: `scripts/preview-emails.js`
+- Generate `test-sheet-pass.html` and `test-sheet-fail.html` with dummy 20-question snapshot.
 
-## 6. Controllers & Services to be Updated
-
-1. **`src/services/auth.service.js`**:
-   - Advocate registration: replace Cloudinary call with `imageStorageService.processAndSaveImage(file.buffer, 'AVATAR')`.
-   - Office photo upload: replace Cloudinary call with `imageStorageService.processAndSaveImage(file.buffer, 'OFFICE')`.
-2. **`src/controllers/advocate.auth.controller.js`**:
-   - `uploadProfilePhoto`: use new service.
-   - `completeProfile`: handle office photo with new service.
-3. **`src/controllers/advocate.profile.controller.js`**:
-   - Profile photo updates and draft changes: use new service and delete old local folder on replacement.
-4. **`src/controllers/blog.controller.js`**:
-   - `createBlog` & `updateBlog`: use new service (`'CONTENT'`), delete old folder on update/deletion.
-5. **`src/controllers/userRight.controller.js`**:
-   - `createUserRight` & `updateUserRight`: use new service (`'CONTENT'`), delete old folder on update/deletion.
-6. **`src/services/advocateDeletion.service.js`**:
-   - Account deletion job: replace `deleteFromCloudinary` with `deleteImageFolder`.
-
----
-
-## 7. Migration Script: `scripts/migrateCloudinaryToLocal.js`
-
-A safe, idempotent Node.js script:
-1. Connects to database via Prisma.
-2. Scans for existing records with Cloudinary URLs in:
-   - `Advocate.profilePhotoUrl` & `Advocate.officePhotoUrl`
-   - `AdvocateRegistrationSession.profilePhotoUrl` & `officePhotoUrl`
-   - `User.photo`
-   - `Blog.imageUrl`
-   - `UserRight.imageUrl`
-3. For each asset:
-   - Fetches image buffer over HTTPS from Cloudinary.
-   - Passes buffer to `imageStorage.service.js`.
-   - Generates `small.avif` and `medium.avif` locally.
-   - Updates record in Prisma with the new local path and new local `imageId`.
-4. Produces a detailed report:
-   - Total scanned
-   - Total successfully migrated
-   - Failed items (if any) with reasons.
+### 5. Environment & Documentation: `.env.example` & `README.md`
+- `.env.example`: Add `ADVOCATE_TEST_SHEET_BCC=` with description.
+- `README.md` Section 39: Document "Test response sheet email" (triggers, contents, BCC env, 48h retry, `responseSheetEmailed` in submit response, manual testing).
 
 ---
 
-## 8. Step-by-Step Implementation Sequence
-
-1. **Phase 1: Dependencies & Base Setup**
-   - Install `sharp` dependency in `package.json`.
-   - Ensure `uploads/images/` directory is created and `.gitkeep` added.
-   - Add `/uploads` static route in `src/server.js`.
-
-2. **Phase 2: Core Image Service Implementation**
-   - Create `src/services/imageStorage.service.js` with AVIF dual-variant generation and folder deletion logic.
-   - Add unit test verification for dimension, compression, and file size limits (~4-5KB for small, ~10-15KB for medium).
-
-3. **Phase 3: Controller & Service Refactoring**
-   - Update Advocate registration & office photo routes.
-   - Update Advocate profile photo edit & draft routes.
-   - Update Blog and User Right controllers.
-   - Update Account Deletion cleanup routine.
-
-4. **Phase 4: Migration Script Creation & Verification**
-   - Create `scripts/migrateCloudinaryToLocal.js`.
-   - Test script on isolated records.
-
-5. **Phase 5: Validation & Deployment Guide**
-   - Test image upload via API endpoints.
-   - Document Nginx configuration snippet for Hostinger VPS deployment.
+## Files to Change
+1. `prisma/schema.prisma`
+2. `prisma/migrations/20261128113000_add_test_attempt_response_sheet_email_sent_at/migration.sql` (new migration file)
+3. `src/templates/advocateAccountEmail.template.js`
+4. `src/services/email.service.js`
+5. `src/services/advocateTest.service.js`
+6. `src/controllers/paymentCron.controller.js`
+7. `scripts/preview-emails.js`
+8. `.env.example`
+9. `README.md`
 
 ---
 
-## 9. Safety & Rollback Plan
-
-- **Non-destructive:** Cloudinary files are NOT deleted during the migration script run until verified.
-- **Rollback:** If any issue occurs, the database backup and Cloudinary assets remain intact; changing the static URL base or reverting the controller calls restores Cloudinary instantly.
+## Risks & Mitigations
+1. **Risk:** Slow SMTP or network timeout blocks advocate submit response.
+   - **Mitigation:** 8-second timeout on email sending; submit response succeeds regardless of email outcome (`responseSheetEmailed: false`).
+2. **Risk:** Duplicate emails on concurrent / double submits.
+   - **Mitigation:** Atomic claim with `updateMany({ where: { id, responseSheetEmailSentAt: null } })`. Only one caller can succeed; the other sees count 0 and exits cleanly.
+3. **Risk:** Transient email server outage drops email permanently.
+   - **Mitigation:** Transporter failure resets `responseSheetEmailSentAt: null`; the 15-minute reconciliation cron retries attempts finalized within the last 48 hours.
+4. **Risk:** Snapshot data discrepancy if questions are edited in admin bank later.
+   - **Mitigation:** Template reads exclusively from `attempt.questions` snapshot and `attempt.answers` saved on the attempt record, never the `AdvocateTestQuestion` table.
+5. **Risk:** Database pollution or accidental modification on production Neon DB.
+   - **Mitigation:** All unit tests run against in-memory mocked Prisma delegates; no real email or DB mutations are run during testing.

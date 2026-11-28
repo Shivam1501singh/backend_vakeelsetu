@@ -24,10 +24,16 @@ import {
   getConsultancyCallTypeLabel
 } from '../src/templates/bookingEmail.template.js';
 import {
+  advocateTestResponseSheetTemplate
+} from '../src/templates/advocateAccountEmail.template.js';
+import {
   sendEmailOtp,
   sendBrandedMail,
   sendAdvocateBookingConfirmationEmails,
   sendConsultancyConfirmationEmail,
+  sendTestResponseSheetEmail,
+  parseAdvocateTestSheetBcc,
+  resetBccWarningState,
   setTransporter,
   maskEmail
 } from '../src/services/email.service.js';
@@ -624,5 +630,324 @@ describe('4. Email Service (Stubbed Transporter)', () => {
     prisma.consultancyRequest.findUnique = originalFindUnique;
     prisma.consultancyRequest.updateMany = originalUpdateMany;
     prisma.consultancyRequest.update = originalUpdate;
+  });
+});
+
+describe('5. Test Response Sheet Email & BCC', () => {
+  const dummySnapshotQuestions = [
+    {
+      questionId: 'q-1',
+      question: 'Under which Article can a person approach Supreme Court? <script>alert("xss")</script>',
+      options: ['Article 226', 'Article 32 & <safe>', 'Article 136', 'Article 142'],
+      correctIndex: 1
+    },
+    {
+      questionId: 'q-2',
+      question: 'Condonation of delay is under which Section of Limitation Act?',
+      options: ['Section 3', 'Section 4', 'Section 5', 'Section 6'],
+      correctIndex: 2
+    },
+    {
+      questionId: 'q-3',
+      question: 'Mutual consent divorce is under which Section of HMA?',
+      options: ['Section 13', 'Section 13A', 'Section 13B', 'Section 14'],
+      correctIndex: 2
+    }
+  ];
+
+  const dummyAdvocate = {
+    fullName: 'Adv. Priya Sharma <script>',
+    barCouncilId: 'D/1234/2018',
+    email: 'priya@example.com'
+  };
+
+  it('5.1 renders pass variant with green pill, Passed chip, score box, and review closing line', () => {
+    const attempt = {
+      questions: dummySnapshotQuestions,
+      answers: [
+        { index: 0, selected: 'B' }, // Correct
+        { index: 1, selected: 'C' }, // Correct
+        { index: 2, selected: 'C' }  // Correct
+      ],
+      startedAt: new Date('2026-11-28T10:40:00.000Z'),
+      submittedAt: new Date('2026-11-28T10:54:32.000Z'),
+      autoSubmitted: false,
+      totalQuestions: 3,
+      correctCount: 3,
+      wrongCount: 0,
+      passed: true
+    };
+
+    const { subject, html, text } = advocateTestResponseSheetTemplate({
+      attempt,
+      advocate: dummyAdvocate,
+      attemptNumber: 2,
+      durationMinutes: 20
+    });
+
+    assert.equal(subject, 'Your VakeelSetu test result – Passed (3/3)');
+    assert.ok(html.includes('Test passed'));
+    assert.ok(html.includes('Passed'));
+    assert.ok(html.includes('Attempt 2'));
+    assert.ok(html.includes('14 min 32 sec'));
+    assert.ok(html.includes('By you'));
+    assert.ok(html.includes('Our team will now review your profile. We will email you once it is approved.'));
+    assert.ok(text.includes('Result: PASSED'));
+  });
+
+  it('5.2 renders fail variant with red pill, Not passed chip, and reschedule closing line', () => {
+    const attempt = {
+      questions: dummySnapshotQuestions,
+      answers: [
+        { index: 0, selected: 'A' }, // Wrong
+        { index: 1, selected: null }, // Not answered
+        { index: 2, selected: 'C' }   // Correct
+      ],
+      startedAt: new Date('2026-11-28T11:00:00.000Z'),
+      submittedAt: new Date('2026-11-28T11:20:00.000Z'),
+      autoSubmitted: true,
+      totalQuestions: 3,
+      correctCount: 1,
+      wrongCount: 2,
+      passed: false
+    };
+
+    const { subject, html, text } = advocateTestResponseSheetTemplate({
+      attempt,
+      advocate: dummyAdvocate,
+      attemptNumber: 1,
+      durationMinutes: 20
+    });
+
+    assert.equal(subject, 'Your VakeelSetu test result – Not passed (1/3)');
+    assert.ok(html.includes('Test not passed'));
+    assert.ok(html.includes('Not passed'));
+    assert.ok(html.includes('Attempt 1'));
+    assert.ok(html.includes('Automatically (time over)'));
+    assert.ok(html.includes('You can request a new test from the test page using <strong>Request reschedule</strong>.'));
+    assert.ok(text.includes('Result: NOT PASSED'));
+  });
+
+  it('5.3 categorizes wrong/unanswered vs correct sections and uses snapshot with HTML escaping', () => {
+    const attempt = {
+      questions: dummySnapshotQuestions,
+      answers: [
+        { index: 0, selected: 'A' }, // Wrong: selected Article 226, correct is Article 32 & <safe>
+        { index: 1, selected: null }, // Unanswered
+        { index: 2, selected: 'C' }  // Correct
+      ],
+      startedAt: new Date(),
+      submittedAt: new Date(),
+      autoSubmitted: false,
+      totalQuestions: 3,
+      correctCount: 1,
+      wrongCount: 2,
+      passed: false
+    };
+
+    const { html } = advocateTestResponseSheetTemplate({
+      attempt,
+      advocate: dummyAdvocate,
+      attemptNumber: 1
+    });
+
+    // Check wrong / unanswered section
+    assert.ok(html.includes('Wrong / not answered (2)'));
+    assert.ok(html.includes('&#10007; Wrong'));
+    assert.ok(html.includes('Not answered'));
+    assert.ok(html.includes('Article 226'));
+    assert.ok(html.includes('&amp; &lt;safe&gt;')); // Escaped option text
+
+    // Check correct section
+    assert.ok(html.includes('Correct (1)'));
+    assert.ok(html.includes('&#10003; Correct'));
+    assert.ok(html.includes('Section 13B'));
+
+    // Check XSS escaping
+    assert.ok(!html.includes('<script>alert("xss")</script>'));
+    assert.ok(html.includes('&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;'));
+  });
+
+  it('5.4 caps time taken at test duration', () => {
+    const startedAt = new Date('2026-11-28T10:00:00.000Z');
+    const submittedAt = new Date('2026-11-28T10:35:00.000Z'); // 35 minutes later
+    const attempt = {
+      questions: [],
+      answers: [],
+      startedAt,
+      submittedAt,
+      autoSubmitted: true,
+      totalQuestions: 0,
+      correctCount: 0,
+      wrongCount: 0,
+      passed: false
+    };
+
+    const { html } = advocateTestResponseSheetTemplate({
+      attempt,
+      advocate: dummyAdvocate,
+      attemptNumber: 1,
+      durationMinutes: 20
+    });
+
+    assert.ok(html.includes('20 min 0 sec'));
+  });
+
+  it('5.5 parseAdvocateTestSheetBcc parses valid emails, ignores invalid, and logs single warning', () => {
+    resetBccWarningState();
+    const warnings = [];
+    const origWarn = console.warn;
+    console.warn = (...args) => warnings.push(args.join(' '));
+
+    try {
+      const raw = ' admin@vakeelsetu.com , invalid-email, audit@vakeel.in , @bad.com ';
+      const valid = parseAdvocateTestSheetBcc(raw);
+      assert.deepEqual(valid, ['admin@vakeelsetu.com', 'audit@vakeel.in']);
+      assert.equal(warnings.length, 1);
+      assert.ok(warnings[0].includes('Invalid BCC email(s) ignored in ADVOCATE_TEST_SHEET_BCC'));
+
+      // Second call must not log warning again
+      parseAdvocateTestSheetBcc(raw);
+      assert.equal(warnings.length, 1);
+
+      // Empty/whitespace env returns empty list
+      assert.deepEqual(parseAdvocateTestSheetBcc(''), []);
+      assert.deepEqual(parseAdvocateTestSheetBcc('   '), []);
+      assert.deepEqual(parseAdvocateTestSheetBcc(null), []);
+    } finally {
+      console.warn = origWarn;
+      resetBccWarningState();
+    }
+  });
+
+  it('5.6 sendTestResponseSheetEmail claims atomically and prevents double-send', async () => {
+    process.env.EMAIL_USER = 'sender@vakeelsetu.com';
+    const sentMails = [];
+    setTransporter({
+      sendMail: async (opts) => {
+        sentMails.push(opts);
+        return { messageId: 'test-sheet-msg-1' };
+      }
+    });
+
+    const mockAttempt = {
+      id: 'att-claim-1',
+      advocateId: 'adv-claim-1',
+      startedAt: new Date('2026-11-28T10:00:00.000Z'),
+      submittedAt: new Date('2026-11-28T10:15:00.000Z'),
+      autoSubmitted: false,
+      totalQuestions: 1,
+      correctCount: 1,
+      wrongCount: 0,
+      passed: true,
+      questions: [
+        { questionId: 'q-1', question: 'Test Question', options: ['A', 'B'], correctIndex: 0 }
+      ],
+      answers: [{ index: 0, selected: 'A' }],
+      advocate: {
+        fullName: 'Adv. Test User',
+        barCouncilId: 'D/1111/2020',
+        email: 'recipient@example.com'
+      }
+    };
+
+    let claimed = false;
+    const origFindUnique = prisma.advocateTestAttempt.findUnique;
+    const origUpdateMany = prisma.advocateTestAttempt.updateMany;
+    const origCount = prisma.advocateTestAttempt.count;
+
+    prisma.advocateTestAttempt.findUnique = async () => mockAttempt;
+    prisma.advocateTestAttempt.updateMany = async ({ where }) => {
+      if (!claimed && where.responseSheetEmailSentAt === null) {
+        claimed = true;
+        return { count: 1 };
+      }
+      return { count: 0 };
+    };
+    prisma.advocateTestAttempt.count = async () => 1;
+
+    // First call: succeeds and sends email
+    const res1 = await sendTestResponseSheetEmail('att-claim-1');
+    assert.equal(res1.success, true);
+    assert.equal(sentMails.length, 1);
+    assert.equal(sentMails[0].to, 'recipient@example.com');
+    assert.ok(sentMails[0].subject.includes('Passed'));
+
+    // Second call (concurrent or double submit): claim count is 0 -> skipped
+    const res2 = await sendTestResponseSheetEmail('att-claim-1');
+    assert.equal(res2.success, true);
+    assert.equal(res2.message, 'Already sent or claimed');
+    assert.equal(sentMails.length, 1); // No new email sent
+
+    prisma.advocateTestAttempt.findUnique = origFindUnique;
+    prisma.advocateTestAttempt.updateMany = origUpdateMany;
+    prisma.advocateTestAttempt.count = origCount;
+  });
+
+  it('5.7 sendTestResponseSheetEmail resets timestamp on transporter failure and never throws', async () => {
+    process.env.EMAIL_USER = 'sender@vakeelsetu.com';
+    setTransporter({
+      sendMail: async () => {
+        throw new Error('SMTP Timeout Error');
+      }
+    });
+
+    const mockAttempt = {
+      id: 'att-fail-reset',
+      advocateId: 'adv-fail-1',
+      startedAt: new Date(),
+      submittedAt: new Date(),
+      autoSubmitted: false,
+      totalQuestions: 1,
+      correctCount: 1,
+      wrongCount: 0,
+      passed: true,
+      questions: [{ questionId: 'q-1', question: 'Q', options: ['A'], correctIndex: 0 }],
+      answers: [],
+      advocate: { email: 'fail@example.com' }
+    };
+
+    let resetToNull = false;
+    const origFindUnique = prisma.advocateTestAttempt.findUnique;
+    const origUpdateMany = prisma.advocateTestAttempt.updateMany;
+    const origUpdate = prisma.advocateTestAttempt.update;
+    const origCount = prisma.advocateTestAttempt.count;
+
+    prisma.advocateTestAttempt.findUnique = async () => mockAttempt;
+    prisma.advocateTestAttempt.updateMany = async () => ({ count: 1 });
+    prisma.advocateTestAttempt.count = async () => 1;
+    prisma.advocateTestAttempt.update = async ({ data }) => {
+      if (data.responseSheetEmailSentAt === null) {
+        resetToNull = true;
+      }
+      return {};
+    };
+
+    const res = await sendTestResponseSheetEmail('att-fail-reset');
+    assert.equal(res.success, false);
+    assert.equal(resetToNull, true);
+
+    prisma.advocateTestAttempt.findUnique = origFindUnique;
+    prisma.advocateTestAttempt.updateMany = origUpdateMany;
+    prisma.advocateTestAttempt.update = origUpdate;
+    prisma.advocateTestAttempt.count = origCount;
+  });
+
+  it('5.8 sendTestResponseSheetEmail skips cleanly when advocate has no email', async () => {
+    const mockAttempt = {
+      id: 'att-no-email',
+      startedAt: new Date(),
+      submittedAt: new Date(),
+      advocate: { email: '' }
+    };
+
+    const origFindUnique = prisma.advocateTestAttempt.findUnique;
+    prisma.advocateTestAttempt.findUnique = async () => mockAttempt;
+
+    const res = await sendTestResponseSheetEmail('att-no-email');
+    assert.equal(res.success, true);
+    assert.equal(res.message, 'No email on record');
+
+    prisma.advocateTestAttempt.findUnique = origFindUnique;
   });
 });

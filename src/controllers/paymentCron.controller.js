@@ -1,7 +1,11 @@
 import prisma from '../lib/prisma.js';
 import { syncPaymentFromRazorpay } from '../services/payment.service.js';
 import { getRazorpayClient } from '../config/razorpay.js';
-import { sendAdvocateBookingConfirmationEmails, sendConsultancyConfirmationEmail } from '../services/email.service.js';
+import {
+  sendAdvocateBookingConfirmationEmails,
+  sendConsultancyConfirmationEmail,
+  sendTestResponseSheetEmail
+} from '../services/email.service.js';
 import { processTestCronJobs } from '../services/advocateTest.service.js';
 
 /**
@@ -133,6 +137,29 @@ export const reconcilePaymentsCron = async (req, res) => {
       }
     }
 
+    // Retry unsent test response sheet emails in the last 48h
+    const pendingTestSheetAttempts = await prisma.advocateTestAttempt.findMany({
+      where: {
+        submittedAt: { gte: fortyEightHoursAgo },
+        responseSheetEmailSentAt: null
+      },
+      select: { id: true },
+      take: 25,
+      orderBy: { submittedAt: 'asc' }
+    });
+
+    let testResponseSheetsRetriedCount = 0;
+    for (const att of pendingTestSheetAttempts) {
+      try {
+        const res = await sendTestResponseSheetEmail(att.id);
+        if (res && res.success) {
+          testResponseSheetsRetriedCount++;
+        }
+      } catch (sheetErr) {
+        errors.push({ attemptId: att.id, error: sheetErr.message });
+      }
+    }
+
     // Process Advocate Qualification Test background jobs (send due invites, expire links, auto-submit)
     let testCronResults = { invitesSent: 0, linksExpired: 0, attemptsAutoSubmitted: 0, errors: [] };
     try {
@@ -150,6 +177,7 @@ export const reconcilePaymentsCron = async (req, res) => {
       expiredCount,
       emailsRetriedCount,
       consultancyEmailsRetriedCount,
+      testResponseSheetsRetried: testResponseSheetsRetriedCount,
       testInvitesSent: testCronResults.invitesSent,
       testLinksExpired: testCronResults.linksExpired,
       testAttemptsAutoSubmitted: testCronResults.attemptsAutoSubmitted,

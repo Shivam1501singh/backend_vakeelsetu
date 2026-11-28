@@ -26,6 +26,7 @@ import {
   updateTestQuestionSchema
 } from '../src/validators/admin.validator.js';
 import { requireAuth } from '../src/middleware/auth.middleware.js';
+import { reconcilePaymentsCron } from '../src/controllers/paymentCron.controller.js';
 
 describe('Advocate Qualification Test Suite', () => {
   let originalPrisma;
@@ -961,6 +962,250 @@ describe('Advocate Qualification Test Suite', () => {
       assert.equal(summary.status, 'NOT_REQUIRED');
       assert.equal(summary.attemptsCount, 0);
       assert.equal(summary.latest, null);
+    });
+  });
+
+  describe('8. Test Response Sheet Email Triggers & Reconciliation', () => {
+    it('8.1 Manual submit dispatches response sheet email and returns responseSheetEmailed: true', async () => {
+      const mockAttempt = {
+        id: 'att-submit-1',
+        inviteId: 'inv-submit-1',
+        advocateId: 'adv-submit-1',
+        deadlineAt: new Date(Date.now() + 10 * 60 * 1000),
+        startedAt: new Date(Date.now() - 5 * 60 * 1000),
+        submittedAt: null,
+        totalQuestions: 20,
+        questions: Array.from({ length: 20 }, (_, i) => ({
+          questionId: `q-${i}`,
+          question: `Q${i}`,
+          options: ['A', 'B', 'C', 'D'],
+          correctIndex: 0
+        })),
+        answers: [],
+        responseSheetEmailSentAt: null,
+        advocate: {
+          id: 'adv-submit-1',
+          fullName: 'Adv. Submit User',
+          email: 'submit@example.com'
+        }
+      };
+
+      const sentMails = [];
+      setTransporter({
+        sendMail: async (opts) => {
+          sentMails.push(opts);
+          return { messageId: 'msg-submit-sheet' };
+        }
+      });
+
+      prisma.advocateTestAttempt.findUnique = async () => {
+        return mockAttempt;
+      };
+      prisma.advocateTestAttempt.update = async ({ data }) => {
+        Object.assign(mockAttempt, data);
+        return mockAttempt;
+      };
+      prisma.advocateTestAttempt.updateMany = async () => ({ count: 1 });
+      prisma.advocateTestAttempt.count = async () => 1;
+      prisma.advocateTestInvite.update = async () => ({});
+      prisma.advocate.update = async () => ({});
+      prisma.$transaction = async (cb) => cb(prisma);
+
+      const res = await submitAdvocateTest({
+        inviteId: 'inv-submit-1',
+        advocateId: 'adv-submit-1',
+        answers: Array.from({ length: 16 }, (_, i) => ({ index: i, selected: 'A' }))
+      });
+
+      assert.equal(res.passed, true);
+      assert.equal(res.correct, 16);
+      assert.equal(res.wrong, 4);
+      assert.equal(res.responseSheetEmailed, true);
+      assert.equal(sentMails.length, 1);
+      assert.equal(sentMails[0].to, 'submit@example.com');
+      assert.ok(sentMails[0].subject.includes('Passed (16/20)'));
+    });
+
+    it('8.2 Double submit returns existing result with responseSheetEmailed without sending duplicate email', async () => {
+      const mockAttempt = {
+        id: 'att-submit-2',
+        inviteId: 'inv-submit-2',
+        advocateId: 'adv-submit-2',
+        submittedAt: new Date(),
+        correctCount: 16,
+        wrongCount: 4,
+        totalQuestions: 20,
+        passed: true,
+        responseSheetEmailSentAt: new Date()
+      };
+
+      const sentMails = [];
+      setTransporter({
+        sendMail: async (opts) => {
+          sentMails.push(opts);
+          return {};
+        }
+      });
+
+      prisma.advocateTestAttempt.findUnique = async () => mockAttempt;
+
+      const res = await submitAdvocateTest({
+        inviteId: 'inv-submit-2',
+        advocateId: 'adv-submit-2',
+        answers: []
+      });
+
+      assert.equal(res.passed, true);
+      assert.equal(res.correct, 16);
+      assert.equal(res.responseSheetEmailed, true);
+      assert.equal(sentMails.length, 0); // No email sent on double submit
+    });
+
+    it('8.3 Auto-submit on late answer save dispatches response sheet email', async () => {
+      const pastDeadline = new Date(Date.now() - 10 * 60 * 1000);
+      const mockAttempt = {
+        id: 'att-late-1',
+        inviteId: 'inv-late-1',
+        advocateId: 'adv-late-1',
+        startedAt: new Date(Date.now() - 30 * 60 * 1000),
+        deadlineAt: pastDeadline,
+        submittedAt: null,
+        totalQuestions: 1,
+        questions: [{ questionId: 'q-1', question: 'Q1', options: ['A'], correctIndex: 0 }],
+        answers: [{ index: 0, selected: 'A' }],
+        responseSheetEmailSentAt: null,
+        advocate: { id: 'adv-late-1', fullName: 'Late Advocate', email: 'late@example.com' }
+      };
+
+      const sentMails = [];
+      setTransporter({
+        sendMail: async (opts) => {
+          sentMails.push(opts);
+          return { messageId: 'late-sheet-msg' };
+        }
+      });
+
+      prisma.advocateTestAttempt.findUnique = async () => mockAttempt;
+      prisma.advocateTestAttempt.update = async ({ data }) => {
+        Object.assign(mockAttempt, data);
+        return mockAttempt;
+      };
+      prisma.advocateTestAttempt.updateMany = async () => ({ count: 1 });
+      prisma.advocateTestAttempt.count = async () => 1;
+      prisma.advocateTestInvite.update = async () => ({});
+      prisma.advocate.update = async () => ({});
+      prisma.$transaction = async (cb) => cb(prisma);
+
+      const res = await saveAdvocateTestAnswers({
+        inviteId: 'inv-late-1',
+        advocateId: 'adv-late-1',
+        answers: []
+      });
+
+      assert.equal(res.code, 'TIME_EXPIRED');
+      assert.equal(res.result.passed, false);
+      // Wait a tick for async dispatch
+      await new Promise((r) => setTimeout(r, 50));
+      assert.equal(sentMails.length, 1);
+      assert.equal(sentMails[0].to, 'late@example.com');
+      assert.ok(sentMails[0].subject.includes('Not passed (1/1)'));
+    });
+
+    it('8.4 processTestCronJobs auto-submits abandoned attempts and sends response sheet email', async () => {
+      const mockAttempt = {
+        id: 'att-cron-auto',
+        advocateId: 'adv-cron-1',
+        inviteId: 'inv-cron-1',
+        deadlineAt: new Date(Date.now() - 10 * 60 * 1000),
+        startedAt: new Date(Date.now() - 30 * 60 * 1000),
+        submittedAt: null,
+        totalQuestions: 1,
+        questions: [{ questionId: 'q-1', question: 'Q1', options: ['A'], correctIndex: 0 }],
+        answers: [],
+        responseSheetEmailSentAt: null,
+        advocate: { id: 'adv-cron-1', fullName: 'Cron User', email: 'cron@example.com' }
+      };
+
+      const sentMails = [];
+      setTransporter({
+        sendMail: async (opts) => {
+          sentMails.push(opts);
+          return { messageId: 'cron-sheet-msg' };
+        }
+      });
+
+      prisma.advocateTestInvite.findMany = async () => [];
+      prisma.advocateTestAttempt.findMany = async () => [mockAttempt];
+      prisma.advocateTestAttempt.findUnique = async () => ({ ...mockAttempt, submittedAt: new Date() });
+      prisma.advocateTestAttempt.update = async ({ data }) => Object.assign(mockAttempt, data);
+      prisma.advocateTestAttempt.updateMany = async () => ({ count: 1 });
+      prisma.advocateTestAttempt.count = async () => 1;
+      prisma.advocateTestInvite.update = async () => ({});
+      prisma.advocate.update = async () => ({});
+      prisma.$transaction = async (cb) => cb(prisma);
+
+      const cronResult = await processTestCronJobs();
+      assert.equal(cronResult.attemptsAutoSubmitted, 1);
+      assert.equal(sentMails.length, 1);
+      assert.equal(sentMails[0].to, 'cron@example.com');
+    });
+
+    it('8.5 Reconcile cron retries unsent test response sheet emails from last 48h', async () => {
+      process.env.CRON_SECRET = 'cron-secret-test';
+      const sentMails = [];
+      setTransporter({
+        sendMail: async (opts) => {
+          sentMails.push(opts);
+          return { messageId: 'retry-sheet-msg' };
+        }
+      });
+
+      const mockAttempt = {
+        id: 'att-retry-1',
+        advocateId: 'adv-retry-1',
+        startedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+        submittedAt: new Date(Date.now() - 1 * 60 * 60 * 1000),
+        autoSubmitted: false,
+        totalQuestions: 1,
+        questions: [{ questionId: 'q-1', question: 'Q', options: ['A'], correctIndex: 0 }],
+        answers: [{ index: 0, selected: 'A' }],
+        passed: true,
+        correctCount: 1,
+        wrongCount: 0,
+        responseSheetEmailSentAt: null,
+        advocate: { fullName: 'Retry User', email: 'retry@example.com' }
+      };
+
+      prisma.payment = { findMany: async () => [] };
+      prisma.advocateBooking = { findMany: async () => [] };
+      prisma.consultancyRequest = { findMany: async () => [] };
+      prisma.advocateTestInvite = { findMany: async () => [] };
+
+      prisma.advocateTestAttempt.findMany = async ({ where }) => {
+        if (where && where.responseSheetEmailSentAt === null) {
+          return [{ id: 'att-retry-1' }];
+        }
+        return [];
+      };
+      prisma.advocateTestAttempt.findUnique = async () => mockAttempt;
+      prisma.advocateTestAttempt.updateMany = async () => ({ count: 1 });
+      prisma.advocateTestAttempt.update = async () => mockAttempt;
+      prisma.advocateTestAttempt.count = async () => 1;
+
+      const req = {
+        headers: {
+          authorization: 'Bearer cron-secret-test'
+        }
+      };
+      const res = mockRes();
+
+      await reconcilePaymentsCron(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.jsonData.success, true);
+      assert.equal(res.jsonData.testResponseSheetsRetried, 1);
+      assert.equal(sentMails.length, 1);
+      assert.equal(sentMails[0].to, 'retry@example.com');
     });
   });
 });

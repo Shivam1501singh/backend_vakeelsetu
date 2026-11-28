@@ -14494,15 +14494,17 @@ ADVOCATE_TEST_PASS_MARK=15
 ADVOCATE_TEST_DURATION_MINUTES=20
 ADVOCATE_TEST_LINK_VALID_HOURS=72
 ADVOCATE_TEST_RESCHEDULE_DELAY_MINUTES=60
+ADVOCATE_TEST_SHEET_BCC= # comma-separated; optional (applies only to test response sheet)
 ```
 
 ---
 
 ### 4. Background Cron Reconciliation
-The 15-minute reconciliation cron (`GET /api/internal/cron/payments-reconcile`) executes 3 automated steps:
+The 15-minute reconciliation cron (`GET /api/internal/cron/payments-reconcile`) executes 4 automated steps:
 1. **Send Due Invites:** Finds invites with `status = "SCHEDULED" AND sendAt <= now`. Generates fresh 32-byte base64url token, computes SHA-256 hash, dispatches email, and transitions to `status = "SENT", sentAt = now, expiresAt = now + 72h`.
 2. **Expire Stale Links:** Finds invites with `status = "SENT" AND expiresAt < now AND attempt is null` and sets `status = "EXPIRED"`.
-3. **Auto-finalize Abandoned Attempts:** Finds attempts with `submittedAt is null AND deadlineAt < (now - 60s grace)`. Automatically scores with saved answers, marks `autoSubmitted = true`, and finalizes the attempt.
+3. **Auto-finalize Abandoned Attempts:** Finds attempts with `submittedAt is null AND deadlineAt < (now - 60s grace)`. Automatically scores with saved answers, marks `autoSubmitted = true`, and finalizes the attempt. Triggers test response sheet email immediately.
+4. **Retry Unsent Test Response Sheets:** Finds finalized attempts from the last 48 hours with `responseSheetEmailSentAt = null` and retries sending their test response sheet email.
 
 ---
 
@@ -14635,7 +14637,8 @@ The 15-minute reconciliation cron (`GET /api/internal/cron/payments-reconcile`) 
   "total": 20,
   "passed": true,
   "message": "You have passed the test.",
-  "canRequestReschedule": false
+  "canRequestReschedule": false,
+  "responseSheetEmailed": true
 }
 ```
 - **Response (Failed - HTTP 200):**
@@ -14647,7 +14650,8 @@ The 15-minute reconciliation cron (`GET /api/internal/cron/payments-reconcile`) 
   "total": 20,
   "passed": false,
   "message": "Test completed.",
-  "canRequestReschedule": true
+  "canRequestReschedule": true,
+  "responseSheetEmailed": true
 }
 ```
 
@@ -14782,5 +14786,65 @@ The 15-minute reconciliation cron (`GET /api/internal/cron/payments-reconcile`) 
    - Verify `test` object reflects latest score, best score, and attempt counts.
    - Call `PATCH /api/admin/advocates/:advocateId/approve`.
    - Verify profile approval succeeds regardless of whether advocate passed or failed.
+
+---
+
+### 8. Test Response Sheet Email
+
+#### 8.1 When It Is Sent
+An email containing the comprehensive **Test Response Sheet** is dispatched immediately after **every** test attempt is finalized:
+- **Manual Submit (`POST /api/advocate-test/submit`):** Awaited with an 8-second timeout right after the transaction commits. The submit response returns `responseSheetEmailed: true` (or `false` if email dispatch failed or timed out). The submit operation never fails due to email issues.
+- **Late Submit / Timer Expiry (`PUT /api/advocate-test/answers`):** Auto-finalizes and dispatches the response sheet email asynchronously.
+- **Cron Auto-Finalize (`GET /api/internal/cron/payments-reconcile` step 3):** Finalizes abandoned attempts past deadline + grace and dispatches the response sheet email immediately.
+- Pass or fail, an email is always triggered.
+
+#### 8.2 Email Contents (Matching Reference Design)
+1. **Result Pill:** `✓ Test passed` (green badge) or `✗ Test not passed` (red badge).
+2. **Heading & Greeting:** "Your test response sheet", addressed to `Dear Adv. {name},`.
+3. **Score Dark Box:** Summary of `Correct`, `Wrong`, and `Total` questions.
+4. **Details Table:**
+   - **Name:** Advocate full name.
+   - **Bar Council ID:** Monospace font.
+   - **Test date & time:** Attempt started date and time in IST.
+   - **Attempt:** Attempt sequence number (`Attempt 1`, `Attempt 2`, etc.) among the advocate's finalized attempts.
+   - **Time taken:** Time elapsed (`submittedAt − startedAt`), capped at test duration (formatted e.g. `14 min 32 sec`).
+   - **Submitted:** `By you` or `Automatically (time over)`.
+   - **Result:** `Passed` (green chip) or `Not passed` (red chip).
+5. **Question Breakdown Sections:**
+   - **Wrong / not answered (N):** Every incorrect or unanswered question from the attempt's snapshot, showing:
+     - `Q{n}. {question}`
+     - Badge: `✗ Wrong` or `Not answered`
+     - `Your answer`: User's selected option text (red) or `Not answered`
+     - `Correct answer`: Correct option text (green)
+   - **Correct (N):** Every correct question showing question text, `✓ Correct` badge, and user's answer (green).
+   - **Snapshot Isolation:** Questions, options, and correct indexes are rendered strictly from `attempt.questions` and `attempt.answers` snapshot, never from current question bank records.
+6. **Closing Line:**
+   - Pass: *"Our team will now review your profile. We will email you once it is approved."*
+   - Fail: *"You can request a new test from the test page using **Request reschedule**."*
+7. **Brand Shell & Footer:** Wrapped in standard VakeelSetu email layout with CID logo attachment, support block, and terms/privacy footer links. Plain-text alternative included.
+
+#### 8.3 BCC Configuration
+- Set `ADVOCATE_TEST_SHEET_BCC` in `.env` to a comma-separated list of recipient emails (e.g., `audit@vakeelsetu.com, records@vakeelsetu.com`).
+- Each address is trimmed and format-validated. Invalid addresses are ignored with a single warning log.
+- Empty or undefined env variable sends without BCC.
+- BCC applies **exclusively** to this test response sheet email, never to OTPs, booking confirmations, or test link dispatches.
+
+#### 8.4 Exactly-Once Delivery & Cron Retry
+- **Atomic Claim:** Before sending, the backend updates `AdvocateTestAttempt` with `responseSheetEmailSentAt = now()` where `responseSheetEmailSentAt IS NULL`. If 0 rows updated, sending is skipped to prevent duplicate emails.
+- **Error Rollback:** If SMTP delivery times out or errors, `responseSheetEmailSentAt` is reset back to `null`.
+- **Cron Retry:** Step 4 of the reconciliation cron (`GET /api/internal/cron/payments-reconcile`) scans for finalized attempts from the last 48 hours where `responseSheetEmailSentAt IS NULL` and retries delivery.
+
+#### 8.5 Manual Testing Steps
+1. **Preview Templates:**
+   Run `node scripts/preview-emails.js` and open `tmp/email-previews/test-sheet-pass.html` and `test-sheet-fail.html` in a browser to inspect visual fidelity against the demo design.
+2. **Complete Test Attempt:**
+   Take a test attempt via `POST /api/advocate-test/submit`. Verify response returns HTTP 200 with `responseSheetEmailed: true`.
+3. **Double Submit Idempotency:**
+   Submit the same attempt again. Verify `responseSheetEmailed: true` is returned and no duplicate email is dispatched.
+4. **Verify BCC Logging:**
+   Configure `ADVOCATE_TEST_SHEET_BCC="test-bcc@example.com"`. Verify server logs show `ADVOCATE_TEST_RESPONSE_SHEET sent to ... | bccCount: 1` without logging BCC addresses or email bodies.
+5. **Verify 48-Hour Reconcile Retry:**
+   Manually set `responseSheetEmailSentAt = null` on a finalized attempt in the database. Trigger `GET /api/internal/cron/payments-reconcile` and verify `testResponseSheetsRetried: 1` in the JSON response.
+
 
 

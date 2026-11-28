@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import prisma from '../lib/prisma.js';
-import { sendAdvocateTestLinkEmail } from './email.service.js';
+import { sendAdvocateTestLinkEmail, sendTestResponseSheetEmail } from './email.service.js';
 
 let warnedConfig = false;
 
@@ -410,6 +410,10 @@ export const saveAdvocateTestAnswers = async ({ inviteId, advocateId, answers })
       submittedAnswers: attempt.answers || [],
       autoSubmitted: true
     });
+    // Send response sheet email asynchronously on auto-submit
+    sendTestResponseSheetEmail(attempt.id).catch((emailErr) => {
+      console.error(`[Advocate Test Service] Failed sending response sheet email on auto-submit for attempt ${attempt.id}:`, emailErr.message);
+    });
     return {
       success: false,
       code: 'TIME_EXPIRED',
@@ -561,7 +565,8 @@ export const submitAdvocateTest = async ({ inviteId, advocateId, answers }) => {
       total: attempt.totalQuestions,
       passed: Boolean(attempt.passed),
       message: attempt.passed ? 'You have passed the test.' : 'Test completed.',
-      canRequestReschedule: !attempt.passed
+      canRequestReschedule: !attempt.passed,
+      responseSheetEmailed: Boolean(attempt.responseSheetEmailSentAt)
     };
   }
 
@@ -579,11 +584,24 @@ export const submitAdvocateTest = async ({ inviteId, advocateId, answers }) => {
         }))
       : attempt.answers || [];
 
-  return await scoreAndFinalizeAttempt({
+  const finalizeResult = await scoreAndFinalizeAttempt({
     attemptId: attempt.id,
     submittedAnswers,
     autoSubmitted: isPastGrace
   });
+
+  let responseSheetEmailed = false;
+  try {
+    const emailResult = await sendTestResponseSheetEmail(attempt.id);
+    responseSheetEmailed = Boolean(emailResult?.success);
+  } catch (emailErr) {
+    console.error(`[Advocate Test Service] Failed sending response sheet email for attempt ${attempt.id}:`, emailErr.message);
+  }
+
+  return {
+    ...finalizeResult,
+    responseSheetEmailed
+  };
 };
 
 /**
@@ -836,6 +854,11 @@ export const processTestCronJobs = async () => {
         autoSubmitted: true
       });
       results.attemptsAutoSubmitted++;
+      try {
+        await sendTestResponseSheetEmail(att.id);
+      } catch (sheetErr) {
+        results.errors.push({ attemptId: att.id, error: sheetErr.message });
+      }
     } catch (err) {
       results.errors.push({ attemptId: att.id, error: err.message });
     }

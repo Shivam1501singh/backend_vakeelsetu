@@ -9,8 +9,10 @@ import {
 } from '../templates/bookingEmail.template.js';
 import {
   profileUnderReviewTemplate,
-  advocateTestLinkTemplate
+  advocateTestLinkTemplate,
+  advocateTestResponseSheetTemplate
 } from '../templates/advocateAccountEmail.template.js';
+import { getTestConfig } from './advocateTest.service.js';
 import {
   sendPushNotification,
   sendBookingConfirmedPushNotification,
@@ -80,6 +82,7 @@ const isPlaceholderCredentials = () => {
  *
  * @param {object} params
  * @param {string} params.to
+ * @param {string|string[]} [params.bcc]
  * @param {string} params.subject
  * @param {string} params.html
  * @param {string} [params.text]
@@ -89,6 +92,7 @@ const isPlaceholderCredentials = () => {
  */
 export const sendBrandedMail = async ({
   to,
+  bcc,
   subject,
   html,
   text,
@@ -134,6 +138,7 @@ export const sendBrandedMail = async ({
   const mailOptions = {
     from: fromAddress,
     to,
+    ...(bcc ? { bcc } : {}),
     subject,
     text,
     html,
@@ -566,6 +571,165 @@ export const sendAdvocateTestLinkEmail = async ({
     return { success: false, message: error.message };
   }
 };
+
+let bccWarningLogged = false;
+
+/**
+ * Resets the single-warning state for invalid ADVOCATE_TEST_SHEET_BCC env (used in tests).
+ */
+export const resetBccWarningState = () => {
+  bccWarningLogged = false;
+};
+
+/**
+ * Parses and validates comma-separated BCC emails from ADVOCATE_TEST_SHEET_BCC env var.
+ * Emits a single warning log if invalid emails are detected.
+ *
+ * @param {string} [raw=process.env.ADVOCATE_TEST_SHEET_BCC]
+ * @returns {string[]}
+ */
+export const parseAdvocateTestSheetBcc = (raw = process.env.ADVOCATE_TEST_SHEET_BCC) => {
+  if (!raw || typeof raw !== 'string' || !raw.trim()) {
+    return [];
+  }
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const valid = [];
+  const invalid = [];
+
+  raw.split(',').forEach((entry) => {
+    const trimmed = entry.trim();
+    if (!trimmed) return;
+    if (emailRegex.test(trimmed)) {
+      valid.push(trimmed);
+    } else {
+      invalid.push(trimmed);
+    }
+  });
+
+  if (invalid.length > 0 && !bccWarningLogged) {
+    bccWarningLogged = true;
+    console.warn(`[Email Service] Invalid BCC email(s) ignored in ADVOCATE_TEST_SHEET_BCC: ${invalid.join(', ')}`);
+  }
+
+  return valid;
+};
+
+/**
+ * Sends Test Response Sheet email to the advocate after an attempt is finalized.
+ * Exactly-once delivery via atomic row claim on AdvocateTestAttempt.
+ *
+ * @param {string} attemptId UUID of AdvocateTestAttempt
+ * @returns {Promise<{ success: boolean, message?: string }>}
+ */
+export const sendTestResponseSheetEmail = async (attemptId) => {
+  if (!attemptId) {
+    return { success: false, message: 'attemptId is required' };
+  }
+
+  let recipientEmail = '';
+  let bccCount = 0;
+  try {
+    const attempt = await prisma.advocateTestAttempt.findUnique({
+      where: { id: attemptId },
+      include: { advocate: true }
+    });
+
+    if (!attempt) {
+      console.warn(`[Email Service] AdvocateTestAttempt ${attemptId} not found.`);
+      return { success: false, message: 'Attempt not found' };
+    }
+
+    if (!attempt.submittedAt) {
+      console.warn(`[Email Service] AdvocateTestAttempt ${attemptId} is not finalized yet.`);
+      return { success: false, message: 'Attempt is not finalized' };
+    }
+
+    recipientEmail = (attempt.advocate?.email || '').trim();
+    if (!recipientEmail) {
+      console.info(`[Email Service] Skipping test response sheet email for attempt ${attemptId}: no email on record.`);
+      return { success: true, message: 'No email on record' };
+    }
+
+    // Atomic claim: exactly-once delivery
+    const claim = await prisma.advocateTestAttempt.updateMany({
+      where: { id: attemptId, responseSheetEmailSentAt: null },
+      data: { responseSheetEmailSentAt: new Date() }
+    });
+
+    if (claim.count === 0) {
+      return { success: true, message: 'Already sent or claimed' };
+    }
+
+    // Compute Attempt N: position among finalized attempts for this advocate
+    let attemptNumber = 1;
+    try {
+      const count = await prisma.advocateTestAttempt.count({
+        where: {
+          advocateId: attempt.advocateId,
+          submittedAt: { not: null },
+          startedAt: { lte: attempt.startedAt }
+        }
+      });
+      attemptNumber = Math.max(1, count);
+    } catch (countErr) {
+      console.warn(`[Email Service] Could not calculate attempt number for ${attemptId}, defaulting to 1:`, countErr.message);
+    }
+
+    let durationMinutes = 20;
+    try {
+      const config = getTestConfig();
+      if (config && config.durationMinutes) {
+        durationMinutes = config.durationMinutes;
+      }
+    } catch {
+      // fallback
+    }
+
+    const bccList = parseAdvocateTestSheetBcc();
+    bccCount = bccList.length;
+
+    const { subject, html, text, attachments } = advocateTestResponseSheetTemplate({
+      attempt,
+      advocate: attempt.advocate,
+      attemptNumber,
+      durationMinutes
+    });
+
+    const withTimeout = (promise, ms = 8000) => {
+      let timer;
+      const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Test response sheet email timed out after ${ms}ms`)), ms);
+      });
+      return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+    };
+
+    await withTimeout(
+      sendBrandedMail({
+        to: recipientEmail,
+        bcc: bccList.length > 0 ? bccList : undefined,
+        subject,
+        html,
+        text,
+        attachments,
+        emailType: 'ADVOCATE_TEST_RESPONSE_SHEET'
+      }),
+      8000
+    );
+
+    console.log(`[Email Service] ADVOCATE_TEST_RESPONSE_SHEET sent to ${maskEmail(recipientEmail)} | attemptId: ${attemptId} | bccCount: ${bccCount}`);
+    return { success: true };
+  } catch (error) {
+    // On failure/timeout: reset responseSheetEmailSentAt to null so cron can retry
+    await prisma.advocateTestAttempt.update({
+      where: { id: attemptId },
+      data: { responseSheetEmailSentAt: null }
+    }).catch(() => {});
+
+    console.error(`[Email Service] ADVOCATE_TEST_RESPONSE_SHEET failed for ${maskEmail(recipientEmail)} (attemptId: ${attemptId}) | bccCount: ${bccCount}:`, error.message);
+    return { success: false, message: error.message };
+  }
+};
+
 
 
 
